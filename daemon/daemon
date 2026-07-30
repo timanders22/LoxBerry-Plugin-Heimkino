@@ -1,0 +1,22 @@
+#!/bin/bash
+# Wird beim Systemstart als Benutzer "root" ausgefuehrt.
+# LoxBerry benennt diese Datei bei der Installation in NAME um.
+#
+# Das Plugin fasst keine Systemdatei an. Der Dienst braucht keine Rootrechte:
+# er spricht nur TCP 9761 zum Beamer und HTTPS zur Xbox-Cloud. Deshalb laeuft
+# er als loxberry.
+
+pluginname=REPLACELBPPLUGINDIR
+pluginbindir=REPLACELBPBINDIR
+logdir=REPLACELBPLOGDIR
+log=$logdir/heimkino.log
+
+if [ -x /usr/bin/logger ]; then
+    /usr/bin/logger "loxberry-plugin-$pluginname - Starte Heimkino"
+fi
+
+mkdir -p "$logdir" 2>/dev/null
+
+su loxberry -c "nohup $pluginbindir/hk_service.py >> $log 2>&1 &" >/dev/null 2>&1
+
+exit 0
