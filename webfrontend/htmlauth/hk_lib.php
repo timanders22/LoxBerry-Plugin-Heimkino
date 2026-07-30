@@ -245,17 +245,17 @@ function hk_cmd($argumente)
 function hk_themen()
 {
     return array(
-        'service/online'    => '1 = der Dienst laeuft',
+        'service/online'    => '1 = der Dienst l&auml;uft',
         'last_error'        => 'letzte Fehlermeldung, sonst leer',
         'beamer/aktiv'      => '1 = der Beamer ist in den Einstellungen eingeschaltet',
         'beamer/erreichbar' => '1 = der Beamer antwortet auf Port 9761',
         'beamer/status'     => 'an, aus oder unbekannt',
-        'beamer/an'         => '1 = der Beamer laeuft',
+        'beamer/an'         => '1 = der Beamer l&auml;uft',
         'beamer/app'        => 'laufende Quelle, z. B. HDMI1',
         'xbox/aktiv'        => '1 = die Xbox ist in den Einstellungen eingeschaltet',
         'xbox/status'       => 'Zustandstext der Cloud, z. B. On oder ConnectedStandby',
-        'xbox/an'           => '1 = die Konsole laeuft',
-        'xbox/angemeldet'   => '1 = die Anmeldung bei Microsoft ist gueltig',
+        'xbox/an'           => '1 = die Konsole l&auml;uft',
+        'xbox/angemeldet'   => '1 = die Anmeldung bei Microsoft ist g&uuml;ltig',
         'xbox/geheimnis_ablauf' => 'Ablaufdatum des Clientgeheimnisses, JJJJ-MM-TT',
         'xbox/geheimnis_tage'   => 'Tage bis zum Ablauf; negativ = abgelaufen, leer = kein Datum hinterlegt',
     );
@@ -424,7 +424,7 @@ function hk_xbox_zustand()
     );
 }
 
-/** Vollstaendige Aufrufadresse einer Aktion, wie sie in Loxone gehoert. */
+/** Vollst&auml;ndige Aufrufadresse einer Aktion, wie sie in Loxone geh&ouml;rt. */
 function hk_aktionsadresse($cfg, $aktion)
 {
     $token = hk_cfg($cfg, 'heimkino', 'aktionstoken', '');
@@ -437,10 +437,10 @@ function hk_aktionsadresse($cfg, $aktion)
 /* ==================================================================
  * Form der Anmeldedaten beurteilen
  *
- * Die haeufigste Verwechslung: aus der Tabelle unter
+ * Die h&auml;ufigste Verwechslung: aus der Tabelle unter
  * "Zertifikate & Geheimnisse" wird die Spalte "Geheime ID" kopiert statt der
  * Spalte "Wert". Beides sind lange Zeichenketten, aber die Geheime ID ist eine
- * GUID mit vier Bindestrichen - das laesst sich erkennen, ohne das Geheimnis
+ * GUID mit vier Bindestrichen - das l&auml;sst sich erkennen, ohne das Geheimnis
  * anzuzeigen.
  * ================================================================== */
 
@@ -452,7 +452,7 @@ function hk_ist_guid($s)
 }
 
 /**
- * Beurteilt das gespeicherte Geheimnis. Gibt array(art, text) zurueck.
+ * Beurteilt das gespeicherte Geheimnis. Gibt array(art, text) zur&uuml;ck.
  * art: 'ok' | 'guid' | 'kurz' | 'leer'
  */
 function hk_geheimnis_form($wert)
@@ -481,13 +481,13 @@ function hk_geheimnis_form($wert)
 /* ==================================================================
  * Restlaufzeit des Azure-Clientgeheimnisses
  *
- * Azure vergibt fuer einen geheimen Clientschluessel hoechstens 24 Monate.
- * Laeuft er ab, meldet Microsoft invalid_client und die Konsole laesst sich
+ * Azure vergibt f&uuml;r einen geheimen Clientschl&uuml;ssel h&ouml;chstens 24 Monate.
+ * L&auml;uft er ab, meldet Microsoft invalid_client und die Konsole l&auml;sst sich
  * nicht mehr aus Loxone wecken - zwei Jahre nach der Einrichtung, wenn niemand
  * mehr daran denkt. Deshalb wird das Datum hinterlegt und ausgewertet, statt
- * sich darauf zu verlassen, dass man es im Kopf behaelt.
+ * sich darauf zu verlassen, dass man es im Kopf beh&auml;lt.
  *
- * Gibt array(art, tage, text) zurueck.
+ * Gibt array(art, tage, text) zur&uuml;ck.
  * art: 'leer' | 'ok' | 'bald' | 'abgelaufen'
  * ================================================================== */
 

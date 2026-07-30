@@ -44,16 +44,16 @@ function hk_test_ausfuehren($was)
                 ? $broker['host'] . ':' . $broker['port']
                 : 'nicht in general.json gefunden - MQTT-Gateway eingerichtet?');
             $pid = hk_dienst_pid();
-            $z[] = 'Dienst            : ' . ($pid ? 'laeuft (PID ' . $pid . ')' : 'laeuft nicht');
+            $z[] = 'Dienst            : ' . ($pid ? 'l&auml;uft (PID ' . $pid . ')' : 'l&auml;uft nicht');
             return array('Umgebung', hk_block(implode("\n", $z)));
 
         case 'krypto':
             list($code, $aus) = hk_cmd_python('lg_beamer.py', array('--selbsttest'));
-            return array('Verschluesselung gegen die Vorlage gepruefte Werte',
+            return array('Verschl&uuml;sselung gegen die Vorlage gepr&uuml;fte Werte',
                 hk_block($aus)
                 . ($code === 0
                     ? '<p class="hk-ok-text">Der Nachbau stimmt mit der '
-                      . 'Originalfassung ueberein.</p>'
+                      . 'Originalfassung &uuml;berein.</p>'
                     : '<p class="hk-err-text">Abweichung - bitte melden.</p>'));
 
         case 'beamer_erreichbar':
@@ -148,7 +148,7 @@ function hk_test_ausfuehren($was)
                 }
                 $t .= '</tr>';
             }
-            $t .= '</table><p class="hk-small">Die Kennung der gewuenschten '
+            $t .= '</table><p class="hk-small">Die Kennung der gew&uuml;nschten '
                 . 'Konsole in den Einstellungen unter XBOX-Netzwerk-Ger&auml;teidentit&auml;t '
                 . 'eintragen.</p>';
             return array('Konsolen suchen', $t);
@@ -168,8 +168,8 @@ function hk_test_ausfuehren($was)
         case 'dienst_neu':
             $pid = hk_dienst('restart');
             return array('Dienst neu starten', hk_block($pid
-                ? 'Der Dienst laeuft (PID ' . $pid . ').'
-                : 'Der Dienst laeuft nicht - siehe Reiter Logdateien.'));
+                ? 'Der Dienst l&auml;uft (PID ' . $pid . ').'
+                : 'Der Dienst l&auml;uft nicht - siehe Reiter Logdateien.'));
     }
     return array('', '');
 }

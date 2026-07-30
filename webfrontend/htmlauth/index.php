@@ -111,7 +111,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['xbox_code'])) {
 /* ============ Xbox: Anmeldung loeschen ============ */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['xbox_vergessen'])) {
     list($code_r, $ausgabe) = hk_cmd(array('xbox-vergessen'));
-    $hk_hinweis = $code_r === 0 ? 'Anmeldung geloescht.' : '';
+    $hk_hinweis = $code_r === 0 ? 'Anmeldung gel&ouml;scht.' : '';
     if ($code_r !== 0) { $hk_fehler[] = hk_e($ausgabe); }
     $hk_tab = 'tab-settings';
 }
@@ -143,7 +143,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
         $neu['heimkino']['aktionstoken'] = hk_token_erzeugen();
         if (isset($_POST['token_neu'])) {
             $hk_hinweis = 'Neues Aktionstoken erzeugt. Die Adressen im '
-                        . 'Miniserver muessen angepasst werden.';
+                        . 'Miniserver m&uuml;ssen angepasst werden.';
         }
     }
 
@@ -216,7 +216,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
         if ($hk_hinweis === '') {
             $hk_hinweis = $pid
                 ? 'Der Dienst wurde neu gestartet.'
-                : 'Der Dienst laeuft nicht - siehe Reiter Logdateien.';
+                : 'Der Dienst l&auml;uft nicht - siehe Reiter Logdateien.';
         }
         $hk_cfg = hk_config_read();
     } else {
@@ -256,8 +256,8 @@ if ($hk_frame) {
 .hk-row > div { flex: 1; min-width: 180px; }
 /* Die Rahmen-CSS von LoxBerry (jQuery Mobile) formatiert jedes <button> mit
    eigenem Hintergrund und eigenen Hover-Regeln. Ohne !important gewinnt sie,
-   und dann steht weisse Schrift auf hellgrauem Grund - beim Ueberfahren sogar
-   weiss auf weiss. Deshalb hier durchgesetzt, samt eigener Hover-Farben. */
+   und dann steht wei&szlig;e Schrift auf hellgrauem Grund - beim Ueberfahren sogar
+   wei&szlig; auf wei&szlig;. Deshalb hier durchgesetzt, samt eigener Hover-Farben. */
 .hk-wrap .hk-btn, .hk-wrap a.hk-btn, .hk-wrap button.hk-btn {
   background: #6dac20 !important; color: #fff !important; border: 0 !important;
   border-radius: 6px !important; padding: 10px 22px !important; font-size: 1em !important;
@@ -330,8 +330,8 @@ if ($hk_frame) {
 
 <div class="hk-alert hk-info">
   <span class="hk-scheibe <?php echo $hk_pid ? 'hk-gruen' : 'hk-rot'; ?>"></span>
-  <?php echo $hk_pid ? 'Der Dienst laeuft (PID ' . (int) $hk_pid . ').'
-                     : 'Der Dienst laeuft nicht.'; ?>
+  <?php echo $hk_pid ? 'Der Dienst l&auml;uft (PID ' . (int) $hk_pid . ').'
+                     : 'Der Dienst l&auml;uft nicht.'; ?>
   <?php if ($hk_alter !== null) {
       echo ' Letzte Abfrage vor ' . (int) $hk_alter . ' Sekunden.';
   } ?>
@@ -370,7 +370,7 @@ if ($hk_frame) {
       sind eine gute Vorgabe.</div>
   </div>
   <div>
-    <label for="themenpraefix">MQTT-Themenpraefix</label>
+    <label for="themenpraefix">MQTT-Themenpr&auml;fix</label>
     <input type="text" id="themenpraefix" name="themenpraefix"
       value="<?php echo hk_e($hk_praefix); ?>">
     <div class="hk-small">Alle Themen liegen darunter, alle sind retained.</div>
@@ -424,7 +424,7 @@ in Loxone.</div>
     <label for="beamer_mac">MAC-Adresse</label>
     <input type="text" id="beamer_mac" name="beamer_mac" placeholder="AA:BB:CC:DD:EE:FF"
       value="<?php echo hk_e(hk_cfg($hk_cfg, 'beamer', 'mac', '')); ?>">
-    <div class="hk-small">Nur fuer den Testknopf. Das Einschalten macht Loxone
+    <div class="hk-small">Nur f&uuml;r den Testknopf. Das Einschalten macht Loxone
       selbst mit <span class="hk-mono">wol://</span>.</div>
   </div>
 </div>
@@ -434,10 +434,10 @@ in Loxone.</div>
     <input type="text" id="beamer_keycode" name="beamer_keycode" maxlength="8"
       placeholder="ABCD1234" style="text-transform:uppercase"
       value="<?php echo hk_e(hk_cfg($hk_cfg, 'beamer', 'keycode', '')); ?>">
-    <div class="hk-small">Am Geraet erzeugen: Alle Einstellungen &rarr;
+    <div class="hk-small">Am Ger&auml;t erzeugen: Alle Einstellungen &rarr;
       Allgemein &rarr; Netzwerk, dann <b>82888</b> auf der Fernbedienung
       tippen &rarr; Netzwerk-IP-Steuerung einschalten &rarr; Keycode erzeugen.
-      Ohne ihn nimmt das Geraet keinen Befehl an.</div>
+      Ohne ihn nimmt das Ger&auml;t keinen Befehl an.</div>
   </div>
   <div>
     <label for="beamer_port">Port</label>
@@ -530,7 +530,7 @@ Ger&auml;teidentit&auml;t auch.</div>
 </div>
 
 <h2>Aktionstoken</h2>
-<p class="hk-small">Der Miniserver ruft die Aktionen ueber eine Adresse im
+<p class="hk-small">Der Miniserver ruft die Aktionen &uuml;ber eine Adresse im
 unangemeldeten Bereich auf. Damit das nicht jedes Ger&auml;t im Netz kann, geh&ouml;rt
 in jede Adresse dieses Token. Es wird beim ersten Speichern erzeugt.</p>
 <div class="hk-mono"><?php echo $hk_token !== '' ? hk_e($hk_token)
@@ -538,7 +538,7 @@ in jede Adresse dieses Token. Es wird beim ersten Speichern erzeugt.</p>
 <label class="hk-check" style="margin-top:8px;">
   <input type="checkbox" name="token_neu" value="1">
   Neues Token erzeugen <span class="hk-small">(die Adressen im Miniserver
-  muessen danach angepasst werden)</span></label>
+  m&uuml;ssen danach angepasst werden)</span></label>
 
 <button type="submit" name="save" value="1" class="hk-btn">Speichern</button>
 </form>
@@ -546,26 +546,26 @@ in jede Adresse dieses Token. Es wird beim ersten Speichern erzeugt.</p>
 <h2>Xbox: Anmeldung bei Microsoft</h2>
 <div class="hk-alert hk-info">
 Das unauthentifizierte Weckpaket auf UDP&nbsp;5050, mit dem sich Xbox-One-Konsolen
-wecken liessen, wird von neueren Firmwarestaenden ignoriert. Nachgemessen an
-einer Series&nbsp;X: Paketinhalt, Zieladresse und Geraetekennung waren richtig,
+wecken lie&szlig;en, wird von neueren Firmwarest&auml;nden ignoriert. Nachgemessen an
+einer Series&nbsp;X: Paketinhalt, Zieladresse und Ger&auml;tekennung waren richtig,
 die Konsole reagierte nicht &mdash; die Xbox-App weckt dieselbe Konsole ohne
-Weiteres. Sie geht ueber den Cloud-Dienst von Microsoft, und diesen Weg geht
+Weiteres. Sie geht &uuml;ber den Cloud-Dienst von Microsoft, und diesen Weg geht
 dieses Plugin auch. Der Preis: eine eigene App-Registrierung, eine einmalige
 Anmeldung und eine Internetverbindung.
 </div>
 
 <div class="hk-alert hk-err">
 <b>Voraussetzung, an der die meisten scheitern:</b> die Registrierung braucht ein
-<b>Verzeichnis</b> (Mandant). Ein persoenliches Microsoft-Konto hat keines. Unter
+<b>Verzeichnis</b> (Mandant). Ein pers&ouml;nliches Microsoft-Konto hat keines. Unter
 <i>App-Registrierungen</i> steht dann „diesem Konto zugeordnet, jedoch in keinem
-Verzeichnis enthalten", und <i>Neue Registrierung</i> oeffnet kein Formular,
+Verzeichnis enthalten", und <i>Neue Registrierung</i> &ouml;ffnet kein Formular,
 sondern ein Fenster mit einem einzigen Knopf: <i>Abbrechen</i>.
-<div style="margin-top:8px;">Ein Verzeichnis bekommt man ueber eine
+<div style="margin-top:8px;">Ein Verzeichnis bekommt man &uuml;ber eine
 <b>Azure-Registrierung</b> (kostenloses Konto, verlangt Zahlungsdaten zur
-Identitaetspruefung) oder das <b>M365-Entwicklerprogramm</b> (kostenlos, Zugang
-eingeschraenkt).</div>
+Identit&auml;tspr&uuml;fung) oder das <b>M365-Entwicklerprogramm</b> (kostenlos, Zugang
+eingeschr&auml;nkt).</div>
 <div style="margin-top:8px;"><b>Und danach unbedingt abmelden und neu
-anmelden.</b> Die Portalsitzung traegt die Verzeichniszugehoerigkeit in sich;
+anmelden.</b> Die Portalsitzung tr&auml;gt die Verzeichniszugeh&ouml;rigkeit in sich;
 eine Sitzung von vor der Registrierung kennt das neue Verzeichnis nicht. Das
 Portal meldet dann <span class="hk-mono">AADSTS16000 &hellip; does not exist in
 tenant</span> und unter <i>Portaleinstellungen &rarr; Verzeichnisse +
@@ -573,9 +573,9 @@ Abonnements</i> steht „Keine Verzeichnisse gefunden".</div>
 </div>
 
 <div class="hk-step">
-  <b>Schritt 0 &ndash; pruefen, ob das Verzeichnis wirklich da ist.</b> Im
+  <b>Schritt 0 &ndash; pr&uuml;fen, ob das Verzeichnis wirklich da ist.</b> Im
   Azure-Portal oben rechts auf den Kontonamen, dann <i>Verzeichnis wechseln</i>.
-  Unter <i>Alle Verzeichnisse</i> muss eines aufgelistet und ausgewaehlt sein.
+  Unter <i>Alle Verzeichnisse</i> muss eines aufgelistet und ausgew&auml;hlt sein.
   Steht dort „Keine Verzeichnisse gefunden", ist die Azure-Registrierung nicht
   abgeschlossen oder auf einem anderen Konto gelaufen &mdash; alles Weitere ist
   dann zwecklos.
@@ -586,16 +586,16 @@ Abonnements</i> steht „Keine Verzeichnisse gefunden".</div>
 Unter <i>Allgemein &rarr; TV- &amp; A/V-Energieoptionen &rarr; HDMI-CEC</i>
 kennt die Xbox genau diese Richtungen:
 <ul style="margin:6px 0 6px 18px;padding:0;">
-<li>Konsole schaltet andere Geraete <b>ein</b></li>
-<li>Konsole schaltet andere Geraete <b>aus</b></li>
-<li>Andere Geraete koennen die Konsole <b>deaktivieren</b></li>
+<li>Konsole schaltet andere Ger&auml;te <b>ein</b></li>
+<li>Konsole schaltet andere Ger&auml;te <b>aus</b></li>
+<li>Andere Ger&auml;te k&ouml;nnen die Konsole <b>deaktivieren</b></li>
 </ul>
-Eine Zeile <i>andere Geraete koennen die Konsole einschalten</i> gibt es nicht.
-Die Konsole nimmt von aussen nur den Ausschaltbefehl an. CEC kann sie also
-<b>ausschalten</b>, aber nicht wecken &mdash; unabhaengig von Kabel und
-Verstaerker.
+Eine Zeile <i>andere Ger&auml;te k&ouml;nnen die Konsole einschalten</i> gibt es nicht.
+Die Konsole nimmt von au&szlig;en nur den Ausschaltbefehl an. CEC kann sie also
+<b>ausschalten</b>, aber nicht wecken &mdash; unabh&auml;ngig von Kabel und
+Verst&auml;rker.
 <div class="hk-small">Praktische Folge: <b>xbox-aus</b> aus diesem Plugin ist
-oft ueberfluessig, weil der Verstaerker das per CEC schon erledigt. Fuer das
+oft &uuml;berfl&uuml;ssig, weil der Verst&auml;rker das per CEC schon erledigt. F&uuml;r das
 <b>Wecken</b> bleiben der Controller oder der Cloud-Weg unten.</div>
 </div>
 
@@ -603,11 +603,11 @@ oft ueberfluessig, weil der Verstaerker das per CEC schon erledigt. Fuer das
   <b>Schritt 1 &ndash; Anwendung registrieren.</b>
   <i>App-Registrierungen &rarr; Neue Registrierung</i>.
   <ul style="margin:6px 0 6px 18px;padding:0;">
-  <li><b>Name:</b> frei waehlbar, z. B. <span class="hk-mono">LoxBerry Heimkino</span></li>
+  <li><b>Name:</b> frei w&auml;hlbar, z. B. <span class="hk-mono">LoxBerry Heimkino</span></li>
   <li><b>Unterst&uuml;tzte Kontotypen:</b> <b>Nur pers&ouml;nliche Microsoft-Konten</b> &mdash; die
-      Konsole haengt an einem persoenlichen Konto, nicht am Verzeichnis. Das
-      Verzeichnis wird nur gebraucht, um die Anwendung ueberhaupt anlegen zu
-      duerfen.</li>
+      Konsole h&auml;ngt an einem pers&ouml;nlichen Konto, nicht am Verzeichnis. Das
+      Verzeichnis wird nur gebraucht, um die Anwendung &uuml;berhaupt anlegen zu
+      d&uuml;rfen.</li>
   <li><b>Umleitungs-URI:</b> Typ <b>Web</b>, Adresse genau
       <span class="hk-mono"><?php echo hk_e($hk_xb['rueckleitung']); ?></span></li>
   </ul>
@@ -624,8 +624,8 @@ oft ueberfluessig, weil der Verstaerker das per CEC schon erledigt. Fuer das
 
 <div class="hk-step">
   <b>Schritt 3 &ndash; Geheimnis erzeugen.</b> Links <i>Zertifikate &amp;
-  Geheimnisse</i>, Reiter <i>Geheime Clientschluessel</i>,
-  <i>Neuer geheimer Clientschluessel</i>. Beschreibung frei, <i>G&uuml;ltig bis</i> nach Wunsch &mdash; nach Ablauf
+  Geheimnisse</i>, Reiter <i>Geheime Clientschl&uuml;ssel</i>,
+  <i>Neuer geheimer Clientschl&uuml;ssel</i>. Beschreibung frei, <i>G&uuml;ltig bis</i> nach Wunsch &mdash; nach Ablauf
   ist ein neues Geheimnis und eine neue Anmeldung f&auml;llig.
   <div class="hk-alert hk-err" style="margin-top:8px;">
   Die Tabelle zeigt danach vier Spalten: <i>Beschreibung</i>, <i>G&uuml;ltig bis</i>,
@@ -634,8 +634,8 @@ oft ueberfluessig, weil der Verstaerker das per CEC schon erledigt. Fuer das
   <b>nicht</b> &mdash; sie sieht aus wie eine Kennung und wird deshalb gern
   verwechselt.
   <div class="hk-small" style="margin-top:6px;">Die Spalte „Wert" ist <b>nur
-  dieses eine Mal</b> sichtbar. Wer die Seite verlaesst, sieht sie nie wieder und
-  muss ein neues Geheimnis anlegen &mdash; das alte kann man dann loeschen.</div>
+  dieses eine Mal</b> sichtbar. Wer die Seite verl&auml;sst, sieht sie nie wieder und
+  muss ein neues Geheimnis anlegen &mdash; das alte kann man dann l&ouml;schen.</div>
   </div>
 </div>
 
@@ -662,33 +662,33 @@ oft ueberfluessig, weil der Verstaerker das per CEC schon erledigt. Fuer das
 
 <?php if ($hk_anmelde !== '') { ?>
 <div class="hk-step">
-  <b>Schritt 2 &ndash; anmelden.</b> Diese Adresse in einem Browser oeffnen und
-  mit dem Microsoft-Konto anmelden, an dem die Konsole haengt.
+  <b>Schritt 2 &ndash; anmelden.</b> Diese Adresse in einem Browser &ouml;ffnen und
+  mit dem Microsoft-Konto anmelden, an dem die Konsole h&auml;ngt.
   <p><a href="<?php echo hk_e($hk_anmelde); ?>" target="_blank" rel="noopener"
     class="hk-btn" style="display:inline-block;text-decoration:none;">Anmeldeseite
-    oeffnen</a></p>
+    &ouml;ffnen</a></p>
   <div class="hk-small">Der Browser landet danach auf einer Seite, die nicht
-  laedt &mdash; das ist richtig so. Entscheidend ist die Adresszeile: sie
-  enthaelt <span class="hk-mono">?code=&hellip;</span>. Die ganze Adresse
+  l&auml;dt &mdash; das ist richtig so. Entscheidend ist die Adresszeile: sie
+  enth&auml;lt <span class="hk-mono">?code=&hellip;</span>. Die ganze Adresse
   kopieren und unten einsetzen.</div>
 </div>
 
 <form method="post" action="index.php">
 <input type="hidden" name="activetab" value="tab-settings">
-<label for="code">Zurueckgeleitete Adresse oder Code</label>
+<label for="code">Zur&uuml;ckgeleitete Adresse oder Code</label>
 <input type="text" id="code" name="code"
   placeholder="http://localhost/auth/callback?code=...">
 <button type="submit" name="xbox_code" value="1" class="hk-btn">Anmeldung
-  abschliessen</button>
+  abschlie&szlig;en</button>
 </form>
 <div class="hk-alert hk-info">
 Meldet Microsoft hier <span class="hk-mono">invalid_client &mdash; The provided
 value for the 'client_secret' parameter is not valid</span>, dann liegt es an
 einem von zwei Dingen:
 <ol style="margin:6px 0 0 18px;padding:0;">
-<li><b>Es wurde die falsche Spalte kopiert.</b> Weitaus haeufigster Fall.
+<li><b>Es wurde die falsche Spalte kopiert.</b> Weitaus h&auml;ufigster Fall.
 <i>Geheime ID</i> statt <i>Wert</i>. Der Reiter <b>Test &rarr; Anmeldedaten
-pruefen</b> sagt, welche Form das gespeicherte Geheimnis hat &mdash; ohne es
+pr&uuml;fen</b> sagt, welche Form das gespeicherte Geheimnis hat &mdash; ohne es
 anzuzeigen.</li>
 <li><b>Das Geheimnis ist abgelaufen</b> &mdash; Spalte <i>G&uuml;ltig bis</i>.
 Dann ein neues anlegen.</li>
@@ -696,8 +696,8 @@ Dann ein neues anlegen.</li>
 <div class="hk-small" style="margin-top:6px;">Bleibt es dabei, obwohl die Spalte
 <i>Wert</i> frisch kopiert wurde, hilft der andere Anmeldedienst: in
 <span class="hk-mono">xbox_auth.json</span> den Eintrag
-<span class="hk-mono">"dienst": "v2"</span> setzen. Dann laeuft die Anmeldung
-ueber <span class="hk-mono">login.microsoftonline.com</span> statt
+<span class="hk-mono">"dienst": "v2"</span> setzen. Dann l&auml;uft die Anmeldung
+&uuml;ber <span class="hk-mono">login.microsoftonline.com</span> statt
 <span class="hk-mono">login.live.com</span> &mdash; manche Registrierungen nimmt
 nur der eine oder nur der andere an.</div>
 </div>
@@ -709,14 +709,14 @@ nur der eine oder nur der andere an.</div>
   <span class="hk-scheibe <?php echo $hk_xb['angemeldet'] ? 'hk-gruen' : 'hk-grau'; ?>"></span>
   <?php echo $hk_xb['angemeldet']
       ? 'Angemeldet. Das Erneuerungstoken liegt vor, eine neue Anmeldung ist '
-        . 'erst noetig, wenn Microsoft es verwirft.'
+        . 'erst n&ouml;tig, wenn Microsoft es verwirft.'
       : 'Noch nicht angemeldet.'; ?>
 </p>
 <?php if ($hk_xb['angemeldet']) { ?>
 <div class="hk-knopfreihe hk-g3">
   <form method="post" action="index.php">
     <input type="hidden" name="activetab" value="tab-settings">
-    <button type="submit" name="xbox_vergessen" value="1">Anmeldung loeschen</button>
+    <button type="submit" name="xbox_vergessen" value="1">Anmeldung l&ouml;schen</button>
   </form>
 </div>
 <?php } ?>
@@ -725,7 +725,7 @@ nur der eine oder nur der andere an.</div>
 <!-- ========================= Einbindung in Loxone ========================= -->
 <div class="hk-pane" id="tab-loxone">
 
-<h2>Zustand lesen &ndash; ueber MQTT</h2>
+<h2>Zustand lesen &ndash; &uuml;ber MQTT</h2>
 <p class="hk-small">Der Dienst meldet jeden Wert <b>retained</b> an den Broker.
 Das MQTT-Gateway von LoxBerry leitet sie an den Miniserver weiter. Alle Themen
 liegen unter <span class="hk-mono"><?php echo hk_e($hk_praefix); ?>/</span>.</p>
@@ -742,17 +742,17 @@ liegen unter <span class="hk-mono"><?php echo hk_e($hk_praefix); ?>/</span>.</p>
   <form method="post" action="index.php">
     <input type="hidden" name="activetab" value="tab-loxone">
     <button type="submit" name="download" value="mqtt_in">Vorlage der
-      Eingaenge herunterladen</button>
+      Eing&auml;nge herunterladen</button>
   </form>
 </div>
-<p class="hk-small">Die Datei laesst sich in Loxone Config unter
-<i>Virtuelle Eingaenge</i> einlesen. Sie legt die Eingaenge mit den richtigen
+<p class="hk-small">Die Datei l&auml;sst sich in Loxone Config unter
+<i>Virtuelle Eing&auml;nge</i> einlesen. Sie legt die Eing&auml;nge mit den richtigen
 Namen an; die Werte kommen dann vom MQTT-Gateway.</p>
 
-<h2>Schalten &ndash; ueber virtuelle Ausgaenge</h2>
+<h2>Schalten &ndash; &uuml;ber virtuelle Ausg&auml;nge</h2>
 <?php if ($hk_token === '') { ?>
 <div class="hk-alert hk-err">Es gibt noch kein Aktionstoken. Einmal im Reiter
-<i>Einstellungen</i> speichern, dann erscheinen hier die vollstaendigen
+<i>Einstellungen</i> speichern, dann erscheinen hier die vollst&auml;ndigen
 Adressen.</div>
 <?php } else { ?>
 <p class="hk-small">In Loxone Config einen <b>virtuellen Ausgang</b> anlegen.
@@ -766,7 +766,7 @@ Bei ihm steht nur die Adresse des LoxBerry, die Befehle kommen in die
 </table>
 <p class="hk-small">Statt des Rechnernamens geht auch die IP des LoxBerry. Kein
 Benutzer und kein Passwort &mdash; der Aktionsendpunkt liegt im unangemeldeten
-Bereich und prueft stattdessen das Token.</p>
+Bereich und pr&uuml;ft stattdessen das Token.</p>
 
 <table class="hk-tbl">
 <tr><th style="width:22%">Ausgangsbefehl</th><th>Befehl bei EIN (Methode GET)</th></tr>
@@ -777,10 +777,10 @@ Bereich und prueft stattdessen das Token.</p>
 </table>
 <div class="hk-alert hk-info">
 Ein virtueller Ausgangsbefehl feuert bei der Flanke 0&rarr;1, nicht dauerhaft.
-Fuer das <b>Einschalten des Beamers</b> braucht es dieses Plugin nicht: Loxone
+F&uuml;r das <b>Einschalten des Beamers</b> braucht es dieses Plugin nicht: Loxone
 kann Wake-on-LAN selbst. Ein virtueller Ausgang mit der Adresse
 <span class="hk-mono">wol://</span> und der MAC ohne Trennzeichen als Befehl
-genuegt und ist der kuerzere Weg.
+gen&uuml;gt und ist der k&uuml;rzere Weg.
 </div>
 <?php } ?>
 </div>
@@ -797,9 +797,9 @@ genuegt und ist der kuerzere Weg.
 <div class="hk-knopfreihe hk-g1">
 <?php
 $ansehen = array(
-    'umgebung'          => 'Umgebung pruefen',
-    'anmeldedaten'      => 'Anmeldedaten pruefen',
-    'krypto'            => 'Verschluesselung pruefen',
+    'umgebung'          => 'Umgebung pr&uuml;fen',
+    'anmeldedaten'      => 'Anmeldedaten pr&uuml;fen',
+    'krypto'            => 'Verschl&uuml;sselung pr&uuml;fen',
     'beamer_erreichbar' => 'Beamer erreichbar?',
     'beamer_status'     => 'Beamer: Zustand',
     'beamer_ipcontrol'  => 'Beamer: IP-Steuerung',
@@ -824,7 +824,7 @@ foreach ($ansehen as $wert => $text) { ?>
 </div>
 
 <h2>Schalten</h2>
-<p class="hk-small">Diese Knoepfe wirken sofort auf die Geraete.</p>
+<p class="hk-small">Diese Kn&ouml;pfe wirken sofort auf die Ger&auml;te.</p>
 <div class="hk-knopfreihe hk-g3">
 <?php
 $aktionen = array(
@@ -853,7 +853,7 @@ foreach ($aktionen as $wert => $text) { ?>
 <div class="hk-alert hk-info">Der Dienst hat noch keinen Zustand abgelegt.</div>
 <?php } else { ?>
 <table class="hk-tbl">
-<tr><th style="width:30%">Groesse</th><th>Wert</th></tr>
+<tr><th style="width:30%">Gr&ouml;&szlig;e</th><th>Wert</th></tr>
 <tr><td>Zeitpunkt</td><td><?php echo hk_e($hk_z['zeit_text'] ?? ''); ?></td></tr>
 <tr><td>Beamer verwendet</td><td><?php
   echo !empty($hk_z['beamer']['aktiv']) ? 'ja' : 'nein'; ?></td></tr>
