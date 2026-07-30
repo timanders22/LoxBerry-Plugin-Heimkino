@@ -523,3 +523,66 @@ function hk_ablauf_vorschlag()
 {
     return date('Y-m-d', strtotime('+24 months'));
 }
+
+/* ==================================================================
+ * Version des Plugins
+ *
+ * Wird NICHT fest eingetragen. Bis 1.0.2 stand die Nummer als Text in
+ * index.php - und blieb bei jedem Release stehen: die Oberflaeche zeigte
+ * 1.0.0, obwohl 1.0.2 lief. Eine Versionsnummer an zwei Stellen ist eine
+ * Stelle zu viel.
+ *
+ * Massgeblich ist die Plugindatenbank von LoxBerry. Dort steht, was bei der
+ * Installation aus plugin.cfg uebernommen wurde - also genau das, was der
+ * Benutzer wirklich installiert hat, und nicht das, woran jemand beim
+ * Veroeffentlichen gedacht hat.
+ *
+ * Laesst sich die Version nicht ermitteln, wird eine leere Zeichenkette
+ * zurueckgegeben und in der Oberflaeche gar keine Nummer angezeigt. Keine
+ * Angabe ist besser als eine falsche.
+ * ================================================================== */
+
+function hk_version()
+{
+    static $v = null;
+    if ($v !== null) {
+        return $v;
+    }
+    $v = '';
+    $ordner = hk_paths()['plugin'];
+
+    // 1. Weg: das PHP-SDK von LoxBerry, sofern geladen.
+    if (class_exists('LBSystem') && method_exists('LBSystem', 'plugindata')) {
+        $daten = @LBSystem::plugindata($ordner);
+        if (is_array($daten) && !empty($daten['PLUGINDB_VERSION'])) {
+            $v = trim((string) $daten['PLUGINDB_VERSION']);
+        }
+    }
+
+    // 2. Weg: die Plugindatenbank unmittelbar lesen. Greift auch dann, wenn
+    // das SDK nicht eingebunden ist - etwa beim Aufruf ausserhalb der
+    // LoxBerry-Oberflaeche.
+    if ($v === '') {
+        $db = hk_paths()['home'] . '/data/system/plugindatabase.json';
+        if (is_readable($db)) {
+            $j = json_decode((string) file_get_contents($db), true);
+            $liste = array();
+            if (is_array($j)) {
+                $liste = (isset($j['plugins']) && is_array($j['plugins'])) ? $j['plugins'] : $j;
+            }
+            if (is_array($liste)) {
+                foreach ($liste as $e) {
+                    if (!is_array($e)) { continue; }
+                    $f = isset($e['folder']) ? $e['folder']
+                       : (isset($e['PLUGINDB_FOLDER']) ? $e['PLUGINDB_FOLDER'] : '');
+                    if ($f === $ordner) {
+                        $v = isset($e['version']) ? trim((string) $e['version'])
+                           : (isset($e['PLUGINDB_VERSION']) ? trim((string) $e['PLUGINDB_VERSION']) : '');
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    return $v;
+}

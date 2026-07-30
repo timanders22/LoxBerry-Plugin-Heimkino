@@ -1,6 +1,9 @@
 <?php
 /**
- * Heimkino - Admin-Oberflaeche (v1.0.0)
+ * Heimkino - Admin-Oberflaeche
+ *
+ * Die Versionsnummer steht hier bewusst NICHT. Sie kommt aus der
+ * Plugindatenbank von LoxBerry, siehe hk_version() in hk_lib.php.
  * Reiter: Einstellungen | Einbindung in Loxone | Test | Logdateien
  *
  * Kompatibel mit PHP 7.4 und PHP 8.x (LoxBerry 3.x/4.x).
@@ -306,7 +309,9 @@ if ($hk_frame) {
 
 <div class="hk-wrap">
 <h1 style="font-size:1.4em;margin:0 0 2px;">Heimkino</h1>
-<p class="hk-small">LG-Beamer und Xbox vom Miniserver aus schalten. Version 1.0.0</p>
+<p class="hk-small">LG-Beamer und Xbox vom Miniserver aus schalten.<?php
+  $hk_ver = hk_version();
+  echo $hk_ver !== '' ? ' Version ' . hk_e($hk_ver) : ''; ?></p>
 
 <?php if ($hk_saved) { ?>
   <div class="hk-alert hk-ok">Die Einstellungen wurden gespeichert.</div>
