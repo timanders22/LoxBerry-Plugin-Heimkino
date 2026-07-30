@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+# Enthaelt nach dem Einrichten den Keycode des Beamers sowie die
+# Anmeldedaten fuer Microsoft. Gehoert nie in ein Repository.
+xbox_auth.json
+*.cfg.neu
