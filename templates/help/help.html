@@ -1,0 +1,113 @@
+<h2>Heimkino</h2>
+
+<p>Schaltet einen LG-Beamer und eine Xbox vom Miniserver aus und meldet ihren
+Zustand per MQTT zurück.</p>
+
+<h3>Was dieses Plugin nicht tut</h3>
+<p>Den <b>Beamer einschalten</b> — das kann Loxone selbst. Ein virtueller
+Ausgang mit der Adresse <code>wol://</code> und der MAC ohne Trennzeichen als
+Befehl genügt. Der Umweg über den LoxBerry wäre länger und störanfälliger.</p>
+
+<h3>Einstellungen am LG-Beamer</h3>
+<p><b>Das versteckte Menü.</b> Mit der Fernbedienung <i>Alle Einstellungen →
+Allgemein → Netzwerk</i> ansteuern, sodass <i>Netzwerk</i> markiert ist — und
+<b>nicht öffnen, nichts anklicken</b>. Dann zügig die Ziffern
+<b>8&nbsp;2&nbsp;8&nbsp;8&nbsp;8</b> tippen. Es klappt ein Menü auf, das im
+normalen Betrieb nicht sichtbar ist. Klappt es nicht: zu langsam getippt, oder
+es war schon eine Ebene tiefer — einmal ganz heraus und neu ansteuern. Bei
+älteren Geräten heißt der Punkt <i>Netzwerkverbindung</i>.</p>
+
+<p><b>Dort: Netzwerk-IP-Steuerung einschalten und einen Keycode erzeugen</b> —
+acht Zeichen, in die Einstellungen eintragen. Ohne Keycode nimmt das Gerät
+keinen Befehl an. Ein neu erzeugter Keycode macht den alten ungültig.</p>
+
+<p><b>Schnellstart+ einschalten</b> (<i>Allgemein → Geräte → Zusätzliche
+Einstellungen</i>). Ohne Schnellstart+ trennt das Gerät im Standby die
+Netzwerkschnittstelle: Port 9761 antwortet nicht mehr, und Wake-on-LAN kommt
+gar nicht erst an.</p>
+
+<p><b>LAN statt WLAN, feste Adresse in der Fritz!Box.</b> Kabel ist im Standby
+zuverlässiger. Wandert die Adresse, schlägt alles fehl, ohne dass die Ursache
+sichtbar würde.</p>
+
+<p><b>Zwei Automatiken, die Störungen vortäuschen</b> (<i>Allgemein → System →
+Zusätzliche Einstellungen</i>): die <i>Ausschaltautomatik</i> schaltet nach vier
+Stunden ohne Bedienung ab, dazu der <i>Bildschirmschoner</i>. Wer sich fragt,
+warum der Beamer „von selbst" ausgeht, findet die Antwort meist hier und nicht
+in Loxone.</p>
+
+<h3>Einstellungen an der Xbox</h3>
+<p><b>Energiesparmodus auf <i>Ruhezustand</i></b> (<i>Profil &amp; System →
+Einstellungen → Allgemein → Energiesparmodus</i>). Steht dort
+<i>Energiesparen</i>, ist die Konsole im Aus wirklich aus und durch nichts zu
+wecken — auch nicht über die Cloud.</p>
+
+<p><b>Remote-Features einschalten</b> (<i>Geräte &amp; Verbindungen →
+Remote-Features</i>). Derselbe Schalter, den die Xbox-App braucht.</p>
+
+<p><b>Geräteidentität ablesen</b> (<i>System → Konsoleninfo</i>): Feld
+<b>XBOX-Netzwerk-Geräteidentität</b>, 16 Zeichen. Nicht die <i>Konsolen-ID</i>,
+nicht die <i>Globale Geräte-ID</i>, nicht die <i>Seriennummer</i>.</p>
+
+<p><b>Feste Adresse, möglichst LAN.</b> Im Ruhezustand verlängert WLAN die
+Weckzeit merklich.</p>
+
+<h3>Der geheime Clientschlüssel hält höchstens 24 Monate</h3>
+<p>Azure vergibt für einen geheimen Clientschlüssel keine längere Frist — auch
+nicht mit eigenem Datum. Läuft er ab, antwortet Microsoft mit
+<code>invalid_client</code> und die Konsole lässt sich nicht mehr aus Loxone
+wecken. Das passiert zwei Jahre nach der Einrichtung, wenn niemand mehr daran
+denkt.</p>
+<p>Deshalb gehört das Ablaufdatum in die Einstellungen. Das Plugin trägt beim
+Speichern eines neuen Geheimnisses von sich aus 24 Monate ein, zeigt die
+Restlaufzeit im Reiter <i>Test</i>, schreibt ab 60 Tagen eine Warnung ins
+Protokoll und meldet Datum und Resttage per MQTT
+(<code>xbox/geheimnis_ablauf</code>, <code>xbox/geheimnis_tage</code>) — damit
+Loxone rechtzeitig eine Nachricht schicken kann.</p>
+<p><b>Erneuern:</b> in Azure unter <i>Zertifikate &amp; Geheimnisse</i> ein neues
+Geheimnis anlegen, die Spalte <i>Wert</i> eintragen, die Anmeldung wiederholen,
+das alte Geheimnis löschen. Anwendungskennung und Geräteidentität bleiben.</p>
+
+<h3>Xbox: warum über die Cloud</h3>
+<p>Das alte Weckpaket auf UDP 5050 wird von neueren Firmwareständen ignoriert.
+Nachgemessen: Paketinhalt, Zieladresse und Gerätekennung waren richtig, die
+Konsole reagierte nicht — die Xbox-App weckt dieselbe Konsole ohne Weiteres,
+und die geht über die Cloud. Der Preis ist eine eigene App-Registrierung bei
+Microsoft und eine Internetverbindung.</p>
+
+<p><b>CEC weckt die Konsole nicht.</b> Unter <i>Allgemein → TV- &amp;
+A/V-Energieoptionen → HDMI-CEC</i> gibt es „Konsole schaltet andere Geräte
+ein/aus" und „andere Geräte können die Konsole <i>deaktivieren</i>" — aber keine
+Zeile, mit der andere Geräte die Konsole <i>einschalten</i> dürften. CEC kann sie
+also ausschalten, nicht wecken. Fürs Ausschalten heißt das: der Verstärker
+erledigt das schon, <code>xbox-aus</code> ist dann überflüssig.</p>
+
+<p><b>Hürde bei der Registrierung:</b> ein persönliches Microsoft-Konto ohne
+Verzeichnis kann im Azure-Portal keine Anwendung mehr registrieren —
+<i>Neue Registrierung</i> öffnet dann nur ein Fenster mit dem Knopf
+<i>Abbrechen</i>. Es braucht erst ein Verzeichnis, über eine Azure-Registrierung
+oder das M365-Entwicklerprogramm.</p>
+
+<h3>Abfragetakt</h3>
+<p>Ein LG-Gerät nimmt nur eine Verbindung zur Zeit an. Ein zu kurzer Takt
+sperrt die Fernbedienung der App aus. 60 Sekunden sind eine gute Vorgabe.</p>
+
+<h3>Wenn nichts geht</h3>
+<ol>
+<li><i>Test → Umgebung prüfen</i> — fehlen Python-Module? Läuft der Dienst?
+Ist ein MQTT-Broker eingetragen?</li>
+<li><i>Test → Verschlüsselung prüfen</i> — rechnet das Plugin richtig? Dieser
+Test braucht kein Gerät.</li>
+<li><i>Test → Beamer erreichbar?</i> — antwortet Port 9761 überhaupt? Ein
+ausgeschalteter Beamer im Tiefschlaf antwortet nicht; das ist normal.</li>
+<li>Meldung „Die Antwort ließ sich nicht lesen" — dann stimmt der Keycode
+nicht. Am Gerät neu erzeugen und hier eintragen.</li>
+<li>Feste IP-Adressen in der Fritz!Box vergeben. Wandernde Adressen sind die
+häufigste Ursache für Fehler, die gestern noch nicht da waren.</li>
+<li>Xbox: Meldung <code>invalid_client</code> — entweder wurde die Spalte
+<i>Geheime ID</i> statt <i>Wert</i> kopiert, oder das Geheimnis ist nach
+höchstens 24 Monaten abgelaufen. Der Reiter <i>Test</i> zeigt beides.</li>
+<li>Xbox lässt sich nicht wecken, obwohl alles eingerichtet ist: an der Konsole
+<i>Energiesparmodus</i> auf <i>Ruhezustand</i> und <i>Remote-Features</i>
+prüfen. Ohne diese zwei kommt kein Weckbefehl an.</li>
+</ol>
