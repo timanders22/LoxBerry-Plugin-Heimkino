@@ -34,7 +34,8 @@ Cloud. Deshalb geht dieses Plugin denselben Weg.
 
 **Nicht verschwiegen:** damit hängt das Wecken der Konsole an einer
 Internetverbindung und an einer eigenen App-Registrierung bei Microsoft. Das
-ist unschön, aber es ist der einzige Weg, der auf aktueller Firmware trägt.
+ist unschön, aber es ist der einzige Weg, der auf aktueller Firmware trägt —
+am Gerät bestätigt, siehe *Am Gerät erprobt*.
 Wer die Konsole ohnehin mit dem Controller weckt, braucht den Xbox-Teil nicht
 und kann ihn abgeschaltet lassen.
 
@@ -51,7 +52,8 @@ aktuellen Konsole ändert sie also nichts.
   **Die Übereinstimmung ist nachgemessen:** `bin/lg_beamer.py --selbsttest`
   vergleicht Schlüsselableitung und fünf verschlüsselte Befehle mit Werten, die
   die Originalfassung unter Node erzeugt hat. Zusätzlich wurde gegen eine
-  Attrappe geprüft, die die Originalfassung als Gegenstelle benutzt.
+  Attrappe geprüft, die die Originalfassung als Gegenstelle benutzt — und
+  seit dem 30.07.2026 gegen ein echtes Gerät.
 - Die Anmeldekette zu Xbox Live folgt
   [OpenXbox/xbox-webapi-python](https://github.com/OpenXbox/xbox-webapi-python) (MIT).
 
@@ -301,8 +303,25 @@ Geprüft wurden:
   und mit einem eingeschleusten Shell-Befehl im Wert — alles abgewiesen.
 - Die Loxone-Vorlage auf CRLF, Tabulatoren und Attributreihenfolge.
 
-**Nicht geprüft: der Betrieb an einem echten LG-Gerät und an einer echten
-Konsole.** Die Gegenstelle war in allen Fällen eine Attrappe.
+### Am Gerät erprobt — 30.07.2026
+
+Bis Version 1.0.1 war die Gegenstelle in allen Prüfungen eine Attrappe. Das ist
+vorbei: die Fassung läuft an einem **echten LG-Beamer** und einer **echten
+Xbox Series X** im Zusammenspiel mit einem Loxone Miniserver. Erprobt sind alle
+vier Schaltwege und die Rückmeldung:
+
+| Weg | Ergebnis |
+|---|---|
+| Beamer **aus** über die verschlüsselte IP-Steuerung (TCP 9761) | läuft |
+| Beamer **ein** per Wake-on-LAN, ausgelöst von Loxone selbst | läuft |
+| Xbox **wecken** über den Cloud-Dienst von Microsoft | läuft |
+| Xbox **ausschalten** | läuft |
+| Zustandsmeldungen per MQTT an den Miniserver | kommen richtig an |
+
+Damit ist auch belegt, was vorher nur begründet war: dass das nachgebaute
+Verschlüsselungsverfahren von einem echten Gerät angenommen wird, und dass der
+Cloud-Weg eine Konsole weckt, die auf das alte Weckpaket auf UDP 5050 nicht mehr
+reagiert.
 
 ## Installation
 
