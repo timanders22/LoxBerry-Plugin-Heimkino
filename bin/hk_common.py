@@ -165,6 +165,37 @@ def ja(cfg, abschnitt, schluessel):
 # Zustandsdatei - die Oberflaeche liest sie, statt selbst zu messen
 # --------------------------------------------------------------------------
 
+def version():
+    """Version aus der Plugindatenbank von LoxBerry.
+
+    Bewusst nicht fest eingetragen: eine Versionsnummer im Quelltext bleibt
+    beim naechsten Release stehen. Bis 1.0.2 ist genau das passiert - die
+    Oberflaeche zeigte 1.0.0, obwohl 1.0.2 lief. Massgeblich ist, was LoxBerry
+    bei der Installation aus plugin.cfg uebernommen hat.
+
+    Gibt "" zurueck, wenn sich die Version nicht ermitteln laesst. Dann steht
+    im Protokoll keine Nummer - besser als eine falsche.
+    """
+    datei = os.path.join(_lbhome(), "data", "system", "plugindatabase.json")
+    try:
+        with open(datei, "r", encoding="utf-8") as f:
+            inhalt = json.load(f)
+    except (OSError, ValueError):
+        return ""
+    liste = inhalt.get("plugins", inhalt) if isinstance(inhalt, dict) else inhalt
+    if isinstance(liste, dict):
+        liste = list(liste.values())
+    if not isinstance(liste, list):
+        return ""
+    for eintrag in liste:
+        if not isinstance(eintrag, dict):
+            continue
+        if eintrag.get("folder") == ORDNER or eintrag.get("PLUGINDB_FOLDER") == ORDNER:
+            return str(eintrag.get("version")
+                       or eintrag.get("PLUGINDB_VERSION") or "").strip()
+    return ""
+
+
 def zustand_schreiben(daten):
     os.makedirs(os.path.dirname(P["zustand"]), exist_ok=True)
     vorlaeufig = P["zustand"] + ".neu"

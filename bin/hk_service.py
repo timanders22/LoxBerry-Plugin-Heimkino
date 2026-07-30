@@ -125,8 +125,9 @@ def hauptteil():
     melder = gemein.Melder(praefix, log, gemein.ja(cfg, "heimkino", "mqtt"))
     meldungen = {}
 
-    log.info("Heimkino 1.0.2 gestartet, Takt %d s, Themenpraefix %s",
-             takt, praefix)
+    fassung = gemein.version()
+    log.info("Heimkino%s gestartet, Takt %d s, Themenpraefix %s",
+             (" " + fassung) if fassung else "", takt, praefix)
     melder.sende("service/online", 1)
 
     letzte_config = 0.0
