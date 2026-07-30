@@ -267,7 +267,7 @@ class XboxCloud:
                     "unter 'Zertifikate & Geheimnisse' wurde die Spalte "
                     "'Geheime ID' kopiert statt der Spalte 'Wert'. Zweite "
                     "Ursache: das Geheimnis ist abgelaufen (Spalte 'Gueltig "
-                    "bis'). Der Reiter Test, Knopf 'Anmeldedaten pruefen', sagt, "
+                    "bis'). Der Reiter Test, Knopf 'Anmeldedaten prüfen', sagt, "
                     "welche Form das gespeicherte Geheimnis hat. Bleibt es dabei, "
                     "in xbox_auth.json \"dienst\": \"v2\" setzen und die "
                     "Anmeldung wiederholen. Antwort im Original: %s" % text)
@@ -416,15 +416,15 @@ class XboxCloud:
         namen = ", ".join(e.get("id", "?") for e in liste) or "keine"
         raise XboxFehler(
             "Die Konsole %s steht nicht in der Liste des Kontos. Vorhanden: %s. "
-            "Stimmt die XBOX-Netzwerk-Geraeteidentitaet?" % (geraete_id, namen))
+            "Stimmt die XBOX-Netzwerk-Geräteidentität?" % (geraete_id, namen))
 
     def _befehl(self, geraete_id, art, befehl, parameter=None):
         requests = _requests()
         if not geraete_id:
-            raise XboxFehler("Keine XBOX-Netzwerk-Geraeteidentitaet eingetragen. "
+            raise XboxFehler("Keine XBOX-Netzwerk-Geräteidentität eingetragen. "
                              "Sie steht an der Konsole unter Einstellungen, "
                              "System, Konsoleninfo - oder der Reiter Test "
-                             "ermittelt sie ueber Konsolen suchen.")
+                             "ermittelt sie über Konsolen suchen.")
         koerper = {
             "destination": "Xbox",
             "type": art,

@@ -80,7 +80,7 @@ class LgBeamer:
                 "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" for z in code):
             raise BeamerFehler(
                 "Der Keycode muss aus genau 8 Zeichen A-Z und 0-9 bestehen. "
-                "Er wird am Geraet unter Netzwerk-IP-Steuerung erzeugt.")
+                "Er wird am Gerät unter Netzwerk-IP-Steuerung erzeugt.")
         return hashlib.pbkdf2_hmac("sha256", code.encode("ascii"), SALZ,
                                    RUNDEN, SCHLUESSELLAENGE)
 
@@ -142,7 +142,7 @@ class LgBeamer:
         if streng:
             raise BeamerFehler(
                 "Die Antwort liess sich nicht lesen. Der haeufigste Grund ist "
-                "ein falscher Keycode - er wird am Geraet neu erzeugt und "
+                "ein falscher Keycode - er wird am Gerät neu erzeugt und "
                 "muss danach hier eingetragen werden.")
         return None
 
@@ -177,12 +177,12 @@ class LgBeamer:
         except socket.timeout as fehler:
             raise BeamerFehler(
                 "Keine Antwort von %s:%d innerhalb von %.0f Sekunden. Steht die "
-                "Netzwerk-IP-Steuerung am Geraet auf ein?"
+                "Netzwerk-IP-Steuerung am Gerät auf ein?"
                 % (self.ip, self.port, self.zeitgrenze)) from fehler
         except OSError as fehler:
             raise BeamerFehler(self._verbindungsfehler(fehler)) from fehler
         if not stueck:
-            raise BeamerFehler("Das Geraet hat die Verbindung ohne Antwort beendet.")
+            raise BeamerFehler("Das Gerät hat die Verbindung ohne Antwort beendet.")
         return self.dekodieren(stueck)
 
     def _verbindungsfehler(self, fehler):
@@ -196,13 +196,13 @@ class LgBeamer:
 
         if nummer == errno.ECONNREFUSED:
             return (
-                "%s weist die Verbindung ab. Das Geraet ist im Netz erreichbar, "
+                "%s weist die Verbindung ab. Das Gerät ist im Netz erreichbar, "
                 "aber auf diesem Port hoert nichts.\n"
                 "Der haeufigste Grund ist voellig harmlos: der Beamer ist aus. "
-                "Die IP-Steuerung laeuft nur im eingeschalteten Zustand - was fuer "
+                "Die IP-Steuerung läuft nur im eingeschalteten Zustand - was für "
                 "einen Ausschaltbefehl auch genuegt.\n"
                 "Ist der Beamer an und es kommt dennoch diese Meldung, steht die "
-                "Netzwerk-IP-Steuerung am Geraet auf aus. Sie liegt im versteckten "
+                "Netzwerk-IP-Steuerung am Gerät auf aus. Sie liegt im versteckten "
                 "Menue: Alle Einstellungen, Allgemein, Netzwerk ansteuern - ohne zu "
                 "oeffnen - dann zuegig 82888 tippen." % wo)
 
@@ -212,16 +212,16 @@ class LgBeamer:
                     "sie irgendwann." % wo)
 
         if nummer == errno.EHOSTDOWN:
-            return "%s antwortet nicht - das Geraet scheint vom Netz zu sein." % wo
+            return "%s antwortet nicht - das Gerät scheint vom Netz zu sein." % wo
 
-        return "Verbindung zu %s nicht moeglich: %s" % (wo, fehler)
+        return "Verbindung zu %s nicht möglich: %s" % (wo, fehler)
 
     # ---------------- Befehle ----------------
 
     def aus(self):
         antwort = self.befehl("POWER off")
         if antwort.strip() != "OK":
-            raise BeamerFehler("Das Geraet hat nicht mit OK geantwortet, "
+            raise BeamerFehler("Das Gerät hat nicht mit OK geantwortet, "
                                "sondern mit: %r" % antwort)
         return True
 
@@ -312,7 +312,7 @@ def selbsttest():
     # Eine echte Antwort endet auf Zeilenvorschub und muss lesbar sein.
     antwort = geraet.kodieren("OK" + ANTWORT_ENDE.join(["", ""]), iv)
     if geraet.dekodieren(antwort) != "OK":
-        print("FEHLER Rundlauf: 'OK' kam nicht zurueck")
+        print("FEHLER Rundlauf: 'OK' kam nicht zurück")
         fehler += 1
     else:
         print("ok     Rundlauf einer Antwort")

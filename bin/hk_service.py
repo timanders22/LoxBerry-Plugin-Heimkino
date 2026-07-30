@@ -96,7 +96,7 @@ def xbox_abfragen(cfg, log, meldungen):
             return ergebnis
         if not kennung:
             gemein.einmal_melden(meldungen, "xbox_kennung",
-                                 "Xbox: keine XBOX-Netzwerk-Geraeteidentitaet eingetragen.",
+                                 "Xbox: keine XBOX-Netzwerk-Geräteidentität eingetragen.",
                                  log, "warning")
             return ergebnis
         auskunft = wolke.status(kennung)
@@ -153,7 +153,7 @@ def hauptteil():
                     ("Xbox: das Azure-Clientgeheimnis ist seit %d Tagen abgelaufen - "
                      "ein neues anlegen und die Anmeldung wiederholen."
                      % abs(ablauf_tage)) if ablauf_tage < 0 else
-                    ("Xbox: das Azure-Clientgeheimnis laeuft in %d Tagen ab (%s)."
+                    ("Xbox: das Azure-Clientgeheimnis läuft in %d Tagen ab (%s)."
                      % (ablauf_tage, ablauf_datum)),
                     log, "warning", wieder_nach=86400)
             jetzt = time.time()
