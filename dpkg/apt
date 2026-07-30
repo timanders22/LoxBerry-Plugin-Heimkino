@@ -1,0 +1,8 @@
+# Ein Paket je Zeile, exakter Paketname wie fuer apt-get.
+#
+# python3-cryptography  - AES fuer die IP-Steuerung des LG-Beamers
+# python3-paho-mqtt     - Meldeweg zum Miniserver
+# python3-requests      - Cloud-Aufrufe fuer die Xbox
+python3-cryptography
+python3-paho-mqtt
+python3-requests
