@@ -125,7 +125,7 @@ def hauptteil():
     melder = gemein.Melder(praefix, log, gemein.ja(cfg, "heimkino", "mqtt"))
     meldungen = {}
 
-    log.info("Heimkino 1.0.1 gestartet, Takt %d s, Themenpraefix %s",
+    log.info("Heimkino 1.0.2 gestartet, Takt %d s, Themenpraefix %s",
              takt, praefix)
     melder.sende("service/online", 1)
 
