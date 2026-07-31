@@ -725,7 +725,19 @@ nur der eine oder nur der andere an.</div>
 <!-- ========================= Einbindung in Loxone ========================= -->
 <div class="hk-pane" id="tab-loxone">
 
-<h2>Zustand lesen &ndash; &uuml;ber MQTT</h2>
+<h2>Einbindung in Loxone &ndash; Schritt f&uuml;r Schritt</h2>
+<p class="hk-small">Das Plugin fragt Beamer und Xbox ab und meldet jeden Zustand als eigenes
+MQTT-Thema (Schritt&nbsp;1 und&nbsp;2). Umgekehrt nimmt es &uuml;ber einfache Adressen Befehle
+entgegen (Schritt&nbsp;3). Daraus l&auml;sst sich eine Kino-Szene bauen, die auf Knopfdruck
+alles einschaltet und beim Verlassen wieder abr&auml;umt.</p>
+
+<h2>Schritt 1: Abo im MQTT-Gateway eintragen</h2>
+<p class="hk-small"><b>Ohne diesen Eintrag kommt am Miniserver nichts an.</b> Einzutragen unter
+<i>System-Einstellungen &rarr; MQTT Gateway &rarr; Abonnements</i>:</p>
+<pre class="hk-mono" style="background:#f4f4f4;border:1px solid #ccc;padding:10px;"><?php
+echo hk_e($hk_praefix); ?>/#</pre>
+
+<h2>Schritt 2: Zustand lesen &ndash; &uuml;ber MQTT</h2>
 <p class="hk-small">Der Dienst meldet jeden Wert <b>retained</b> an den Broker.
 Das MQTT-Gateway von LoxBerry leitet sie an den Miniserver weiter. Alle Themen
 liegen unter <span class="hk-mono"><?php echo hk_e($hk_praefix); ?>/</span>.</p>
@@ -749,7 +761,7 @@ liegen unter <span class="hk-mono"><?php echo hk_e($hk_praefix); ?>/</span>.</p>
 <i>Virtuelle Eing&auml;nge</i> einlesen. Sie legt die Eing&auml;nge mit den richtigen
 Namen an; die Werte kommen dann vom MQTT-Gateway.</p>
 
-<h2>Schalten &ndash; &uuml;ber virtuelle Ausg&auml;nge</h2>
+<h2>Schritt 3: Schalten &ndash; &uuml;ber virtuelle Ausg&auml;nge</h2>
 <?php if ($hk_token === '') { ?>
 <div class="hk-alert hk-err">Es gibt noch kein Aktionstoken. Einmal im Reiter
 <i>Einstellungen</i> speichern, dann erscheinen hier die vollst&auml;ndigen
@@ -783,6 +795,51 @@ kann Wake-on-LAN selbst. Ein virtueller Ausgang mit der Adresse
 gen&uuml;gt und ist der k&uuml;rzere Weg.
 </div>
 <?php } ?>
+
+<h2>Schritt 4: Kachel in der App</h2>
+<p class="hk-small">Einen <i>Status</i>-Baustein anlegen: <span class="hk-mono">v1</span> mit
+<span class="hk-mono">beamer_an</span>, <span class="hk-mono">v2</span> mit
+<span class="hk-mono">xbox_an</span> verbinden. Zwei Statustexte gen&uuml;gen &mdash; einer f&uuml;r
+&bdquo;Kino l&auml;uft&ldquo;, einer f&uuml;r &bdquo;alles aus&ldquo;. H&auml;kchen
+<i>Visualisierung</i> setzen, fertig.</p>
+
+<h2>Schritt 5: Das Clientgeheimnis l&auml;uft ab</h2>
+<p class="hk-small">Das Geheimnis der Xbox-Anmeldung bei Microsoft hat ein Ablaufdatum. L&auml;uft es
+ab, meldet sich die Konsole nicht mehr &mdash; ohne jede Fehlermeldung in der App. Das Plugin liefert
+deshalb <span class="hk-mono">xbox_geheimnis_tage</span>: Tage bis zum Ablauf, negativ bedeutet
+abgelaufen. Ein Schwellwertschalter darauf und eine Benachrichtigung ersparen die b&ouml;se
+&Uuml;berraschung. Aufbau in Schritt&nbsp;6, Zeilen 12 und 13.</p>
+
+<h2>Schritt 6: Komplette Baustein-Liste zum 1:1-Nachbauen</h2>
+<p class="hk-small">So sieht die vollst&auml;ndige Logik auf der Programmierseite aus (jede Zeile =
+ein Baustein). Alle Bausteine findet man in Loxone Config &uuml;ber die Baustein-Suche (F5):</p>
+<table class="hk-tbl">
+<tr><th>#</th><th>Baustein (Typ)</th><th>Name (Vorschlag)</th><th>Parameter</th><th>Eing&auml;nge verbinden mit</th></tr>
+<tr><td>1</td><td>Virtueller Eingang</td><td class="hk-mono"><?php echo hk_e($hk_praefix); ?>_beamer_an</td><td>digital</td><td>&mdash; (kommt &uuml;ber das Gateway)</td></tr>
+<tr><td>2</td><td>Virtueller Eingang</td><td class="hk-mono"><?php echo hk_e($hk_praefix); ?>_beamer_erreichbar</td><td>digital</td><td>&mdash;</td></tr>
+<tr><td>3</td><td>Virtueller Eingang</td><td class="hk-mono"><?php echo hk_e($hk_praefix); ?>_xbox_an</td><td>digital</td><td>&mdash;</td></tr>
+<tr><td>4</td><td>Virtueller Eingang</td><td class="hk-mono"><?php echo hk_e($hk_praefix); ?>_xbox_angemeldet</td><td>digital</td><td>&mdash;</td></tr>
+<tr><td>5</td><td>Virtueller Eingang</td><td class="hk-mono"><?php echo hk_e($hk_praefix); ?>_xbox_geheimnis_tage</td><td>analog, Einheit Tage</td><td>&mdash;</td></tr>
+<tr><td>6</td><td>Virtueller Eingang</td><td class="hk-mono"><?php echo hk_e($hk_praefix); ?>_service_online</td><td>digital</td><td>&mdash;</td></tr>
+<tr><td>7</td><td>Merker (remanent, Visu)</td><td>Kino-Modus</td><td>Visualisierung EIN &mdash; der Schalter in der App</td><td>&mdash; (Bedienung)</td></tr>
+<tr><td>8</td><td>Flankenerkennung (steigend)</td><td>Kino startet</td><td>&mdash;</td><td>Eingang = #7</td></tr>
+<tr><td>9</td><td>Flankenerkennung (fallend)</td><td>Kino endet</td><td>&mdash;</td><td>Eingang = #7</td></tr>
+<tr><td>10</td><td>Virtueller Ausgang + Befehle</td><td>Heimkino</td><td>Adresse des LoxBerry, Befehle wie in Schritt&nbsp;3</td><td><span class="hk-mono">beamer-wol</span> und <span class="hk-mono">xbox-an</span> &larr; #8, <span class="hk-mono">beamer-aus</span> und <span class="hk-mono">xbox-aus</span> &larr; #9</td></tr>
+<tr><td>11</td><td>Einschaltverz&ouml;gerung</td><td>Beamer kam nicht hoch</td><td>90&nbsp;s</td><td>Eingang = #7 UND NICHT #1 &rarr; Benachrichtigung</td></tr>
+<tr><td>12</td><td>Schwellwertschalter</td><td>Xbox-Geheimnis l&auml;uft ab</td><td>Ein <b>14</b> / Aus <b>21</b> (Ein &lt; Aus = schaltet beim <b>Unter</b>schreiten ein)</td><td>Eingang = #5</td></tr>
+<tr><td>13</td><td>Benachrichtigung</td><td>Xbox-Geheimnis erneuern</td><td>Text z.&nbsp;B. &bdquo;Das Clientgeheimnis der Xbox-Anmeldung l&auml;uft in weniger als 14 Tagen ab.&ldquo;</td><td>&larr; #12</td></tr>
+<tr><td>14</td><td>Status</td><td>Heimkino</td><td>Statustext siehe Schritt&nbsp;4, Visualisierung EIN</td><td>v1 = #1, v2 = #3</td></tr>
+</table>
+<div class="hk-alert hk-info">
+<b>Zu #10:</b> ein virtueller Ausgangsbefehl feuert bei der Flanke 0&rarr;1, nicht dauerhaft. Deshalb
+die beiden Flankenbausteine #8 und #9 &mdash; ein Merker allein w&uuml;rde beim Einschalten genau
+einmal ausl&ouml;sen und beim Ausschalten gar nicht.<br>
+<b>Zu #11:</b> der Beamer braucht nach dem Einschalten rund eine Minute, bis er auf Port 9761
+antwortet. Eine k&uuml;rzere Verz&ouml;gerung meldet einen Fehler, der keiner ist.<br>
+<b>Zu #13:</b> der Benachrichtigungs-Baustein sendet nur bei einem Wechsel von Aus auf Ein. Niemals
+mehrere Quellen direkt an seinen Eingang legen &mdash; erst &uuml;ber einen ODER-Baustein
+zusammenf&uuml;hren.
+</div>
 </div>
 
 <!-- ================================ Test ================================ -->
