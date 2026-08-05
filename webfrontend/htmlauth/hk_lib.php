@@ -38,6 +38,51 @@ function hk_e($s)
 }
 
 /* ==================================================================
+ * Sprache (Pflicht: Deutsch und Englisch)
+ * ================================================================== */
+
+function hk_sprache()
+{
+    $sprache = 'de';
+    if (class_exists('LBSystem', false) && method_exists('LBSystem', 'lblanguage')) {
+        $sprache = LBSystem::lblanguage();
+    } elseif (getenv('LBLANG')) {
+        $sprache = getenv('LBLANG');
+    }
+    $sprache = strtolower(substr((string) $sprache, 0, 2));
+    // Englisch ist die Rueckfallebene, nicht Deutsch: wer eine dritte Sprache
+    // eingestellt hat, versteht eher Englisch.
+    return in_array($sprache, array('de', 'en'), true) ? $sprache : 'en';
+}
+
+/** Text zu einem Schluessel "ABSCHNITT.SCHLUESSEL". */
+function hk_t($schluessel)
+{
+    static $texte = null;
+    if ($texte === null) {
+        $ordner = hk_paths()['home'] . '/templates/plugins/'
+                . hk_paths()['plugin'] . '/lang';
+        $texte = @parse_ini_file($ordner . '/language_' . hk_sprache() . '.ini',
+                                 true, INI_SCANNER_RAW);
+        if (!is_array($texte)) { $texte = array(); }
+        $rueck = @parse_ini_file($ordner . '/language_en.ini', true,
+                                 INI_SCANNER_RAW);
+        if (is_array($rueck)) { $texte = array_replace_recursive($rueck, $texte); }
+        // parse_ini_file mit INI_SCANNER_RAW liefert die Werte samt der
+        // Anfuehrungszeichen zurueck, in die sie in der Datei stehen muessen.
+        // Die gehoeren nicht in die Ausgabe.
+        foreach ($texte as $ab => $paare) {
+            if (!is_array($paare)) { continue; }
+            foreach ($paare as $s => $w) {
+                $texte[$ab][$s] = trim((string) $w, '"');
+            }
+        }
+    }
+    list($a, $s) = array_pad(explode('.', $schluessel, 2), 2, '');
+    return isset($texte[$a][$s]) ? $texte[$a][$s] : $schluessel;
+}
+
+/* ==================================================================
  * Konfiguration
  * ================================================================== */
 
@@ -214,7 +259,21 @@ function hk_mqtt_broker()
     }
     $port = isset($mqtt['Brokerport']) ? $mqtt['Brokerport']
           : (isset($mqtt['brokerport']) ? $mqtt['brokerport'] : 1883);
-    return array('host' => trim((string) $host), 'port' => (int) $port);
+    // Das MQTT-Gateway ist seit LoxBerry 3 Bestandteil des Systems, kein
+    // Plugin. general.json.default setzt ab Werk Brokerhost localhost,
+    // Brokerport 1883, Uselocalbroker 1 und Gatewayautostart 1.
+    $hole = function ($gross, $klein, $vorgabe) use ($mqtt) {
+        if (isset($mqtt[$gross])) { return $mqtt[$gross]; }
+        if (isset($mqtt[$klein])) { return $mqtt[$klein]; }
+        return $vorgabe;
+    };
+    return array(
+        'host'      => trim((string) $host),
+        'port'      => (int) $port,
+        'lokal'     => (int) $hole('Uselocalbroker', 'uselocalbroker', 1) ? true : false,
+        'autostart' => (int) $hole('Gatewayautostart', 'gatewayautostart', 1) ? true : false,
+        'benutzer'  => trim((string) $hole('Brokeruser', 'brokeruser', '')),
+    );
 }
 
 /** Einen Befehl von bin/hk_cmd.py ausfuehren. */
@@ -466,7 +525,7 @@ function hk_geheimnis_form($wert)
             'Das gespeicherte Geheimnis ist eine GUID (8-4-4-4-12 Zeichen mit vier '
             . 'Bindestrichen). So sieht die Spalte <b>Geheime ID</b> aus, nicht die '
             . 'Spalte <b>Wert</b>. Genau diese Verwechslung f&uuml;hrt zu '
-            . '<span class="hk-mono">invalid_client</span>.');
+            . '<span class="sm-mono">invalid_client</span>.');
     }
     $laenge = strlen($wert);
     if ($laenge < 20) {

@@ -11,7 +11,7 @@ require_once __DIR__ . '/hk_lib.php';
 
 function hk_block($text)
 {
-    return '<pre class="hk-log">' . hk_e($text) . '</pre>';
+    return '<pre class="sm-log">' . hk_e($text) . '</pre>';
 }
 
 function hk_test_ausfuehren($was)
@@ -52,16 +52,16 @@ function hk_test_ausfuehren($was)
             return array('Verschl&uuml;sselung gegen die Vorlage gepr&uuml;fte Werte',
                 hk_block($aus)
                 . ($code === 0
-                    ? '<p class="hk-ok-text">Der Nachbau stimmt mit der '
+                    ? '<p class="sm-ok-text">Der Nachbau stimmt mit der '
                       . 'Originalfassung &uuml;berein.</p>'
-                    : '<p class="hk-err-text">Abweichung - bitte melden.</p>'));
+                    : '<p class="sm-err-text">Abweichung - bitte melden.</p>'));
 
         case 'beamer_erreichbar':
             $ip = hk_cfg($cfg, 'beamer', 'ip', '');
             $port = (int) hk_cfg($cfg, 'beamer', 'port', '9761');
             if ($ip === '') {
                 return array('Beamer erreichbar?',
-                    '<p class="hk-err-text">Es ist keine IP-Adresse eingetragen.</p>');
+                    '<p class="sm-err-text">Es ist keine IP-Adresse eingetragen.</p>');
             }
             $anfang = microtime(true);
             $verbindung = @fsockopen($ip, $port, $nr, $txt, 3);
@@ -124,10 +124,10 @@ function hk_test_ausfuehren($was)
             $txt = hk_block(implode("\n", $z));
             list($art, $satz) = hk_geheimnis_form(
                 isset($a['client_secret']) ? $a['client_secret'] : '');
-            $klasse = $art === 'ok' ? 'hk-ok' : ($art === 'leer' ? 'hk-info' : 'hk-err');
-            $txt .= '<div class="hk-alert ' . $klasse . '"><b>Geheimer '
+            $klasse = $art === 'ok' ? 'sm-ok' : ($art === 'leer' ? 'sm-info' : 'sm-err');
+            $txt .= '<div class="sm-alert ' . $klasse . '"><b>Geheimer '
                   . 'Clientschl&uuml;ssel:</b> ' . $satz . '</div>';
-            $txt .= '<p class="hk-small">Das Geheimnis selbst wird nicht '
+            $txt .= '<p class="sm-small">Das Geheimnis selbst wird nicht '
                   . 'angezeigt &mdash; nur seine L&auml;nge und Form.</p>';
             return array('Anmeldedaten prüfen', $txt);
 
@@ -137,7 +137,7 @@ function hk_test_ausfuehren($was)
                 return array('Konsolen suchen', hk_block($aus));
             }
             $zeilen = preg_split('/\R/', trim($aus));
-            $t = '<table class="hk-tbl"><tr><th>Kennung</th><th>Name</th>'
+            $t = '<table class="sm-tbl"><tr><th>Kennung</th><th>Name</th>'
                . '<th>Typ</th><th>Zustand</th></tr>';
             foreach ($zeilen as $zeile) {
                 if (trim($zeile) === '') { continue; }
@@ -148,7 +148,7 @@ function hk_test_ausfuehren($was)
                 }
                 $t .= '</tr>';
             }
-            $t .= '</table><p class="hk-small">Die Kennung der gew&uuml;nschten '
+            $t .= '</table><p class="sm-small">Die Kennung der gew&uuml;nschten '
                 . 'Konsole in den Einstellungen unter XBOX-Netzwerk-Ger&auml;teidentit&auml;t '
                 . 'eintragen.</p>';
             return array('Konsolen suchen', $t);
