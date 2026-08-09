@@ -1,6 +1,50 @@
 #!/bin/sh
-# Der Dienst wird beendet. Systempakete bleiben stehen: python3-cryptography
-# und python3-requests werden von anderen Dingen mitbenutzt, ein blindes
-# Entfernen waere schaedlich.
-pkill -f "hk_service.py" >/dev/null 2>&1
+# Heimkino - Deinstallation
+#
+# Systempakete bleiben stehen: python3-cryptography und python3-requests
+# werden von anderen Dingen mitbenutzt, ein blindes Entfernen waere
+# schaedlich.
+BASE="${LBHOMEDIR:-/opt/loxberry}"
+PDIR="${3:-heimkino}"
+PIDDATEI="$BASE/log/plugins/$PDIR/hk_service.pid"
+
+# Beendet wird ueber die PID-Datei, NICHT ueber pkill -f.
+#
+# pkill -f "hk_service.py" trifft jeden Prozess, in dessen Kommandozeile die
+# Zeichenkette vorkommt - auch einen Editor, der die Datei geoeffnet hat,
+# oder ein tail auf einen Pfad mit diesem Namen. Beim Beenden ist das kein
+# theoretisches Risiko: pkill schickt das Signal an ALLE Treffer.
+beendet=0
+if [ -f "$PIDDATEI" ]; then
+    PID=$(cat "$PIDDATEI" 2>/dev/null)
+    case "$PID" in
+        ''|*[!0-9]*) PID="" ;;
+    esac
+    # Gegenprobe: gehoert die Prozessnummer wirklich zu unserem Dienst?
+    # Argumentweise vergleichen, nicht als Teilzeichenkette: die
+    # Kommandozeile eines fremden Prozesses kann den Namen zufaellig
+    # enthalten, und ein kill an den Falschen ist nicht rueckgaengig zu
+    # machen. tr wandelt die NUL-Trenner in Zeilen, dann trifft grep -x
+    # nur ein vollstaendiges Argument.
+    if [ -n "$PID" ] && tr '\0' '\n' < "/proc/$PID/cmdline" 2>/dev/null \
+         | sed 's#.*/##' | grep -qx "hk_service.py"; then
+        kill "$PID" 2>/dev/null
+        # Dem Dienst Zeit zum Aufraeumen lassen: er meldet beim Beenden noch
+        # service/online = 0 per MQTT, damit Loxone den Ausfall mitbekommt.
+        i=0
+        while [ $i -lt 20 ] && kill -0 "$PID" 2>/dev/null; do
+            sleep 0.25
+            i=$((i + 1))
+        done
+        kill -9 "$PID" 2>/dev/null
+        beendet=1
+    fi
+    rm -f "$PIDDATEI"
+fi
+
+if [ "$beendet" = "1" ]; then
+    echo "<OK> Dienst beendet."
+else
+    echo "<INFO> Kein laufender Dienst gefunden."
+fi
 exit 0

@@ -1,14 +1,74 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <rect width="512" height="512" rx="96" fill="#546e7a"/>
-  <!-- Leinwand -->
-  <rect x="86" y="72" width="340" height="26" rx="8" fill="#37474f"/>
-  <rect x="106" y="98" width="300" height="186" rx="6" fill="#eceff1"/>
-  <rect x="106" y="98" width="300" height="186" rx="6" fill="none" stroke="#b0bec5" stroke-width="6"/>
-  <!-- Lichtkegel -->
-  <path d="M256 372 L166 284 L346 284 Z" fill="#6dac20" opacity="0.35"/>
-  <!-- Beamer -->
-  <rect x="196" y="366" width="120" height="66" rx="14" fill="#263238"/>
-  <circle cx="256" cy="399" r="21" fill="#6dac20"/>
-  <circle cx="256" cy="399" r="10" fill="#eceff1"/>
-  <rect x="212" y="376" width="18" height="8" rx="4" fill="#78909c"/>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="512" height="512" viewBox="0 0 512 512" version="1.1" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bg-grad" cx="50%" cy="50%" r="50%" fx="35%" fy="35%">
+      <stop offset="0%" stop-color="#7dc424" />
+      <stop offset="65%" stop-color="#6dac20" />
+      <stop offset="100%" stop-color="#568819" />
+    </radialGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#000000" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <!-- Outer Badge Ring -->
+  <circle cx="256" cy="256" r="246" fill="url(#bg-grad)" />
+  <circle cx="256" cy="256" r="232" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="3" />
+
+  <g filter="url(#shadow)" fill="#ffffff">
+    <!-- Projector Beam Light Cone -->
+    <polygon points="221,248 184,176 328,176" fill="#ffffff" opacity="0.35" />
+
+    <!-- Projector Screen (Leinwand) at Top -->
+    <!-- Top Casing -->
+    <rect x="166" y="75" width="180" height="12" rx="4" fill="#ffffff" />
+    <!-- Screen Fabric -->
+    <rect x="176" y="87" width="160" height="95" fill="#ffffff" />
+    <!-- Inner Screen Area Cutout -->
+    <rect x="184" y="93" width="144" height="83" rx="4" fill="#6dac20" />
+    <!-- Play Symbol in Screen Cutout -->
+    <polygon points="250,122 268,134.5 250,147" fill="#ffffff" />
+    <!-- Bottom Weighted Bar -->
+    <rect x="170" y="182" width="172" height="8" rx="3" fill="#ffffff" />
+
+    <!-- Projector (Beamer) below -->
+    <!-- Main Body -->
+    <rect x="191" y="225" width="130" height="46" rx="10" fill="#ffffff" />
+    <!-- Feet -->
+    <rect x="201" y="271" width="20" height="6" rx="2" fill="#ffffff" />
+    <rect x="291" y="271" width="20" height="6" rx="2" fill="#ffffff" />
+    <!-- Lens Cutout -->
+    <circle cx="221" cy="248" r="14" fill="#6dac20" />
+    <circle cx="221" cy="248" r="7" fill="#ffffff" />
+    <!-- Vent Grille Cutouts -->
+    <rect x="250" y="238" width="55" height="6" rx="3" fill="#6dac20" />
+    <rect x="250" y="250" width="55" height="6" rx="3" fill="#6dac20" />
+
+    <!-- Flanking Left Symbol: Gamepad Controller (XBOX) -->
+    <g transform="translate(118, 160)">
+      <circle cx="0" cy="0" r="22" fill="#ffffff" />
+      <path d="M -11 -4 C -12 -8 -6 -10 0 -8 C 6 -10 12 -8 11 -4 C 12 2 8 10 5 10 C 2 10 1 6 0 6 C -1 6 -2 10 -5 10 C -8 10 -12 2 -11 -4 Z" fill="#6dac20" />
+      <line x1="-6" y1="-3" x2="-2" y2="-3" stroke="#ffffff" stroke-width="2" stroke-linecap="round" />
+      <line x1="-4" y1="-5" x2="-4" y2="-1" stroke="#ffffff" stroke-width="2" stroke-linecap="round" />
+      <circle cx="4" cy="-4" r="1" fill="#ffffff" />
+      <circle cx="6" cy="-2" r="1" fill="#ffffff" />
+    </g>
+
+    <!-- Flanking Right Symbol: Film / Cinema Clapperboard -->
+    <g transform="translate(394, 160)">
+      <circle cx="0" cy="0" r="22" fill="#ffffff" />
+      <rect x="-10" y="-3" width="20" height="15" rx="2" fill="#6dac20" />
+      <path d="M -10 -11 L 10 -11 L 10 -5 L -10 -5 Z" fill="#6dac20" />
+      <line x1="-6" y1="-11" x2="-3" y2="-5" stroke="#ffffff" stroke-width="2" />
+      <line x1="0" y1="-11" x2="3" y2="-5" stroke="#ffffff" stroke-width="2" />
+      <line x1="6" y1="-11" x2="9" y2="-5" stroke="#ffffff" stroke-width="2" />
+    </g>
+
+    <!-- Dashed Line -->
+    <path d="M 150 345 L 362 345" stroke="#ffffff" stroke-width="4" stroke-dasharray="6 8" opacity="0.8" />
+  </g>
+
+  <!-- Typography -->
+  <text x="256" y="388" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-weight="900" font-size="29" letter-spacing="1">Heimkino</text>
+  <text x="256" y="424" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-weight="bold" font-size="20" letter-spacing="3">LOXBERRY</text>
 </svg>

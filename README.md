@@ -331,3 +331,82 @@ Release-Adresse angeben. Danach Reiter *Test → Umgebung prüfen*.
 ## Lizenz
 
 MIT. Siehe `LICENSE`.
+
+## Änderungen in 1.2.0
+
+**Sicherung beim Update.** `preupgrade.sh` legte `heimkino.cfg` und
+`xbox_auth.json` unter `/tmp` ab — auf dem LoxBerry eine Ramdisk. Erzwingt die
+Paketinstallation dazwischen einen Neustart oder fällt der Strom aus, ist beides
+weg: der Keycode des Beamers, das Aktionstoken und vor allem die
+Azure-Refresh-Token, deren Verlust die komplette Microsoft-Anmeldung von vorn
+bedeutet. Gesichert wird jetzt nach `data/plugins/<Ordner>/upgrade_sicherung`.
+Der alte Ort wird beim Update von 1.1.1 noch mitgelesen.
+
+*Nicht übernommen* wurde der Vorschlag, statt dessen das Installationsverzeichnis
+`$1` zu nehmen: das liegt unter `/tmp/uploads` und damit auf **derselben**
+Ramdisk. Der Vorschlag hebt sich selbst auf — Bestand hat nur, was auf der Karte
+liegt.
+
+**Stiller Verlust der Xbox-Anmeldung.** `hk_xbox_auth_schreiben()` prüfte nur
+`file_put_contents(...) === false`. `json_encode` liefert bei ungültigem UTF-8
+aber `false`, und `file_put_contents($pfad, false)` schreibt 0 Bytes und gibt 0
+zurück — nicht `false`. Die Prüfung hätte das für einen Erfolg gehalten und
+`rename()` die geleerte Datei über die gültige gezogen. Dieselbe Datenverlust-
+Folge wie oben, nur ohne Stromausfall.
+
+**Prozesserkennung.** `pgrep -f "hk_service.py"` und `pkill -f` trafen jeden
+Prozess, in dessen Kommandozeile die Zeichenkette irgendwo vorkam. Jetzt legt
+der Dienst eine PID-Datei an, und geprüft wird über `/proc/<pid>/cmdline` —
+**argumentweise**, nicht als Teilzeichenkette. Beim Erproben trat der Fehlerfall
+prompt auf: die Kommandozeile eines fremden Prozesses enthielt den Namen, weil
+er dort als Text vorkam. Von sieben geprüften Fällen liegt die alte Suche in
+vier daneben, die neue in keinem.
+
+**MQTT.**
+
+- Der Dienst startet beim Systemstart, der Broker ist dann oft noch nicht so
+  weit. Scheiterte der erste `connect()`, wurde `aktiv` dauerhaft auf `False`
+  gesetzt — das Plugin meldete bis zum nächsten Neustart nichts, ohne dass
+  irgendwo etwas dazu stand. Jetzt `connect_async` mit `reconnect_delay_set`,
+  und nach jeder Wiederkehr werden **alle** Werte erneut gesendet: beim Neustart
+  des Brokers sind die zurückbehaltenen Werte weg.
+- Eine leere Nutzlast mit `retain` **löscht** den zurückbehaltenen Wert (MQTT
+  3.1.1, Abschnitt 3.3.1.3). Betroffen waren `beamer/app` (leer, solange keine
+  App läuft), `last_error` (fast immer leer) und `xbox/geheimnis_tage`. Wer sich
+  später mit dem Broker verband, sah für diese Themen gar nichts. Jetzt steht
+  dort ein Bindestrich.
+- Der Themenpräfix wird gefiltert: ein `#` oder `+` daraus wäre ein
+  MQTT-Platzhalter und im Thema unzulässig. Und er wird zur Laufzeit
+  nachgezogen — bisher sendete der Dienst nach einer Änderung weiter unter dem
+  alten Präfix, während die Oberfläche den neuen anzeigte.
+
+**Weiteres.** `random_int()` kann eine Ausnahme werfen; abgefangen wurde sie
+nicht, und die Oberfläche brach dann mitten im Speichern ab. Ein Rückfall auf
+`mt_rand` wurde bewusst **nicht** eingebaut — dieses Token schützt den einzigen
+schaltenden Endpunkt. Zwischendateien beim Schreiben tragen jetzt die
+Prozessnummer statt eines festen `.neu`, und die Zustandsdatei wird mit `fsync`
+abgesichert.
+
+**Oberfläche.** Reiter als echte Verweise mit serverseitig gesetztem
+`sm-active` — bis 1.1.1 setzte das ausschließlich JavaScript, und ohne
+JavaScript stand jeder Bereich auf `display:none`: die Seite war leer.
+37 Bedienelemente haben `data-role="none"` bekommen.
+
+### Nicht bestätigt
+
+- **Python-Pakete gehören in `dpkg/apt`.** Sie stehen dort bereits, seit dem
+  ersten Release: `python3-cryptography`, `python3-paho-mqtt`,
+  `python3-requests`. Der Block in `postinstall.sh` ist keine
+  Installationsanweisung, sondern eine **Nachkontrolle** — ein gescheiterter
+  apt-Lauf fällt sonst erst Wochen später auf. Die Formulierung war allerdings
+  missverständlich und liest sich jetzt eindeutig als Ausnahmefall.
+
+### Offen
+
+Die Oberfläche ist weiterhin überwiegend deutsch: den Sprachdateien fehlen die
+Texte für rund 300 fest eingetragene Stellen. Das ist bewusst **nicht**
+maschinell nachgezogen worden — ein automatischer Durchlauf hat in einem anderen
+Plugin dieser Sammlung Array-Schlüssel und schließende Klammern in die
+Sprachdatei gezogen und dabei die englische Oberfläche zerstört. Die
+Reiterbeschriftungen, die Legenden und die Statusmeldungen sind zweisprachig.
+

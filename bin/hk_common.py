@@ -56,6 +56,7 @@ def pfade():
         "zustand": os.path.join(heim, "data", "plugins", ORDNER, "zustand.json"),
         "logdir": os.path.join(heim, "log", "plugins", ORDNER),
         "log": os.path.join(heim, "log", "plugins", ORDNER, "heimkino.log"),
+        "pid": os.path.join(heim, "log", "plugins", ORDNER, "hk_service.pid"),
         "general": os.path.join(heim, "config", "system", "general.json"),
     }
 
@@ -197,14 +198,31 @@ def version():
 
 
 def zustand_schreiben(daten):
+    """Zustand unteilbar schreiben.
+
+    Der Zwischenname enthaelt die Prozessnummer. Bis 1.1.1 hiess er fest
+    ".neu" - schrieben der Dienst und ein hk_cmd-Aufruf gleichzeitig, zog
+    einer dem anderen die Datei unter den Fuessen weg, und os.replace lief
+    auf eine halb geschriebene Datei.
+
+    flush + fsync vor dem Umbenennen: ohne sie steht der Name nach einem
+    Stromausfall schon da, der Inhalt aber noch im Puffer - die Oberflaeche
+    liest dann eine leere Datei.
+    """
     os.makedirs(os.path.dirname(P["zustand"]), exist_ok=True)
-    vorlaeufig = P["zustand"] + ".neu"
+    vorlaeufig = "%s.%d.neu" % (P["zustand"], os.getpid())
     try:
         with open(vorlaeufig, "w", encoding="utf-8") as datei:
             json.dump(daten, datei, ensure_ascii=False, indent=1)
+            datei.flush()
+            os.fsync(datei.fileno())
         os.replace(vorlaeufig, P["zustand"])
         return True
     except OSError:
+        try:
+            os.unlink(vorlaeufig)
+        except OSError:
+            pass
         return False
 
 
@@ -259,11 +277,19 @@ class Melder:
     """
 
     def __init__(self, praefix, log, aktiv=True):
-        self.praefix = praefix.strip("/") or "heimkino"
+        # Das Thema wird gefiltert. Der Praefix kommt aus der Oberflaeche;
+        # ein # oder + darin waere ein MQTT-Platzhalter und nicht als
+        # Themenbestandteil zulaessig - der Broker wiese die Nachricht ab.
+        sauber = "".join(z if (z.isalnum() or z in "_-/") else "_"
+                         for z in (praefix or "").strip())
+        while "//" in sauber:
+            sauber = sauber.replace("//", "/")
+        self.praefix = sauber.strip("/") or "heimkino"
         self.log = log
         self.aktiv = aktiv
         self.client = None
         self._gemeldet = {}
+        self._letzte = {}          # fuer das erneute Melden nach Wiederkehr
         if aktiv:
             self._verbinden()
 
@@ -290,24 +316,76 @@ class Melder:
                 self.client = mqtt.Client(client_id="loxberry-heimkino")
             if zugang["user"]:
                 self.client.username_pw_set(zugang["user"], zugang["pass"])
-            self.client.connect(zugang["host"], zugang["port"], 30)
+            self.client.on_connect = self._bei_verbindung
+            self.client.reconnect_delay_set(min_delay=1, max_delay=60)
+            # connect_async statt connect, und loop_start IMMER.
+            #
+            # Bis 1.1.1 wurde blockierend verbunden; scheiterte das, wurde
+            # aktiv auf False gesetzt - und zwar dauerhaft. Genau dieser Fall
+            # ist der wahrscheinlichste ueberhaupt: der Dienst startet beim
+            # Systemstart, und der MQTT-Broker ist dann oft noch nicht so
+            # weit. Das Plugin meldete danach bis zum naechsten Neustart
+            # nichts mehr, ohne dass irgendwo etwas dazu stand.
+            #
+            # Mit connect_async kuemmert sich die Netzschleife von paho um
+            # den Verbindungsaufbau UND um jedes spaetere Wiederverbinden.
+            self.client.connect_async(zugang["host"], zugang["port"], 30)
             self.client.loop_start()
-            self.log.info("MQTT verbunden mit %s:%s", zugang["host"], zugang["port"])
+            self.log.info("MQTT: Verbindung zu %s:%s wird aufgebaut.",
+                          zugang["host"], zugang["port"])
         except (OSError, ValueError) as fehler:
-            self.log.warning("MQTT nicht erreichbar: %s", fehler)
+            self.log.warning("MQTT nicht einzurichten: %s", fehler)
             self.client = None
             self.aktiv = False
+
+    def _bei_verbindung(self, client, benutzerdaten, kennzeichen, ergebnis, *rest):
+        # noqa: ARG002
+        if ergebnis != 0:
+            self.log.warning("MQTT abgewiesen (Code %s) - Benutzer und Passwort "
+                             "im MQTT-Gateway pruefen.", ergebnis)
+            return
+        self.log.info("MQTT verbunden.")
+        # ALLES noch einmal senden.
+        #
+        # Beim Neustart des Brokers sind die zurueckbehaltenen Werte weg. Wer
+        # sich darauf verlaesst, dass sie schon einmal gesendet wurden,
+        # bekommt sie nie wieder - bis sich der Wert von sich aus aendert.
+        # Bei "beamer/an" kann das Tage dauern.
+        for thema, inhalt in list(self._letzte.items()):
+            try:
+                client.publish("%s/%s" % (self.praefix, thema), inhalt,
+                               qos=0, retain=True)
+            except (OSError, ValueError):
+                pass
 
     def sende(self, thema, inhalt):
         if not self.aktiv or self.client is None:
             return
-        if inhalt is None:
-            inhalt = ""
         if isinstance(inhalt, bool):
             inhalt = "1" if inhalt else "0"
+        inhalt = "" if inhalt is None else str(inhalt)
+        # Eine LEERE Nutzlast mit retain LOESCHT den zurueckbehaltenen Wert.
+        #
+        # Das steht so in der MQTT-Festlegung (3.1.1, Abschnitt 3.3.1.3): der
+        # Broker verwirft bei einer Nachricht ohne Inhalt die zuvor
+        # zurueckbehaltene. Bis 1.1.1 traf das mehrere Themen regelmaessig -
+        # "beamer/app" ist leer, solange keine App laeuft, "last_error" fast
+        # immer, "xbox/geheimnis_tage" wenn kein Ablaufdatum eingetragen ist.
+        # Wer sich spaeter mit dem Broker verband, sah fuer diese Themen
+        # ueberhaupt nichts, statt eines leeren Wertes.
+        #
+        # Deshalb ein Bindestrich statt nichts. Loxone liest ihn bei einem
+        # Analogeingang als 0 und zeigt ihn bei einem Texteingang an - beides
+        # ist besser als ein Thema, das es scheinbar gar nicht gibt.
+        if inhalt == "":
+            inhalt = "-"
+        # Umbrueche raus: bei paho waeren sie zwar zulaessig, aber die Werte
+        # gehen weiter an Loxone, und dort wird zeilenweise ausgewertet.
+        inhalt = inhalt.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+        self._letzte[thema] = inhalt
         try:
             self.client.publish("%s/%s" % (self.praefix, thema),
-                                str(inhalt), qos=0, retain=True)
+                                inhalt, qos=0, retain=True)
         except (OSError, ValueError) as fehler:
             self.log.debug("MQTT-Versand fehlgeschlagen: %s", fehler)
 
@@ -370,3 +448,80 @@ def wol_senden(mac, adresse="255.255.255.255", port=9):
         buchse.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         buchse.sendto(paket, (adresse, port))
     return len(paket)
+
+
+# --------------------------------------------------------------------------
+# Nur ein Dienst gleichzeitig
+# --------------------------------------------------------------------------
+
+def _ist_unser_dienst(pid):
+    """Gehoert diese Prozessnummer wirklich zu hk_service.py?
+
+    Verglichen werden die EINZELNEN Argumente, nicht die Kommandozeile als
+    Zeichenkette. Eine Teilzeichenkettensuche ist hier untauglich, und das
+    ist keine Theorie: beim Erproben dieser Funktion enthielt die
+    Kommandozeile von Prozess 1 den Namen "hk_service.py" - weil das
+    Pruefskript selbst mit diesem Pfad gestartet worden war. Die Pruefung
+    haette den Dienst also fuer laufend gehalten und sich beendet.
+
+    Genau dieselbe Schwaeche hatte pgrep -f, nur unbegrenzt: dort traf sie
+    jeden Prozess im System.
+    """
+    try:
+        with open("/proc/%s/cmdline" % pid, "rb") as datei:
+            roh = datei.read()
+    except OSError:
+        return False       # Prozessnummer gibt es nicht mehr - verwaiste Datei
+    teile = [t for t in roh.decode("utf-8", "replace").split("\0") if t]
+    # Erwartet wird ".../hk_service.py" als eigenes Argument - entweder als
+    # aufgerufenes Programm oder als Argument hinter dem Python-Programm.
+    for teil in teile[:3]:
+        if os.path.basename(teil) == "hk_service.py":
+            return True
+    return False
+
+
+def pid_belegen(log):
+    """Prozessnummer hinterlegen - und pruefen, ob schon einer laeuft.
+
+    Ohne diese Sperre kann der Dienst zweimal laufen: das Startskript nutzt
+    nohup ohne jede Pruefung, und die Oberflaeche hat einen Startknopf. Zwei
+    Dienste befragen den Beamer im Wechsel - der nimmt aber nur EINE
+    Verbindung zur Zeit an, und die Fernbedienung der App bleibt dann
+    ausgesperrt.
+
+    Erkannt wird ein Vorgaenger ueber /proc/<pid>/cmdline, nicht ueber
+    pgrep -f: pgrep traefe auch einen Editor, in dem hk_service.py geoeffnet
+    ist.
+
+    Rueckgabe: True, wenn dieser Prozess weitermachen darf.
+    """
+    pfad = P["pid"]
+    os.makedirs(os.path.dirname(pfad), exist_ok=True)
+    try:
+        with open(pfad, "r", encoding="utf-8") as datei:
+            alt = datei.read().strip()
+    except OSError:
+        alt = ""
+    if alt.isdigit() and int(alt) != os.getpid():
+        if _ist_unser_dienst(alt):
+            log.warning("Es laeuft bereits ein Dienst (PID %s) - beende mich.", alt)
+            return False
+    try:
+        with open(pfad, "w", encoding="utf-8") as datei:
+            datei.write("%d\n" % os.getpid())
+        return True
+    except OSError as fehler:
+        # Kein Grund abzubrechen: ohne PID-Datei laeuft der Dienst, nur das
+        # Beenden aus der Oberflaeche wird ungenauer.
+        log.warning("PID-Datei %s nicht schreibbar (%s).", pfad, fehler)
+        return True
+
+
+def pid_freigeben():
+    try:
+        with open(P["pid"], "r", encoding="utf-8") as datei:
+            if datei.read().strip() == str(os.getpid()):
+                os.unlink(P["pid"])
+    except OSError:
+        pass

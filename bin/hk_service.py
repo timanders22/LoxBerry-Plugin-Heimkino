@@ -115,6 +115,12 @@ def hauptteil():
     signal.signal(signal.SIGTERM, _abbruch)
     signal.signal(signal.SIGINT, _abbruch)
 
+    # Nur ein Dienst gleichzeitig. Der Beamer nimmt genau EINE Verbindung
+    # zur Zeit an - zwei Dienste im Wechsel sperren die Fernbedienung der
+    # App aus.
+    if not gemein.pid_belegen(log):
+        return 0
+
     cfg = gemein.config_lesen()
     if not gemein.ja(cfg, "heimkino", "enabled"):
         log.info("Das Plugin ist in den Einstellungen abgeschaltet - beende.")
@@ -143,6 +149,21 @@ def hauptteil():
                 cfg = gemein.config_lesen()
                 letzte_config = geaendert
                 takt = gemein.zahl(cfg, "heimkino", "intervall", 60, 10, 3600)
+                # Auch der Themenpraefix kann sich geaendert haben. Bis 1.1.1
+                # wurde nur der Takt nachgezogen; der Melder sendete danach
+                # weiter unter dem ALTEN Praefix, waehrend die Oberflaeche
+                # den neuen anzeigte. Wer den Praefix umstellte, suchte den
+                # Fehler in Loxone.
+                neuer = gemein.wert(cfg, "heimkino", "themenpraefix",
+                                    "heimkino") or "heimkino"
+                if melder.aktiv and neuer.strip("/") != melder.praefix:
+                    log.info("Themenpraefix geaendert: %s -> %s. Die alten "
+                             "zurueckbehaltenen Werte bleiben beim Broker "
+                             "stehen und muessen dort von Hand geloescht "
+                             "werden.", melder.praefix, neuer)
+                    melder.schliessen()
+                    melder = gemein.Melder(neuer, log,
+                                           gemein.ja(cfg, "heimkino", "mqtt"))
 
             beamer = beamer_abfragen(cfg, log, meldungen)
             xbox = xbox_abfragen(cfg, log, meldungen)
@@ -192,7 +213,11 @@ def hauptteil():
                 time.sleep(1)
     finally:
         melder.sende("service/online", 0)
+        # Kurz warten, damit die letzte Meldung den Broker noch erreicht -
+        # loop_stop() unmittelbar danach wuerde sie sonst verschlucken.
+        time.sleep(0.3)
         melder.schliessen()
+        gemein.pid_freigeben()
         log.info("Heimkino beendet.")
     return 0
 

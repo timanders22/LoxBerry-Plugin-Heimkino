@@ -26,6 +26,9 @@ function hk_paths()
         'auth'    => ($home ? $home : '/opt/loxberry') . '/config/plugins/' . $ordner . '/xbox_auth.json',
         'zustand' => ($home ? $home : '/opt/loxberry') . '/data/plugins/' . $ordner . '/zustand.json',
         'log'     => ($home ? $home : '/opt/loxberry') . '/log/plugins/' . $ordner . '/heimkino.log',
+        // Der Dienst legt seine Prozessnummer selbst hier ab. Daran - und
+        // nicht an pgrep -f - wird erkannt, ob er laeuft.
+        'piddatei' => ($home ? $home : '/opt/loxberry') . '/log/plugins/' . $ordner . '/hk_service.pid',
         'bin'     => ($home ? $home : '/opt/loxberry') . '/bin/plugins/' . $ordner,
         'general' => ($home ? $home : '/opt/loxberry') . '/config/system/general.json',
     );
@@ -121,6 +124,39 @@ function hk_config_read()
     return $cfg;
 }
 
+/**
+ * Eine Datei unteilbar ersetzen.
+ *
+ * Der Zwischenname enthaelt Prozessnummer und Zufall. Bis 1.1.1 hiess er
+ * fest ".neu"; speicherten die Oberflaeche und der Aktionsendpunkt
+ * gleichzeitig, zog einer dem anderen die Zwischendatei weg.
+ *
+ * Die Rechte werden VOR dem Umbenennen gesetzt - danach gaebe es einen
+ * Augenblick, in dem die Datei mit 0644 dalaege. In heimkino.cfg steht der
+ * Keycode des Beamers und das Aktionstoken, in xbox_auth.json die
+ * Azure-Refresh-Token.
+ */
+function hk_datei_ersetzen($datei, $inhalt, $modus = 0640)
+{
+    if ($inhalt === false || $inhalt === null) {
+        return false;
+    }
+    $ordner = dirname($datei);
+    if (!is_dir($ordner)) {
+        @mkdir($ordner, 0755, true);
+    }
+    $vorlaeufig = $datei . '.' . getmypid() . '.' . mt_rand(1000, 9999) . '.neu';
+    if (@file_put_contents($vorlaeufig, $inhalt) === false) {
+        return false;
+    }
+    @chmod($vorlaeufig, $modus);
+    if (!@rename($vorlaeufig, $datei)) {
+        @unlink($vorlaeufig);
+        return false;
+    }
+    return true;
+}
+
 function hk_config_write($cfg)
 {
     $datei = hk_paths()['config'];
@@ -138,12 +174,7 @@ function hk_config_write($cfg)
         }
         $t .= "\n";
     }
-    $vorlaeufig = $datei . '.neu';
-    if (@file_put_contents($vorlaeufig, $t) === false) {
-        return false;
-    }
-    @chmod($vorlaeufig, 0640);
-    return @rename($vorlaeufig, $datei);
+    return hk_datei_ersetzen($datei, $t, 0640);
 }
 
 function hk_cfg($cfg, $abschnitt, $schluessel, $vorgabe = '')
@@ -158,13 +189,37 @@ function hk_an($cfg, $abschnitt, $schluessel)
                     array('1', 'true', 'yes', 'on'), true);
 }
 
-/** Zufallstoken fuer den Aktionsendpunkt. */
+/**
+ * Zufallstoken fuer den Aktionsendpunkt.
+ *
+ * random_int() wirft eine Ausnahme, wenn das Betriebssystem keine sichere
+ * Zufallsquelle anbietet. Bis 1.1.1 wurde sie nicht abgefangen - die
+ * Oberflaeche brach dann beim Speichern mit einem toedlichen Fehler ab, und
+ * zwar an einer Stelle, an der niemand ihn vermutet.
+ *
+ * BEWUSST KEIN Rueckfall auf mt_rand oder uniqid. Dieses Token ist das
+ * Einzige, was den Aktionsendpunkt schuetzt; ein erratbares waere schlimmer
+ * als gar keines. Wird keines erzeugt, weist der Endpunkt konsequent alles
+ * ab - das ist die richtige Antwort auf ein System ohne Zufallsquelle.
+ *
+ * Der Zeichenvorrat laesst l, I, O und 0 bewusst aus: das Token wird von
+ * Hand in Loxone uebertragen.
+ */
 function hk_token_erzeugen($laenge = 24)
 {
     $zeichen = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     $t = '';
-    for ($i = 0; $i < $laenge; $i++) {
-        $t .= $zeichen[random_int(0, strlen($zeichen) - 1)];
+    try {
+        for ($i = 0; $i < $laenge; $i++) {
+            $t .= $zeichen[random_int(0, strlen($zeichen) - 1)];
+        }
+    } catch (Exception $e) {
+        throw new RuntimeException(
+            'Auf diesem System ist keine sichere Zufallsquelle verfuegbar - '
+            . 'es wurde kein Token erzeugt (' . $e->getMessage() . ').');
+    } catch (Error $e) {
+        throw new RuntimeException(
+            'random_int steht nicht zur Verfuegung - es wurde kein Token erzeugt.');
     }
     return $t;
 }
@@ -173,25 +228,70 @@ function hk_token_erzeugen($laenge = 24)
  * Dienst, Zustand, Protokoll
  * ================================================================== */
 
+/**
+ * Laeuft der Dienst? Rueckgabe: Prozessnummer oder 0.
+ *
+ * Gelesen wird die PID-Datei, die der Dienst selbst anlegt, und
+ * gegengeprueft ueber /proc/<pid>/cmdline.
+ *
+ * Bis 1.1.1 stand hier pgrep -f "hk_service.py". Das trifft JEDEN Prozess,
+ * in dessen Kommandozeile die Zeichenkette vorkommt - einen Editor mit der
+ * geoeffneten Datei, ein tail auf einen Pfad mit diesem Namen, unter
+ * Umstaenden die aufrufende Shell selbst. Die Oberflaeche meldete dann
+ * "Dienst laeuft", obwohl er stand. Beim Beenden war dieselbe Unschaerfe
+ * gefaehrlich: pkill -f schickt das Signal an alle Treffer.
+ */
 function hk_dienst_pid()
 {
-    $aus = array();
-    @exec('pgrep -f "hk_service.py" 2>/dev/null', $aus);
-    foreach ($aus as $zeile) {
-        $zeile = trim($zeile);
-        if ($zeile !== '' && preg_match('/^[0-9]+$/', $zeile)) {
-            return (int) $zeile;
-        }
+    $datei = hk_paths()['piddatei'];
+    $roh = is_readable($datei) ? trim((string) @file_get_contents($datei)) : '';
+    if ($roh === '' || !preg_match('/^[0-9]+$/', $roh)) {
+        return 0;
     }
-    return 0;
+    $pid = (int) $roh;
+    if ($pid < 2) {
+        return 0;
+    }
+    // Gegenprobe: gehoert die Prozessnummer wirklich zu unserem Dienst?
+    // Prozessnummern werden wiederverwendet - ohne diese Pruefung koennte
+    // die Oberflaeche einen fremden Prozess fuer den Dienst halten und ihn
+    // beim Beenden abschiessen.
+    //
+    // Verglichen werden die EINZELNEN Argumente, nicht die Kommandozeile als
+    // Zeichenkette. Beim Erproben trat der Fall tatsaechlich auf: die
+    // Kommandozeile eines fremden Prozesses enthielt "hk_service.py", weil
+    // dieser Pfad irgendwo als Text darin vorkam. Eine Teilzeichenkettensuche
+    // haette ihn fuer unseren Dienst gehalten.
+    $cmd = @file_get_contents('/proc/' . $pid . '/cmdline');
+    if ($cmd === false) {
+        return 0;
+    }
+    $treffer = false;
+    $teile = array_slice(array_values(array_filter(explode("\0", $cmd), 'strlen')), 0, 3);
+    foreach ($teile as $teil) {
+        if (basename($teil) === 'hk_service.py') { $treffer = true; break; }
+    }
+    return $treffer ? $pid : 0;
 }
 
 function hk_dienst($was)
 {
     $bin = hk_paths()['bin'] . '/hk_service.py';
     if ($was === 'stop' || $was === 'restart') {
-        @exec('pkill -f "hk_service.py" >/dev/null 2>&1');
-        usleep(400000);
+        // Gezielt die eine Prozessnummer beenden, nicht pkill -f.
+        $pid = hk_dienst_pid();
+        if ($pid > 0) {
+            @exec('kill ' . (int) $pid . ' >/dev/null 2>&1');
+            // Dem Dienst Zeit lassen: er meldet beim Beenden noch
+            // service/online = 0 per MQTT, damit Loxone den Ausfall sieht.
+            for ($i = 0; $i < 20 && hk_dienst_pid() === $pid; $i++) {
+                usleep(200000);
+            }
+            if (hk_dienst_pid() === $pid) {
+                @exec('kill -9 ' . (int) $pid . ' >/dev/null 2>&1');
+                usleep(300000);
+            }
+        }
     }
     if ($was === 'start' || $was === 'restart') {
         if (is_executable($bin)) {
@@ -421,13 +521,19 @@ function hk_xbox_auth_schreiben($daten)
     if (!is_dir($ordner)) {
         @mkdir($ordner, 0755, true);
     }
-    $vorlaeufig = $datei . '.neu';
-    if (@file_put_contents($vorlaeufig,
-            json_encode($daten, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)) === false) {
+    // json_encode liefert bei ungueltigem UTF-8 FALSE, und
+    // file_put_contents($pfad, false) schreibt daraufhin 0 Bytes - und gibt
+    // 0 zurueck, nicht false. Bis 1.1.1 haette die alte Pruefung das fuer
+    // einen Erfolg gehalten und rename() haette die geleerte Datei ueber die
+    // gueltige gezogen: die Azure-Refresh-Token waeren weg gewesen, und die
+    // gesamte Microsoft-Anmeldung muesste von vorn beginnen. Deshalb wird
+    // das Ergebnis der Kodierung HIER geprueft, vor dem Schreiben.
+    $js = json_encode($daten, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
+                              | JSON_UNESCAPED_UNICODE);
+    if ($js === false) {
         return false;
     }
-    @chmod($vorlaeufig, 0600);
-    return @rename($vorlaeufig, $datei);
+    return hk_datei_ersetzen($datei, $js, 0600);
 }
 
 /** Anwendungskennung hinterlegen, vorhandene Token behalten. */

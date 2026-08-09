@@ -26,9 +26,25 @@ if ($hk_p['home']) {
 $hk_saved   = false;
 $hk_fehler  = array();   // alle Beanstandungen, nicht nur die letzte
 $hk_hinweis = '';
-$hk_tab = preg_match('/^tab-(settings|mqtt|loxone|test|log)$/',
+/* Wer einen Reiter hinzufuegt, muss DREI Stellen mitziehen: die
+   Reiterleiste, den Bereich (sm-pane mit gleicher id) und diese
+   Positivliste. Fehlt der Name hier, springt die Seite nach jedem Absenden
+   zurueck auf Einstellungen. */
+$hk_muster = '/^tab-(settings|mqtt|loxone|test|log)$/';
+$hk_tab = preg_match($hk_muster,
                      (string) (isset($_POST['activetab']) ? $_POST['activetab'] : ''))
-    ? $_POST['activetab'] : 'tab-settings';
+    ? (string) $_POST['activetab'] : 'tab-settings';
+// Die Reiter sind echte Verweise. Wer sie anklickt oder ein Lesezeichen
+// darauf setzt, landet ueber ?form= im richtigen Bereich - auch dann, wenn
+// im Browser kein JavaScript laeuft. Bis 1.1.1 waren es <div>-Elemente, und
+// sm-active setzte ausschliesslich das JavaScript: ohne JavaScript stand
+// jeder Bereich auf display:none, die Seite war also LEER.
+if (isset($_GET['form'])) {
+    $hk_wunsch = 'tab-' . preg_replace('/[^a-z]/', '', (string) $_GET['form']);
+    if (preg_match($hk_muster, $hk_wunsch)) { $hk_tab = $hk_wunsch; }
+}
+/** Klasse fuer den gerade sichtbaren Reiter bzw. Bereich. */
+function hk_aktiv($id) { global $hk_tab; return $hk_tab === $id ? ' sm-active' : ''; }
 
 $hk_cfg = hk_config_read();
 
@@ -140,10 +156,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     // Token einmal erzeugen und dann behalten. Wer es neu wuerfelt, muss die
     // Adressen in Loxone anpassen - deshalb nur auf ausdruecklichen Wunsch.
     if (isset($_POST['token_neu']) || $neu['heimkino']['aktionstoken'] === '') {
-        $neu['heimkino']['aktionstoken'] = hk_token_erzeugen();
-        if (isset($_POST['token_neu'])) {
-            $hk_hinweis = 'Neues Aktionstoken erzeugt. Die Adressen im '
-                        . 'Miniserver m&uuml;ssen angepasst werden.';
+        // hk_token_erzeugen() bricht seit 1.2.0 mit einer Ausnahme ab, wenn
+        // das System keinen sicheren Zufall liefert. Abgefangen wird sie
+        // HIER - sonst zerlegte sie die Oberflaeche mitten im Speichern, und
+        // zwar an einer Stelle, an der niemand danach sucht.
+        try {
+            $neu['heimkino']['aktionstoken'] = hk_token_erzeugen();
+            if (isset($_POST['token_neu'])) {
+                $hk_hinweis = 'Neues Aktionstoken erzeugt. Die Adressen im '
+                            . 'Miniserver m&uuml;ssen angepasst werden.';
+            }
+        } catch (RuntimeException $e) {
+            // Lieber gar kein Token als ein erratbares: der Aktionsendpunkt
+            // weist dann jeden Aufruf ab, und das ist die richtige Antwort.
+            $neu['heimkino']['aktionstoken'] = '';
+            $hk_fehler[] = 'Es liess sich kein sicheres Aktionstoken erzeugen ('
+                         . hk_e($e->getMessage()) . '). Ohne Token weist der '
+                         . 'Aktionsendpunkt jeden Aufruf ab - das ist Absicht, '
+                         . 'denn ein erratbares Token waere schlimmer als keines.';
         }
     }
 
@@ -277,7 +307,9 @@ if ($hk_frame) {
 .sm-ok-text { color: #4f7d17; font-weight: 600; }
 .sm-err-text { color: #c62828; font-weight: 600; }
 .sm-tabs { display: flex; gap: 4px; margin: 14px 0 0; border-bottom: 2px solid #6dac20; flex-wrap: wrap; }
-.sm-tab { background: #eee; border: 1px solid #ccc; border-bottom: 0; border-radius: 8px 8px 0 0; padding: 9px 18px; cursor: pointer; font-size: 0.95em; color: #444 !important; }
+.sm-tab { background: #eee; border: 1px solid #ccc; border-bottom: 0; border-radius: 8px 8px 0 0; padding: 9px 18px; cursor: pointer; font-size: 0.95em; color: #444 !important;
+  display: inline-block; text-decoration: none !important; text-shadow: none !important; }
+.sm-tab:visited, .sm-tab:hover { text-decoration: none !important; }
 .sm-tab.sm-active { background: #6dac20; color: #fff !important; border-color: #6dac20; font-weight: 600; }
 .sm-pane { display: none; padding-top: 4px; }
 .sm-pane.sm-active { display: block; }
@@ -347,33 +379,33 @@ if ($hk_frame) {
 </div>
 
 <div class="sm-tabs">
-  <div class="sm-tab" data-ziel="tab-settings"><?php echo hk_e(hk_t('REITER.EINSTELLUNGEN')); ?></div>
-  <div class="sm-tab" data-ziel="tab-mqtt"><?php echo hk_e(hk_t('REITER.MQTT')); ?></div>
-  <div class="sm-tab" data-ziel="tab-loxone"><?php echo hk_e(hk_t('REITER.LOXONE')); ?></div>
-  <div class="sm-tab" data-ziel="tab-test"><?php echo hk_e(hk_t('REITER.TEST')); ?></div>
-  <div class="sm-tab" data-ziel="tab-log"><?php echo hk_e(hk_t('REITER.LOG')); ?></div>
+  <a class="sm-tab<?php echo hk_aktiv('tab-settings'); ?>" data-ziel="tab-settings" href="index.php?form=settings"><?php echo hk_e(hk_t('REITER.EINSTELLUNGEN')); ?></a>
+  <a class="sm-tab<?php echo hk_aktiv('tab-mqtt'); ?>" data-ziel="tab-mqtt" href="index.php?form=mqtt"><?php echo hk_e(hk_t('REITER.MQTT')); ?></a>
+  <a class="sm-tab<?php echo hk_aktiv('tab-loxone'); ?>" data-ziel="tab-loxone" href="index.php?form=loxone"><?php echo hk_e(hk_t('REITER.LOXONE')); ?></a>
+  <a class="sm-tab<?php echo hk_aktiv('tab-test'); ?>" data-ziel="tab-test" href="index.php?form=test"><?php echo hk_e(hk_t('REITER.TEST')); ?></a>
+  <a class="sm-tab<?php echo hk_aktiv('tab-log'); ?>" data-ziel="tab-log" href="index.php?form=log"><?php echo hk_e(hk_t('REITER.LOG')); ?></a>
 </div>
 
 <!-- ============================ Einstellungen ============================ -->
-<div class="sm-pane" id="tab-settings">
+<div class="sm-pane<?php echo hk_aktiv('tab-settings'); ?>" id="tab-settings">
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-aktion"></i> <?php echo hk_e(hk_t('LEGENDE.AKTION')); ?></span>
 </div>
 <form method="post" action="index.php">
-<input type="hidden" name="activetab" value="tab-settings">
+<input data-role="none" type="hidden" name="activetab" value="tab-settings">
 
 <h2>Allgemein</h2>
-<label class="sm-check"><input type="checkbox" name="enabled" value="1"
+<label class="sm-check"><input data-role="none" type="checkbox" name="enabled" value="1"
   <?php echo hk_an($hk_cfg, 'heimkino', 'enabled') ? 'checked' : ''; ?>>
   Plugin eingeschaltet</label>
-<label class="sm-check"><input type="checkbox" name="mqtt" value="1"
+<label class="sm-check"><input data-role="none" type="checkbox" name="mqtt" value="1"
   <?php echo hk_an($hk_cfg, 'heimkino', 'mqtt') ? 'checked' : ''; ?>>
   Zustand per MQTT melden</label>
 
 <div class="sm-row">
   <div>
     <label for="intervall">Abfragetakt in Sekunden</label>
-    <input type="number" id="intervall" name="intervall" min="10" max="3600"
+    <input data-role="none" type="number" id="intervall" name="intervall" min="10" max="3600"
       value="<?php echo hk_e(hk_cfg($hk_cfg, 'heimkino', 'intervall', '60')); ?>">
     <div class="sm-small">Der Beamer nimmt nur eine Verbindung zur Zeit an.
       Ein zu kurzer Takt sperrt die Fernbedienung der App aus. 60 Sekunden
@@ -381,7 +413,7 @@ if ($hk_frame) {
   </div>
   <div>
     <label for="themenpraefix">MQTT-Themenpr&auml;fix</label>
-    <input type="text" id="themenpraefix" name="themenpraefix"
+    <input data-role="none" type="text" id="themenpraefix" name="themenpraefix"
       value="<?php echo hk_e($hk_praefix); ?>">
     <div class="sm-small">Alle Themen liegen darunter, alle sind retained.</div>
   </div>
@@ -421,18 +453,18 @@ Beamer &bdquo;von selbst&ldquo; ausgeht, findet die Antwort meist hier und nicht
 in Loxone.</div>
 </div>
 
-<label class="sm-check"><input type="checkbox" name="beamer_aktiv" value="1"
+<label class="sm-check"><input data-role="none" type="checkbox" name="beamer_aktiv" value="1"
   <?php echo hk_an($hk_cfg, 'beamer', 'aktiv') ? 'checked' : ''; ?>>
   Beamer verwenden</label>
 <div class="sm-row">
   <div>
     <label for="beamer_ip">IP-Adresse</label>
-    <input type="text" id="beamer_ip" name="beamer_ip" placeholder="192.168.x.y"
+    <input data-role="none" type="text" id="beamer_ip" name="beamer_ip" placeholder="192.168.x.y"
       value="<?php echo hk_e(hk_cfg($hk_cfg, 'beamer', 'ip', '')); ?>">
   </div>
   <div>
     <label for="beamer_mac">MAC-Adresse</label>
-    <input type="text" id="beamer_mac" name="beamer_mac" placeholder="AA:BB:CC:DD:EE:FF"
+    <input data-role="none" type="text" id="beamer_mac" name="beamer_mac" placeholder="AA:BB:CC:DD:EE:FF"
       value="<?php echo hk_e(hk_cfg($hk_cfg, 'beamer', 'mac', '')); ?>">
     <div class="sm-small">Nur f&uuml;r den Testknopf. Das Einschalten macht Loxone
       selbst mit <span class="sm-mono">wol://</span>.</div>
@@ -441,7 +473,7 @@ in Loxone.</div>
 <div class="sm-row">
   <div>
     <label for="beamer_keycode">Keycode (8 Zeichen)</label>
-    <input type="text" id="beamer_keycode" name="beamer_keycode" maxlength="8"
+    <input data-role="none" type="text" id="beamer_keycode" name="beamer_keycode" maxlength="8"
       placeholder="ABCD1234" style="text-transform:uppercase"
       value="<?php echo hk_e(hk_cfg($hk_cfg, 'beamer', 'keycode', '')); ?>">
     <div class="sm-small">Am Ger&auml;t erzeugen: Alle Einstellungen &rarr;
@@ -451,12 +483,12 @@ in Loxone.</div>
   </div>
   <div>
     <label for="beamer_port">Port</label>
-    <input type="number" id="beamer_port" name="beamer_port" min="1" max="65535"
+    <input data-role="none" type="number" id="beamer_port" name="beamer_port" min="1" max="65535"
       value="<?php echo hk_e(hk_cfg($hk_cfg, 'beamer', 'port', '9761')); ?>">
   </div>
   <div>
     <label for="beamer_zeitgrenze">Zeitgrenze in Sekunden</label>
-    <input type="number" id="beamer_zeitgrenze" name="beamer_zeitgrenze" min="1" max="60"
+    <input data-role="none" type="number" id="beamer_zeitgrenze" name="beamer_zeitgrenze" min="1" max="60"
       value="<?php echo hk_e(hk_cfg($hk_cfg, 'beamer', 'zeitgrenze', '5')); ?>">
   </div>
 </div>
@@ -488,11 +520,11 @@ Netzwerk h&auml;ngen. Feste Adresse in der Fritz!Box vergeben; im Ruhezustand
 verl&auml;ngert WLAN die Weckzeit merklich.</div>
 </div>
 
-<label class="sm-check"><input type="checkbox" name="xbox_aktiv" value="1"
+<label class="sm-check"><input data-role="none" type="checkbox" name="xbox_aktiv" value="1"
   <?php echo hk_an($hk_cfg, 'xbox', 'aktiv') ? 'checked' : ''; ?>>
   Xbox verwenden</label>
 <label for="xbox_geraete_id">XBOX-Netzwerk-Ger&auml;teidentit&auml;t</label>
-<input type="text" id="xbox_geraete_id" name="xbox_geraete_id"
+<input data-role="none" type="text" id="xbox_geraete_id" name="xbox_geraete_id"
   value="<?php echo hk_e(hk_cfg($hk_cfg, 'xbox', 'geraete_id', '')); ?>">
 <div class="sm-alert sm-info" style="margin-top:6px;">
 <b>Diese Ger&auml;teidentit&auml;t steht nicht in Azure.</b> Azure kennt nur die Anwendung, nicht
@@ -513,7 +545,7 @@ Feld <b>XBOX-Netzwerk-Ger&auml;teidentit&auml;t</b> &mdash; 16 Zeichen. Nicht di
 
 <label for="xbox_geheimnis_ablauf">Clientgeheimnis g&uuml;ltig bis
   <span class="sm-small">(JJJJ-MM-TT, leer = keine Warnung)</span></label>
-<input type="date" id="xbox_geheimnis_ablauf" name="xbox_geheimnis_ablauf"
+<input data-role="none" type="date" id="xbox_geheimnis_ablauf" name="xbox_geheimnis_ablauf"
   value="<?php echo hk_e($hk_ablauf); ?>">
 <div class="sm-alert <?php
     echo in_array($hk_ablauf_art, array('abgelaufen', 'bald'), true)
@@ -546,11 +578,11 @@ in jede Adresse dieses Token. Es wird beim ersten Speichern erzeugt.</p>
 <div class="sm-mono"><?php echo $hk_token !== '' ? hk_e($hk_token)
     : 'wird beim ersten Speichern erzeugt'; ?></div>
 <label class="sm-check" style="margin-top:8px;">
-  <input type="checkbox" name="token_neu" value="1">
+  <input data-role="none" type="checkbox" name="token_neu" value="1">
   Neues Token erzeugen <span class="sm-small">(die Adressen im Miniserver
   m&uuml;ssen danach angepasst werden)</span></label>
 
-<button type="submit" name="save" value="1" class="sm-btn">Speichern</button>
+<button data-role="none" type="submit" name="save" value="1" class="sm-btn">Speichern</button>
 </form>
 
 <h2>Xbox: Anmeldung bei Microsoft</h2>
@@ -651,23 +683,23 @@ oft &uuml;berfl&uuml;ssig, weil der Verst&auml;rker das per CEC schon erledigt. 
 
 
 <form method="post" action="index.php">
-<input type="hidden" name="activetab" value="tab-settings">
+<input data-role="none" type="hidden" name="activetab" value="tab-settings">
 <div class="sm-row">
   <div>
     <label for="client_id">Anwendungskennung (Client-ID)</label>
-    <input type="text" id="client_id" name="client_id"
+    <input data-role="none" type="text" id="client_id" name="client_id"
       value="<?php echo hk_e($hk_xb['client_id']); ?>">
   </div>
   <div>
     <label for="client_secret">Geheimer Clientschl&uuml;ssel &mdash; Spalte <i>Wert</i></label>
-    <input type="password" id="client_secret" name="client_secret"
+    <input data-role="none" type="password" id="client_secret" name="client_secret"
       placeholder="<?php echo $hk_xb['geheim'] ? 'gespeichert - leer lassen, um es zu behalten' : ''; ?>">
   </div>
 </div>
 <label for="rueckleitung">Umleitungs-URI</label>
-<input type="text" id="rueckleitung" name="rueckleitung"
+<input data-role="none" type="text" id="rueckleitung" name="rueckleitung"
   value="<?php echo hk_e($hk_xb['rueckleitung']); ?>">
-<button type="submit" name="xbox_app" value="1" class="sm-btn">Kennung speichern</button>
+<button data-role="none" type="submit" name="xbox_app" value="1" class="sm-btn">Kennung speichern</button>
 </form>
 
 <?php if ($hk_anmelde !== '') { ?>
@@ -684,11 +716,11 @@ oft &uuml;berfl&uuml;ssig, weil der Verst&auml;rker das per CEC schon erledigt. 
 </div>
 
 <form method="post" action="index.php">
-<input type="hidden" name="activetab" value="tab-settings">
+<input data-role="none" type="hidden" name="activetab" value="tab-settings">
 <label for="code">Zur&uuml;ckgeleitete Adresse oder Code</label>
-<input type="text" id="code" name="code"
+<input data-role="none" type="text" id="code" name="code"
   placeholder="http://localhost/auth/callback?code=...">
-<button type="submit" name="xbox_code" value="1" class="sm-btn">Anmeldung
+<button data-role="none" type="submit" name="xbox_code" value="1" class="sm-btn">Anmeldung
   abschlie&szlig;en</button>
 </form>
 <div class="sm-alert sm-info">
@@ -725,15 +757,15 @@ nur der eine oder nur der andere an.</div>
 <?php if ($hk_xb['angemeldet']) { ?>
 <div class="sm-knopfreihe sm-b-aktion">
   <form method="post" action="index.php">
-    <input type="hidden" name="activetab" value="tab-settings">
-    <button type="submit" name="xbox_vergessen" value="1">Anmeldung l&ouml;schen</button>
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <button data-role="none" type="submit" name="xbox_vergessen" value="1">Anmeldung l&ouml;schen</button>
   </form>
 </div>
 <?php } ?>
 </div>
 
 <!-- ================================= MQTT ================================= -->
-<div class="sm-pane" id="tab-mqtt">
+<div class="sm-pane<?php echo hk_aktiv('tab-mqtt'); ?>" id="tab-mqtt">
 <h2><?php echo hk_e(hk_t('MQTT.H_ZUSTAND')); ?></h2>
 <p class="sm-small"><?php echo hk_t('MQTT.KERNBESTANDTEIL'); ?></p>
 
@@ -776,7 +808,7 @@ echo hk_e($hk_praefix); ?>/#</pre>
 </div>
 
 <!-- ========================= Einbindung in Loxone ========================= -->
-<div class="sm-pane" id="tab-loxone">
+<div class="sm-pane<?php echo hk_aktiv('tab-loxone'); ?>" id="tab-loxone">
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-lesen"></i> <?php echo hk_e(hk_t('LEGENDE.LESEN')); ?></span>
 </div>
@@ -808,8 +840,8 @@ liegen unter <span class="sm-mono"><?php echo hk_e($hk_praefix); ?>/</span>.</p>
 
 <div class="sm-knopfreihe sm-b-lesen">
   <form method="post" action="index.php">
-    <input type="hidden" name="activetab" value="tab-loxone">
-    <button type="submit" name="download" value="mqtt_in">Vorlage der
+    <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+    <button data-role="none" type="submit" name="download" value="mqtt_in">Vorlage der
       Eing&auml;nge herunterladen</button>
   </form>
 </div>
@@ -899,7 +931,7 @@ zusammenf&uuml;hren.
 </div>
 
 <!-- ================================ Test ================================ -->
-<div class="sm-pane" id="tab-test">
+<div class="sm-pane<?php echo hk_aktiv('tab-test'); ?>" id="tab-test">
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-lesen"></i> <?php echo hk_e(hk_t('LEGENDE.LESEN')); ?></span>
 <span><i class="sm-punkt sm-b-aktion"></i> <?php echo hk_e(hk_t('LEGENDE.AKTION')); ?></span>
@@ -925,8 +957,8 @@ $ansehen = array(
 );
 foreach ($ansehen as $wert => $text) { ?>
   <form method="post" action="index.php">
-    <input type="hidden" name="activetab" value="tab-test">
-    <button type="submit" name="test" value="<?php echo hk_e($wert); ?>"><?php
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" type="submit" name="test" value="<?php echo hk_e($wert); ?>"><?php
       echo hk_e($text); ?></button>
   </form>
 <?php } ?>
@@ -935,8 +967,8 @@ foreach ($ansehen as $wert => $text) { ?>
 <h2>Technik</h2>
 <div class="sm-knopfreihe sm-b-aktion">
   <form method="post" action="index.php">
-    <input type="hidden" name="activetab" value="tab-test">
-    <button type="submit" name="test" value="dienst_neu">Dienst neu starten</button>
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" type="submit" name="test" value="dienst_neu">Dienst neu starten</button>
   </form>
 </div>
 
@@ -952,8 +984,8 @@ $aktionen = array(
 );
 foreach ($aktionen as $wert => $text) { ?>
   <form method="post" action="index.php">
-    <input type="hidden" name="activetab" value="tab-test">
-    <button type="submit" name="test" value="<?php echo hk_e($wert); ?>"><?php
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" type="submit" name="test" value="<?php echo hk_e($wert); ?>"><?php
       echo hk_e($text); ?></button>
   </form>
 <?php } ?>
@@ -1002,7 +1034,7 @@ foreach ($aktionen as $wert => $text) { ?>
 </div>
 
 <!-- ============================== Logdateien ============================== -->
-<div class="sm-pane" id="tab-log">
+<div class="sm-pane<?php echo hk_aktiv('tab-log'); ?>" id="tab-log">
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-lesen"></i> <?php echo hk_e(hk_t('LEGENDE.LESEN')); ?></span>
 </div>
@@ -1018,8 +1050,8 @@ foreach ($aktionen as $wert => $text) { ?>
 <?php } ?>
 <div class="sm-knopfreihe sm-b-lesen" style="margin-top:12px;">
   <form method="post" action="index.php">
-    <input type="hidden" name="activetab" value="tab-log">
-    <button type="submit" name="nichts" value="1">Neu laden</button>
+    <input data-role="none" type="hidden" name="activetab" value="tab-log">
+    <button data-role="none" type="submit" name="nichts" value="1">Neu laden</button>
   </form>
 </div>
 </div>
@@ -1042,7 +1074,11 @@ foreach ($aktionen as $wert => $text) { ?>
     for (var k = 0; k < felder.length; k++) { felder[k].value = ziel; }
   }
   for (var i = 0; i < reiter.length; i++) {
-    reiter[i].addEventListener('click', function () {
+    reiter[i].addEventListener('click', function (ereignis) {
+      // Ohne JavaScript folgt der Browser dem href, und der Server liefert
+      // den richtigen Reiter. Mit JavaScript geht es schneller ohne
+      // Neuladen - deshalb hier den Verweis abfangen.
+      if (ereignis && ereignis.preventDefault) { ereignis.preventDefault(); }
       zeige(this.getAttribute('data-ziel'));
     });
   }
