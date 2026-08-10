@@ -15,6 +15,26 @@ import socket
 import sys
 import time
 
+
+def lb_wurzel_ermitteln():
+    """Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
+
+    Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
+    config/plugins UND webfrontend enthaelt. Trifft die uebliche
+    Installation genauso wie eine an einem anderen Ort.
+    """
+    d = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(8):
+        if os.path.isdir(os.path.join(d, "config", "plugins")) \
+                and os.path.isdir(os.path.join(d, "webfrontend")):
+            return d
+        eltern = os.path.dirname(d)
+        if eltern == d:
+            break
+        d = eltern
+    return ""
+
+
 ORDNER = "heimkino"
 
 
@@ -41,10 +61,10 @@ def _lbhome():
                         return wert
     except OSError:
         pass
-    for kandidat in ("/opt/loxberry", "/home/loxberry/loxberry"):
+    for kandidat in (lb_wurzel_ermitteln(), "/home/loxberry/loxberry"):
         if os.path.isdir(kandidat):
             return kandidat
-    return "/opt/loxberry"
+    return lb_wurzel_ermitteln()
 
 
 def pfade():

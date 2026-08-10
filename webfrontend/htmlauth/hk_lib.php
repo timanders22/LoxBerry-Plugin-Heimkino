@@ -6,6 +6,35 @@
  */
 
 /** Wurzel der LoxBerry-Installation und alle abgeleiteten Pfade. */
+
+/* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
+ *
+ * Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
+ * config/plugins UND webfrontend enthaelt. Das trifft die uebliche
+ * Installation genauso wie eine an einem anderen Ort - und es trifft auch
+ * den Fall, dass das Plugin noch als entpacktes Archiv daliegt (dann findet
+ * es nichts und gibt einen Leerstring zurueck, was der Aufrufer ohnehin
+ * abfangen muss).
+ *
+ * Der Name traegt kein Plugin-Kuerzel und ist deshalb abgesichert: zwei
+ * Bibliotheken landen nie im selben Prozess, aber die Pruefung kostet nichts.
+ */
+if (!function_exists('lb_wurzel_ermitteln')) {
+    function lb_wurzel_ermitteln()
+    {
+        $d = __DIR__;
+        for ($i = 0; $i < 8; $i++) {
+            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+                return $d;
+            }
+            $eltern = dirname($d);
+            if ($eltern === $d) { break; }
+            $d = $eltern;
+        }
+        return '';
+    }
+}
+
 function hk_paths()
 {
     static $p = null;
@@ -14,23 +43,23 @@ function hk_paths()
     }
     $home = getenv('LBHOMEDIR');
     if (!$home || !is_dir($home)) {
-        foreach (array('/opt/loxberry', '/home/loxberry/loxberry') as $k) {
+        foreach (array(lb_wurzel_ermitteln(), '/home/loxberry/loxberry') as $k) {
             if (is_dir($k)) { $home = $k; break; }
         }
     }
     $ordner = 'heimkino';
     $p = array(
-        'home'    => $home ? $home : '/opt/loxberry',
+        'home'    => $home ? $home : lb_wurzel_ermitteln(),
         'plugin'  => $ordner,
-        'config'  => ($home ? $home : '/opt/loxberry') . '/config/plugins/' . $ordner . '/heimkino.cfg',
-        'auth'    => ($home ? $home : '/opt/loxberry') . '/config/plugins/' . $ordner . '/xbox_auth.json',
-        'zustand' => ($home ? $home : '/opt/loxberry') . '/data/plugins/' . $ordner . '/zustand.json',
-        'log'     => ($home ? $home : '/opt/loxberry') . '/log/plugins/' . $ordner . '/heimkino.log',
+        'config'  => ($home ? $home : lb_wurzel_ermitteln()) . '/config/plugins/' . $ordner . '/heimkino.cfg',
+        'auth'    => ($home ? $home : lb_wurzel_ermitteln()) . '/config/plugins/' . $ordner . '/xbox_auth.json',
+        'zustand' => ($home ? $home : lb_wurzel_ermitteln()) . '/data/plugins/' . $ordner . '/zustand.json',
+        'log'     => ($home ? $home : lb_wurzel_ermitteln()) . '/log/plugins/' . $ordner . '/heimkino.log',
         // Der Dienst legt seine Prozessnummer selbst hier ab. Daran - und
         // nicht an pgrep -f - wird erkannt, ob er laeuft.
-        'piddatei' => ($home ? $home : '/opt/loxberry') . '/log/plugins/' . $ordner . '/hk_service.pid',
-        'bin'     => ($home ? $home : '/opt/loxberry') . '/bin/plugins/' . $ordner,
-        'general' => ($home ? $home : '/opt/loxberry') . '/config/system/general.json',
+        'piddatei' => ($home ? $home : lb_wurzel_ermitteln()) . '/log/plugins/' . $ordner . '/hk_service.pid',
+        'bin'     => ($home ? $home : lb_wurzel_ermitteln()) . '/bin/plugins/' . $ordner,
+        'general' => ($home ? $home : lb_wurzel_ermitteln()) . '/config/system/general.json',
     );
     return $p;
 }
