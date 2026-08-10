@@ -582,7 +582,7 @@ in jede Adresse dieses Token. Es wird beim ersten Speichern erzeugt.</p>
   Neues Token erzeugen <span class="sm-small">(die Adressen im Miniserver
   m&uuml;ssen danach angepasst werden)</span></label>
 
-<button data-role="none" type="submit" name="save" value="1" class="sm-btn">Speichern</button>
+<button data-role="none" type="submit" name="save" value="1" class="sm-btn"><?php echo hk_t('ALLGEMEIN.K_SPEICHERN'); ?></button>
 </form>
 
 <h2>Xbox: Anmeldung bei Microsoft</h2>
@@ -699,7 +699,7 @@ oft &uuml;berfl&uuml;ssig, weil der Verst&auml;rker das per CEC schon erledigt. 
 <label for="rueckleitung">Umleitungs-URI</label>
 <input data-role="none" type="text" id="rueckleitung" name="rueckleitung"
   value="<?php echo hk_e($hk_xb['rueckleitung']); ?>">
-<button data-role="none" type="submit" name="xbox_app" value="1" class="sm-btn">Kennung speichern</button>
+<button data-role="none" type="submit" name="xbox_app" value="1" class="sm-btn"><?php echo hk_t('ALLGEMEIN.K_KENNUNG_SPEICHERN'); ?></button>
 </form>
 
 <?php if ($hk_anmelde !== '') { ?>
@@ -720,8 +720,7 @@ oft &uuml;berfl&uuml;ssig, weil der Verst&auml;rker das per CEC schon erledigt. 
 <label for="code">Zur&uuml;ckgeleitete Adresse oder Code</label>
 <input data-role="none" type="text" id="code" name="code"
   placeholder="http://localhost/auth/callback?code=...">
-<button data-role="none" type="submit" name="xbox_code" value="1" class="sm-btn">Anmeldung
-  abschlie&szlig;en</button>
+<button data-role="none" type="submit" name="xbox_code" value="1" class="sm-btn"><?php echo hk_t('ALLGEMEIN.K_ANMELDUNG_FERTIG'); ?></button>
 </form>
 <div class="sm-alert sm-info">
 Meldet Microsoft hier <span class="sm-mono">invalid_client &mdash; The provided
@@ -758,7 +757,7 @@ nur der eine oder nur der andere an.</div>
 <div class="sm-knopfreihe sm-b-aktion">
   <form method="post" action="index.php">
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
-    <button data-role="none" type="submit" name="xbox_vergessen" value="1">Anmeldung l&ouml;schen</button>
+    <button data-role="none" type="submit" name="xbox_vergessen" value="1"><?php echo hk_t('ALLGEMEIN.K_ANMELDUNG_LOESCHEN'); ?></button>
   </form>
 </div>
 <?php } ?>
@@ -841,8 +840,7 @@ liegen unter <span class="sm-mono"><?php echo hk_e($hk_praefix); ?>/</span>.</p>
 <div class="sm-knopfreihe sm-b-lesen">
   <form method="post" action="index.php">
     <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
-    <button data-role="none" type="submit" name="download" value="mqtt_in">Vorlage der
-      Eing&auml;nge herunterladen</button>
+    <button data-role="none" type="submit" name="download" value="mqtt_in"><?php echo hk_t('ALLGEMEIN.K_VORLAGE_EINGAENGE'); ?></button>
   </form>
 </div>
 <p class="sm-small">Die Datei l&auml;sst sich in Loxone Config unter
@@ -968,7 +966,7 @@ foreach ($ansehen as $wert => $text) { ?>
 <div class="sm-knopfreihe sm-b-aktion">
   <form method="post" action="index.php">
     <input data-role="none" type="hidden" name="activetab" value="tab-test">
-    <button data-role="none" type="submit" name="test" value="dienst_neu">Dienst neu starten</button>
+    <button data-role="none" type="submit" name="test" value="dienst_neu"><?php echo hk_t('ALLGEMEIN.K_DIENST_NEU'); ?></button>
   </form>
 </div>
 
@@ -1051,7 +1049,7 @@ foreach ($aktionen as $wert => $text) { ?>
 <div class="sm-knopfreihe sm-b-lesen" style="margin-top:12px;">
   <form method="post" action="index.php">
     <input data-role="none" type="hidden" name="activetab" value="tab-log">
-    <button data-role="none" type="submit" name="nichts" value="1">Neu laden</button>
+    <button data-role="none" type="submit" name="nichts" value="1"><?php echo hk_t('ALLGEMEIN.K_NEU_LADEN'); ?></button>
   </form>
 </div>
 </div>
