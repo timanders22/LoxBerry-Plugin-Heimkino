@@ -579,13 +579,27 @@ in jede Adresse dieses Token. Es wird beim ersten Speichern erzeugt.</p>
     : 'wird beim ersten Speichern erzeugt'; ?></div>
 <label class="sm-check" style="margin-top:8px;">
   <input data-role="none" type="checkbox" name="token_neu" value="1">
-  Neues Token erzeugen <span class="sm-small">(die Adressen im Miniserver
-  m&uuml;ssen danach angepasst werden)</span></label>
+  <!-- margin-left, nicht ein Leerzeichen im Text: .sm-check ist im
+       Hausstandard "display: inline-flex", und ein Flex-Behaelter VERWIRFT
+       den Zwischenraum zwischen seinen Elementen. Deshalb stand auf dem
+       Bildschirm "erzeugen(die Adressen", obwohl im Quelltext ein
+       Leerzeichen steht.
+       An der laufenden Anlage nachgemessen: Text endet bei x=85, die
+       Klammer begann bei x=85 - Luecke 0. Mit "display:inline" am Span
+       aendert sich daran NICHTS (Flex-Elemente werden ohnehin
+       blockartig); erst margin-left ergibt die Luecke, gemessen 5 px. -->
+  Neues Token erzeugen <span class="sm-small" style="margin-left:.35em;">(die
+  Adressen im Miniserver m&uuml;ssen danach angepasst werden)</span></label>
 
-<button data-role="none" type="submit" name="save" value="1" class="sm-btn"><?php echo hk_t('ALLGEMEIN.K_SPEICHERN'); ?></button>
+<!-- Der Knopf gehoert in eine eigene Zeile mit Abstand, nicht unmittelbar
+     hinter den Text. -->
+<div style="margin-top:28px;">
+  <button data-role="none" type="submit" name="save" value="1" class="sm-btn"><?php echo hk_t('ALLGEMEIN.K_SPEICHERN'); ?></button>
+</div>
 </form>
 
-<h2>Xbox: Anmeldung bei Microsoft</h2>
+<!-- Rund fuenf Leerzeilen Abstand, bevor der naechste Abschnitt beginnt. -->
+<h2 style="margin-top:120px;">Xbox: Anmeldung bei Microsoft</h2>
 <div class="sm-alert sm-info">
 Das unauthentifizierte Weckpaket auf UDP&nbsp;5050, mit dem sich Xbox-One-Konsolen
 wecken lie&szlig;en, wird von neueren Firmwarest&auml;nden ignoriert. Nachgemessen an
@@ -696,10 +710,16 @@ oft &uuml;berfl&uuml;ssig, weil der Verst&auml;rker das per CEC schon erledigt. 
       placeholder="<?php echo $hk_xb['geheim'] ? 'gespeichert - leer lassen, um es zu behalten' : ''; ?>">
   </div>
 </div>
+<!-- Der Knopf steht ABSICHTLICH vor der Umleitungs-URI, mit je rund fuenf
+     Leerzeilen Abstand. Am Verhalten aendert das nichts: es ist EIN Formular,
+     der Knopf schickt alle Felder ab - auch das darunter liegende. -->
+<div style="margin-top:120px;margin-bottom:120px;">
+  <button data-role="none" type="submit" name="xbox_app" value="1" class="sm-btn"><?php echo hk_t('ALLGEMEIN.K_KENNUNG_SPEICHERN'); ?></button>
+</div>
+
 <label for="rueckleitung">Umleitungs-URI</label>
 <input data-role="none" type="text" id="rueckleitung" name="rueckleitung"
   value="<?php echo hk_e($hk_xb['rueckleitung']); ?>">
-<button data-role="none" type="submit" name="xbox_app" value="1" class="sm-btn"><?php echo hk_t('ALLGEMEIN.K_KENNUNG_SPEICHERN'); ?></button>
 </form>
 
 <?php if ($hk_anmelde !== '') { ?>
