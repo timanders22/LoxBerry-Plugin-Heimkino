@@ -87,5 +87,19 @@ netz_zurueck() {
     fi
 }
 netz_zurueck "heimkino.cfg" "279a0e0f89591b0823f655ac9cafcc366d177d056035cfa066edd163db4701d0"
+# xbox_auth.json: nicht mitgeliefert, also keine Vorgabe, mit der man
+# vergleichen koennte. Zurueckgespielt wird deshalb genau dann, wenn die
+# Datei fehlt oder leer ist - eine vorhandene Anmeldung wird nie ueberschrieben.
+netz_xbox="$NETZ_CFG/xbox_auth.json"
+netz_xbox_zweit="$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.xbox_auth.json"
+if [ -f "$netz_xbox_zweit" ] && [ ! -s "$netz_xbox" ]; then
+    if cp -p "$netz_xbox_zweit" "$netz_xbox" 2>/dev/null; then
+        chmod 0600 "$netz_xbox" 2>/dev/null
+        echo "<OK> Xbox-Anmeldung aus der Zweitschrift wiederhergestellt."
+    else
+        echo "<WARNING> xbox_auth.json liess sich nicht zurueckspielen."
+        echo "<WARNING> Die Sicherung liegt unter $netz_xbox_zweit"
+    fi
+fi
 
 exit 0

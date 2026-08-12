@@ -593,7 +593,7 @@ in jede Adresse dieses Token. Es wird beim ersten Speichern erzeugt.</p>
 
 <!-- Der Knopf gehoert in eine eigene Zeile mit Abstand, nicht unmittelbar
      hinter den Text. -->
-<div style="margin-top:28px;">
+<div style="margin-top:28px;text-align:center;">
   <button data-role="none" type="submit" name="save" value="1" class="sm-btn"><?php echo hk_t('ALLGEMEIN.K_SPEICHERN'); ?></button>
 </div>
 </form>
@@ -713,7 +713,7 @@ oft &uuml;berfl&uuml;ssig, weil der Verst&auml;rker das per CEC schon erledigt. 
 <!-- Der Knopf steht ABSICHTLICH vor der Umleitungs-URI, mit je rund fuenf
      Leerzeilen Abstand. Am Verhalten aendert das nichts: es ist EIN Formular,
      der Knopf schickt alle Felder ab - auch das darunter liegende. -->
-<div style="margin-top:120px;margin-bottom:120px;">
+<div style="margin-top:60px;margin-bottom:60px;text-align:center;">
   <button data-role="none" type="submit" name="xbox_app" value="1" class="sm-btn"><?php echo hk_t('ALLGEMEIN.K_KENNUNG_SPEICHERN'); ?></button>
 </div>
 

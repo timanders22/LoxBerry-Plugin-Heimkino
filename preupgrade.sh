@@ -58,6 +58,22 @@ if [ -s "$NETZ_CFG/heimkino.cfg" ]; then
     cp -p "$NETZ_CFG/heimkino.cfg" "$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.heimkino.cfg" 2>/dev/null \
         && chmod 0600 "$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.heimkino.cfg" 2>/dev/null
 fi
+# xbox_auth.json wird vom Archiv NIE mitgeliefert - und war deshalb bis
+# 1.2.6 ungeschuetzt. Genau darin stehen Anwendungskennung, geheimer
+# Schluessel, Umleitungs-URI und das Erneuerungstoken. Der Installer loescht
+# beim Update den ganzen Ordner config/plugins/<x>, also auch diese Datei;
+# die alte Kette legte ihre Sicherung unter data/plugins/<x> ab, und die
+# loescht er ebenfalls. Ergebnis: nach jedem Update stand dort
+# "Noch nicht angemeldet", und die ganze Microsoft-Registrierung war neu
+# einzutragen.
+#
+# LEHRE: die Liste der zu sichernden Dateien darf sich NICHT danach richten,
+# was das Archiv mitliefert. Gerade die Dateien, die es nie mitliefert, sind
+# die wertvollen - Token und Zugangsdaten.
+if [ -s "$NETZ_CFG/xbox_auth.json" ]; then
+    cp -p "$NETZ_CFG/xbox_auth.json" "$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.xbox_auth.json" 2>/dev/null \
+        && chmod 0600 "$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.xbox_auth.json" 2>/dev/null
+fi
 echo "<INFO> Zweitschrift der Einstellungen angelegt."
 
 exit 0

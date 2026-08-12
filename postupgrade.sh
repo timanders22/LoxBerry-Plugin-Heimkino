@@ -24,8 +24,20 @@ if [ -f "$SICHER/heimkino.cfg" ]; then
     cp -a "$SICHER/heimkino.cfg" "$PCONFIG/heimkino.cfg"
     echo "<OK> Bestehende Einstellungen uebernommen."
 else
+    # Kein blinder Alarm: der Installer loescht beim Update AUCH
+    # data/plugins/<ordner> und damit die Sicherung, die preupgrade.sh
+    # dorthin geschrieben hat - diese Kette kann hier gar nichts finden.
+    # Gerettet wird aus der Zweitschrift neben dem Ordner, und das tut
+    # postinstall.sh, das VOR postupgrade laeuft. Also erst nachsehen,
+    # wie es wirklich steht; eine Warnung bei heiler Konfiguration
+    # erschreckt ohne Grund und entwertet die echte.
+    NETZ_PRUEF="${5:-$LBHOMEDIR}/config/plugins/${3:-heimkino}/heimkino.cfg"
+    if [ -s "$NETZ_PRUEF" ]; then
+        echo "<OK> Die Einstellungen sind vorhanden (aus der Zweitschrift)."
+    else
     echo "<WARNING> Keine gesicherten Einstellungen gefunden - IP, MAC und"
     echo "<WARNING> Keycode des Beamers muessen neu eingetragen werden."
+    fi
 fi
 if [ -f "$SICHER/xbox_auth.json" ]; then
     cp -a "$SICHER/xbox_auth.json" "$PCONFIG/xbox_auth.json"
