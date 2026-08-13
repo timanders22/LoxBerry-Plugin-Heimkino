@@ -476,12 +476,13 @@ function hk_xml_virtual_in_http($kopf, $cmds)
 {
     $crlf = "\r\n";
     $o = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
-    $o .= '<VirtualInHttp ';
+    $o .= '<VirtualInHttp HintText="" ';
     $o .= 'Title="' . hk_x($kopf['title']) . '" ';
     $o .= 'Comment="' . hk_x(isset($kopf['comment']) ? $kopf['comment'] : '') . '" ';
     $o .= 'Address="' . hk_x(isset($kopf['address']) ? $kopf['address'] : '') . '" ';
     $o .= 'PollingTime="' . hk_x(isset($kopf['polling']) ? $kopf['polling'] : '60') . '"';
     $o .= '>' . $crlf;
+    $o .= "\t" . '<Info templateType="2" minVersion="17010727"/>' . $crlf; // wie Original-Export aus Loxone Config 17.1
     foreach ($cmds as $c) {
         $o .= "\t" . '<VirtualInHttpCmd ';
         $o .= 'Title="' . hk_x($c['title']) . '" ';
@@ -495,7 +496,9 @@ function hk_xml_virtual_in_http($kopf, $cmds)
         $o .= 'DestValHigh="100" ';
         $o .= 'DefVal="0" ';
         $o .= 'MinVal="-2147483647" ';
-        $o .= 'MaxVal="2147483647"';
+        $o .= 'MaxVal="2147483647" ';
+        $o .= 'Unit="' . hk_x(isset($c['unit']) ? $c['unit'] : '<v>') . '" ';
+        $o .= 'HintText=""';
         $o .= '/>' . $crlf;
     }
     $o .= '</VirtualInHttp>' . $crlf;
@@ -520,6 +523,35 @@ function hk_vorlage($cfg)
         'polling' => '604800',
         'comment' => 'Erzeugt vom LoxBerry-Plugin Heimkino (' . date('d.m.Y') . ')',
     ), $cmds));
+}
+
+
+/** Vorlage der Steuerbefehle (Virtueller Ausgang) - Format wie Original-Export aus Loxone Config 17.1. */
+function hk_vo_vorlage($cfg)
+{
+    $host = isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== ''
+        ? preg_replace('/[^A-Za-z0-9\.\-:]/', '', (string) $_SERVER['HTTP_HOST'])
+        : (gethostname() ?: 'loxberry');
+    $ordner = getenv('LBPPLUGINDIR') ?: 'heimkino';
+    $tok = hk_cfg($cfg, 'heimkino', 'aktionstoken', '');
+    $aktionen = array(
+        array('Beamer ausschalten', 'beamer-aus'),
+        array('Beamer einschalten (Wake on LAN)', 'beamer-wol'),
+        array('Xbox einschalten', 'xbox-an'),
+        array('Xbox ausschalten', 'xbox-aus'),
+    );
+    $crlf = "\r\n";
+    $o = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
+    $o .= '<VirtualOut HintText="" Title="Heimkino steuern (LoxBerry-Plugin)" Comment="Aktionsaufrufe ueber das Plugin ' . hk_x($ordner) . ' - enthaelt das Aktionstoken." Address="http://' . hk_x($host) . '" CmdInit="" CloseAfterSend="true" CmdSep="">' . $crlf;
+    $o .= "\t" . '<Info templateType="3" minVersion="17010727"/>' . $crlf;
+    foreach ($aktionen as $a) {
+        $o .= "\t" . '<VirtualOutCmd Title="' . hk_x($a[0]) . '" Comment="" CmdOnMethod="GET" CmdOffMethod="GET" ';
+        $o .= 'CmdOn="' . hk_x('/plugins/' . $ordner . '/index.php?token=' . $tok . '&aktion=' . $a[1]) . '" ';
+        $o .= 'CmdOnHTTP="" CmdOnPost="" CmdOff="" CmdOffHTTP="" CmdOffPost="" CmdAnswer="" ';
+        $o .= 'Analog="false" Repeat="0" RepeatRate="0" HintText=""/>' . $crlf;
+    }
+    $o .= '</VirtualOut>' . $crlf;
+    return array('heimkino_steuerbefehle.xml', $o);
 }
 
 /* ==================================================================

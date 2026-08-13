@@ -50,7 +50,9 @@ $hk_cfg = hk_config_read();
 
 /* ============ Loxone-Vorlage herunterladen ============ */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['download'])) {
-    list($name, $inhalt) = hk_vorlage($hk_cfg);
+    list($name, $inhalt) = $_POST['download'] === 'vo' && function_exists('hk_vo_vorlage')
+        ? hk_vo_vorlage($hk_cfg)
+        : hk_vorlage($hk_cfg);
     header('Content-Type: application/x-download');
     header('Content-Disposition: attachment; filename=' . $name);
     header('Content-Length: ' . strlen($inhalt));
@@ -882,6 +884,14 @@ Bei ihm steht nur die Adresse des LoxBerry, die Befehle kommen in die
 <tr><td>Adresse des Ausgangs</td>
     <td class="sm-mono">http://<?php echo hk_e(gethostname() ?: 'loxberry'); ?></td></tr>
 </table>
+<div class="sm-knopfreihe sm-b-lesen">
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+    <button data-role="none" type="submit" name="download" value="vo"><?php echo hk_t('ALLGEMEIN.K_VORLAGE_VO'); ?></button>
+  </form>
+</div>
+<p class="sm-small">Die Datei l&auml;sst sich in Loxone Config unter <i>Virtuelle Ausg&auml;nge</i>
+einlesen. Sie legt die Aktionsaufrufe samt Aktionstoken an.</p>
 <p class="sm-small">Statt des Rechnernamens geht auch die IP des LoxBerry. Kein
 Benutzer und kein Passwort &mdash; der Aktionsendpunkt liegt im unangemeldeten
 Bereich und pr&uuml;ft stattdessen das Token.</p>
