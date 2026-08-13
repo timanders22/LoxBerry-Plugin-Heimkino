@@ -345,6 +345,11 @@ if ($hk_frame) {
 .sm-gruen { background: #6dac20; }
 .sm-rot { background: #c62828; }
 .sm-grau { background: #9e9e9e; }
+
+/* Nachgetragene Definitionen (CSS-Luecken-Durchgang 13.08.2026):
+   benutzt, aber nie definiert - wortgleich aus der Hausstandard-Vorlage
+   bzw. der Referenzimplementierung uebernommen. */
+.sm-warn { background: #fdf3e3; border: 1px solid #e0620d; }
 </style>
 
 <div class="sm-wrap">
