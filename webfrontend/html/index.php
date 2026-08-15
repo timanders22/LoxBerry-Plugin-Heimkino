@@ -18,7 +18,41 @@ ini_set('display_errors', '0');
 header('Content-Type: text/plain; charset=utf-8');
 header('Cache-Control: no-store');
 
-require_once __DIR__ . '/../htmlauth/hk_lib.php';
+/* Die Bibliothek liegt im ANGEMELDETEN Bereich, dieser Endpunkt nicht.
+ *
+ * Bis 1.2.10 stand hier schlicht __DIR__ . '/../htmlauth/hk_lib.php'. Das
+ * stimmt im ausgepackten Archiv, wo html/ und htmlauth/ nebeneinanderliegen -
+ * auf einem installierten LoxBerry aber nicht: dort werden beide in getrennte
+ * Baeume gelegt (webfrontend/html/plugins/<ordner>/ und
+ * webfrontend/htmlauth/plugins/<ordner>/). Der Pfad zeigte deshalb ins Leere,
+ * PHP brach mit einem schweren Fehler ab, und der Aufrufer bekam eine leere
+ * Antwort mit HTTP 500 - ohne jeden Hinweis, was fehlt.
+ *
+ * Belegt am 15.08.2026: beide Loxone-Ausgaenge (Beamer aus, Xbox wecken)
+ * liefen seit jeher in genau diesen 500er. Dieselbe Kandidatensuche benutzt
+ * das Intercom-Plugin seit laengerem aus demselben Grund.
+ */
+$hk_lib_gefunden = false;
+foreach (array(
+    dirname(dirname(dirname(__DIR__))) . '/htmlauth/plugins/' . basename(__DIR__) . '/hk_lib.php',
+    dirname(dirname(__DIR__)) . '/htmlauth/plugins/' . basename(__DIR__) . '/hk_lib.php',
+    dirname(__DIR__) . '/htmlauth/hk_lib.php',
+) as $hk_kandidat) {
+    if (is_file($hk_kandidat)) {
+        require_once $hk_kandidat;
+        $hk_lib_gefunden = true;
+        break;
+    }
+}
+if (!$hk_lib_gefunden) {
+    /* Sagen, was fehlt, statt mit einem leeren 500 zu enden. Diesen Endpunkt
+     * ruft der Miniserver auf - dort sieht niemand ein Apache-Protokoll. */
+    http_response_code(500);
+    echo "hk_lib.php nicht gefunden. Erwartet unter htmlauth/plugins/"
+         . basename(__DIR__) . "/hk_lib.php\n";
+    echo "Abhilfe: Plugin neu installieren.\n";
+    exit;
+}
 
 function hk_ende($code, $text)
 {

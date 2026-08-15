@@ -13,6 +13,26 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.2.11
+
+**Der Aktionsendpunkt lief immer in einen leeren HTTP 500.** `html/index.php`
+band die Bibliothek mit `__DIR__ . '/../htmlauth/hk_lib.php'` ein. Das stimmt
+im ausgepackten Archiv, wo `html/` und `htmlauth/` nebeneinanderliegen — auf
+einem installierten LoxBerry aber nicht: dort werden beide in **getrennte
+Bäume** gelegt (`webfrontend/html/plugins/<ordner>/` und
+`webfrontend/htmlauth/plugins/<ordner>/`). Der Pfad zeigte ins Leere, PHP brach
+mit einem schweren Fehler ab, und der Miniserver bekam eine leere Antwort ohne
+jeden Hinweis.
+
+Damit haben die beiden Loxone-Ausgänge **Beamer aus** und **Xbox wecken** seit
+jeher nichts bewirkt. Aufgefallen ist es am 15.08.2026 bei einer Prüfung des
+Endpunkts mit gültigem und mit falschem Token — beide Male HTTP 500, obwohl bei
+falschem Token 403 hätte kommen müssen.
+
+Der Endpunkt sucht die Bibliothek jetzt an den drei möglichen Stellen, wie es
+das Intercom-Plugin aus demselben Grund seit längerem tut, und sagt im
+Fehlerfall, **welche Datei wo fehlt**, statt mit einem leeren 500 zu enden.
+
 ## Warum die Xbox über die Cloud und nicht über das Netz vor Ort
 
 Xbox-One-Konsolen ließen sich mit einem unauthentifizierten Weckpaket auf
