@@ -15,6 +15,11 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 
 ## Neu in 1.2.11
 
+**Token pruefbar, ohne etwas auszuloesen.** Neuer Aufruf
+`?selftest=1&token=…` — antwortet `SELFTEST;OK=1;TOKEN=OK` beziehungsweise
+HTTP 403 mit `SELFTEST;OK=0;ERR=TOKEN`. Es wird dabei nichts geschaltet und
+nichts angefahren. Hausstandard fuer alle Aktionsendpunkte.
+
 **Der Aktionsendpunkt lief immer in einen leeren HTTP 500.** `html/index.php`
 band die Bibliothek mit `__DIR__ . '/../htmlauth/hk_lib.php'` ein. Das stimmt
 im ausgepackten Archiv, wo `html/` und `htmlauth/` nebeneinanderliegen — auf

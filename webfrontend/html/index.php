@@ -80,6 +80,15 @@ if (!hash_equals($soll, $ist)) {
     hk_ende(403, 'Token falsch.');
 }
 
+/* ---------- Selbsttest: Token pruefen, ohne etwas auszuloesen ----------
+ * Hausregel: jeder Aktionsendpunkt beantwortet ?selftest=1&token=... , ohne
+ * dass etwas passiert. Sonst laesst sich nicht feststellen, ob die Adresse im
+ * Miniserver noch stimmt, ohne wirklich zu schalten.
+ */
+if (isset($_GET['selftest'])) {
+    hk_ende(200, 'SELFTEST;OK=1;TOKEN=OK');
+}
+
 $aktion = isset($_GET['aktion']) ? (string) $_GET['aktion'] : '';
 $erlaubt = array_keys(hk_aktionen());
 $mit_wert = array('beamer-taste', 'beamer-eingang');
