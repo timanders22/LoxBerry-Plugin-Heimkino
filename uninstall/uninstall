@@ -116,9 +116,9 @@ geheim_weg "$PCONFIG_ELTERN/$PDIR/xbox_code.tmp"
 
 # Die Sicherung aus einem abgebrochenen Update liegt ebenfalls ausserhalb
 # dessen, was die Deinstallation raeumt.
-geheim_weg "$PDATA/upgrade_sicherung/heimkino.cfg"
-geheim_weg "$PDATA/upgrade_sicherung/xbox_auth.json"
-rm -rf "$PDATA/upgrade_sicherung" 2>/dev/null
+geheim_weg "$PDATA.upgrade_sicherung/heimkino.cfg"
+geheim_weg "$PDATA.upgrade_sicherung/xbox_auth.json"
+rm -rf "$PDATA.upgrade_sicherung" 2>/dev/null
 
 echo "<OK> Zweitschriften mit Keycode, Aktionstoken und Microsoft-Anmeldung entfernt."
 exit 0

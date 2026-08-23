@@ -1,6 +1,10 @@
 #!/bin/sh
 # Heimkino - preupgrade (laeuft als Benutzer loxberry)
 PDIR=$3
+# Rueckfall, falls sudo die Umgebung ausgeraeumt hat (env_reset).
+# Das fuenfte Argument ist das Wurzelverzeichnis und traegt immer.
+LBHOMEDIR="${LBHOMEDIR:-$5}"
+LBPCONFIG="${LBPCONFIG:-$5/config/plugins}"
 BASE="${5:-$LBHOMEDIR}"
 PCONFIG="$LBPCONFIG/$PDIR"
 [ -d "$PCONFIG" ] || PCONFIG="$BASE/config/plugins/$PDIR"
@@ -19,7 +23,16 @@ PCONFIG="$LBPCONFIG/$PDIR"
 # Der Vorschlag, statt dessen das Installationsverzeichnis $1 zu nehmen,
 # hilft nicht: das liegt unter /tmp/uploads und damit auf DERSELBEN Ramdisk.
 # Bestand hat nur, was auf der Karte liegt - also data/plugins/<Ordner>/.
-SICHER="$BASE/data/plugins/$PDIR/upgrade_sicherung"
+# Die Sicherung liegt NEBEN dem Ordner, nicht darin. Gemessen an
+# sbin/plugininstall.pl (Zweig master, 23.08.2026): der Installer ruft
+# &purge_installation nicht nur beim Deinstallieren, sondern auch im
+# Upgrade-Zweig (:886), und deren Rumpf loescht ohne jede Bedingung
+# (:1629 ff.) config/plugins/<x>/, bin/plugins/<x>/, data/plugins/<x>/,
+# templates/plugins/<x>/ und beide webfrontend/-Ordner. Eine Sicherung IN
+# data/plugins/<x>/ wird also von genau dem Schritt vernichtet, den sie
+# ueberdauern soll. Der Punkt im Namen ist der ganze Unterschied:
+# "rm -rf .../<x>/" trifft den Nachbarn "<x>.upgrade_sicherung" nicht.
+SICHER="$BASE/data/plugins/$PDIR.upgrade_sicherung"
 
 rm -rf "$SICHER" 2>/dev/null
 mkdir -p "$SICHER" 2>/dev/null

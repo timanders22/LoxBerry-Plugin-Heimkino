@@ -1,10 +1,15 @@
 #!/bin/sh
 # Heimkino - postupgrade (laeuft als Benutzer loxberry)
 PDIR=$3
+# Rueckfall, falls sudo die Umgebung ausgeraeumt hat (env_reset).
+# Das fuenfte Argument ist das Wurzelverzeichnis und traegt immer.
+LBHOMEDIR="${LBHOMEDIR:-$5}"
+LBPCONFIG="${LBPCONFIG:-$5/config/plugins}"
+LBPBIN="${LBPBIN:-$5/bin/plugins}"
 BASE="${5:-$LBHOMEDIR}"
 PCONFIG="$LBPCONFIG/$PDIR"
 [ -d "$PCONFIG" ] || PCONFIG="$BASE/config/plugins/$PDIR"
-SICHER="$BASE/data/plugins/$PDIR/upgrade_sicherung"
+SICHER="$BASE/data/plugins/$PDIR.upgrade_sicherung"
 
 mkdir -p "$PCONFIG" 2>/dev/null
 
