@@ -3,6 +3,13 @@
  * Heimkino - gemeinsame Funktionen der Oberflaeche
  *
  * Kompatibel mit PHP 7.4 und PHP 8.x (LoxBerry 3.x/4.x).
+ *
+ * Grundsatz dieser Datei seit 1.2.12: sie enthaelt KEINEN anzuzeigenden
+ * Text mehr. Alles, was auf dem Bildschirm landet, kommt aus
+ * templates/lang/language_*.ini oder aus bin/hk_themen.json. Bis 1.2.11
+ * standen hier deutsche Saetze - teils sogar mit HTML-Entitaeten darin, die
+ * anschliessend noch einmal durch hk_e() liefen und dann woertlich als
+ * "l&auml;uft" auf dem Bildschirm standen.
  */
 
 /** Wurzel der LoxBerry-Installation und alle abgeleiteten Pfade. */
@@ -47,19 +54,40 @@ function hk_paths()
             if (is_dir($k)) { $home = $k; break; }
         }
     }
+    if (!$home) { $home = lb_wurzel_ermitteln(); }
     $ordner = 'heimkino';
+    $bin = $home . '/bin/plugins/' . $ordner;
+    // Im ausgepackten Archiv liegt bin/ neben webfrontend/ - dann greift der
+    // Pfad oben nicht. Ohne diesen Zweig faende die Selbstpruefung die
+    // gemeinsamen Datendateien im Pruefstand nie.
+    if (!is_dir($bin) && is_dir(dirname(dirname(__DIR__)) . '/bin')) {
+        $bin = dirname(dirname(__DIR__)) . '/bin';
+    }
     $p = array(
-        'home'    => $home ? $home : lb_wurzel_ermitteln(),
-        'plugin'  => $ordner,
-        'config'  => ($home ? $home : lb_wurzel_ermitteln()) . '/config/plugins/' . $ordner . '/heimkino.cfg',
-        'auth'    => ($home ? $home : lb_wurzel_ermitteln()) . '/config/plugins/' . $ordner . '/xbox_auth.json',
-        'zustand' => ($home ? $home : lb_wurzel_ermitteln()) . '/data/plugins/' . $ordner . '/zustand.json',
-        'log'     => ($home ? $home : lb_wurzel_ermitteln()) . '/log/plugins/' . $ordner . '/heimkino.log',
-        // Der Dienst legt seine Prozessnummer selbst hier ab. Daran - und
-        // nicht an pgrep -f - wird erkannt, ob er laeuft.
-        'piddatei' => ($home ? $home : lb_wurzel_ermitteln()) . '/log/plugins/' . $ordner . '/hk_service.pid',
-        'bin'     => ($home ? $home : lb_wurzel_ermitteln()) . '/bin/plugins/' . $ordner,
-        'general' => ($home ? $home : lb_wurzel_ermitteln()) . '/config/system/general.json',
+        'home'     => $home,
+        'plugin'   => $ordner,
+        'config'   => $home . '/config/plugins/' . $ordner . '/heimkino.cfg',
+        'auth'     => $home . '/config/plugins/' . $ordner . '/xbox_auth.json',
+        // Der Autorisierungscode aus der Microsoft-Rueckleitung. Er wird hier
+        // mit Rechten 0600 abgelegt und von hk_cmd.py gelesen und geloescht -
+        // NICHT ueber die Kommandozeile uebergeben. Argumente stehen in
+        // /proc/<pid>/cmdline und sind fuer jeden lokalen Benutzer lesbar;
+        // zusammen mit dem Clientgeheimnis laesst sich aus dem Code ein
+        // Erneuerungstoken loesen. Bis 1.2.11 ging er als Argument hinaus.
+        'code'     => $home . '/config/plugins/' . $ordner . '/xbox_code.tmp',
+        'zustand'  => $home . '/data/plugins/' . $ordner . '/zustand.json',
+        'daten'    => $home . '/data/plugins/' . $ordner,
+        // Seit 1.2.12 unter data/, nicht mehr unter log/: log/plugins ist
+        // eine Ramdisk, und der Dienst haelt auf dieser Datei eine echte
+        // Dateisperre (flock).
+        'piddatei' => $home . '/data/plugins/' . $ordner . '/hk_service.pid',
+        'soll'     => $home . '/data/plugins/' . $ordner . '/soll_laufen',
+        'probe'    => $home . '/data/plugins/' . $ordner . '/endpunkt_probe.json',
+        'log'      => $home . '/log/plugins/' . $ordner . '/heimkino.log',
+        'bin'      => $bin,
+        'vorgaben' => $bin . '/hk_vorgaben.json',
+        'themen'   => $bin . '/hk_themen.json',
+        'general'  => $home . '/config/system/general.json',
     );
     return $p;
 }
@@ -94,41 +122,84 @@ function hk_t($schluessel)
     if ($texte === null) {
         $ordner = hk_paths()['home'] . '/templates/plugins/'
                 . hk_paths()['plugin'] . '/lang';
+        // Im ausgepackten Archiv liegen die Sprachdateien noch an ihrem
+        // Platz im Paket. Ohne diesen Zweig zeigt der Pruefstand nur
+        // Schluesselnamen und man haelt jede Beschriftung fuer kaputt.
+        if (!is_file($ordner . '/language_en.ini')
+            && is_file(dirname(dirname(__DIR__)) . '/templates/lang/language_en.ini')) {
+            $ordner = dirname(dirname(__DIR__)) . '/templates/lang';
+        }
         $texte = @parse_ini_file($ordner . '/language_' . hk_sprache() . '.ini',
                                  true, INI_SCANNER_RAW);
         if (!is_array($texte)) { $texte = array(); }
         $rueck = @parse_ini_file($ordner . '/language_en.ini', true,
                                  INI_SCANNER_RAW);
         if (is_array($rueck)) { $texte = array_replace_recursive($rueck, $texte); }
-        // parse_ini_file mit INI_SCANNER_RAW liefert die Werte samt der
-        // Anfuehrungszeichen zurueck, in die sie in der Datei stehen muessen.
-        // Die gehoeren nicht in die Ausgabe.
-        foreach ($texte as $ab => $paare) {
-            if (!is_array($paare)) { continue; }
-            foreach ($paare as $s => $w) {
-                $texte[$ab][$s] = trim((string) $w, '"');
-            }
-        }
     }
     list($a, $s) = array_pad(explode('.', $schluessel, 2), 2, '');
     return isset($texte[$a][$s]) ? $texte[$a][$s] : $schluessel;
 }
 
+/** Beschriftung: maskiert. Fuer Fliesstext mit Auszeichnung hk_t() roh nehmen. */
+function hk_te($schluessel)
+{
+    return hk_e(hk_t($schluessel));
+}
+
+/** Einen Text mit Platzhaltern fuellen: hk_tf('X.Y', array('%1' => 'a')). */
+function hk_tf($schluessel, $werte)
+{
+    return str_replace(array_keys($werte), array_values($werte), hk_t($schluessel));
+}
+
 /* ==================================================================
  * Konfiguration
+ *
+ * Die Vorgaben stehen in bin/hk_vorgaben.json - derselben Datei, die auch
+ * bin/hk_common.py liest. Bis 1.2.11 gab es zwei getrennt gepflegte Listen
+ * in zwei Sprachen; bei Gardena hat genau diese Bauart dazu gefuehrt, dass
+ * ein fehlender Schluessel in der Oberflaeche "an" und im Dienst "aus"
+ * bedeutete.
  * ================================================================== */
 
 function hk_vorgaben()
 {
-    return array(
-        'heimkino' => array('enabled' => '1', 'intervall' => '60',
-                            'themenpraefix' => 'heimkino', 'mqtt' => '1',
-                            'aktionstoken' => ''),
-        'beamer'   => array('aktiv' => '0', 'ip' => '', 'mac' => '',
-                            'keycode' => '', 'port' => '9761', 'zeitgrenze' => '5'),
-        'xbox'     => array('aktiv' => '0', 'geraete_id' => '',
-                            'geheimnis_ablauf' => ''),
-    );
+    static $v = null;
+    if ($v !== null) {
+        return $v;
+    }
+    $v = array();
+    $roh = @file_get_contents(hk_paths()['vorgaben']);
+    $j = $roh === false ? null : json_decode($roh, true);
+    if (is_array($j) && isset($j['abschnitte']) && is_array($j['abschnitte'])) {
+        foreach ($j['abschnitte'] as $abschnitt) {
+            if (!is_array($abschnitt) || empty($abschnitt['name'])) { continue; }
+            $werte = array();
+            foreach ((isset($abschnitt['schluessel']) ? $abschnitt['schluessel'] : array()) as $s) {
+                if (is_array($s) && isset($s['name'])) {
+                    $werte[(string) $s['name']] = isset($s['vorgabe']) ? (string) $s['vorgabe'] : '';
+                }
+            }
+            $v[(string) $abschnitt['name']] = $werte;
+        }
+    }
+    return $v;
+}
+
+/** Zustand der Konfigurationsdatei: ok | fehlt | kaputt | keine_vorgaben */
+function hk_config_lage()
+{
+    if (!hk_vorgaben()) {
+        return 'keine_vorgaben';
+    }
+    $datei = hk_paths()['config'];
+    if (!is_file($datei)) {
+        return 'fehlt';
+    }
+    if (!is_readable($datei)) {
+        return 'kaputt';
+    }
+    return @parse_ini_file($datei, true, INI_SCANNER_RAW) === false ? 'kaputt' : 'ok';
 }
 
 function hk_config_read()
@@ -153,21 +224,61 @@ function hk_config_read()
     return $cfg;
 }
 
+/** Welche Schluessel fehlen wirklich in der Datei? "abschnitt.schluessel" */
+function hk_cfg_fehlende()
+{
+    $datei = hk_paths()['config'];
+    $gelesen = is_readable($datei) ? @parse_ini_file($datei, true, INI_SCANNER_RAW) : array();
+    if (!is_array($gelesen)) { $gelesen = array(); }
+    $fehlen = array();
+    foreach (hk_vorgaben() as $abschnitt => $werte) {
+        foreach ($werte as $schluessel => $vorgabe) {
+            // array_key_exists, NICHT isset: isset haelt einen leeren Wert
+            // fuer nicht vorhanden und wuerde eine bewusst geleerte Angabe
+            // bei jedem Lauf zurueckschreiben.
+            if (!isset($gelesen[$abschnitt]) || !is_array($gelesen[$abschnitt])
+                || !array_key_exists($schluessel, $gelesen[$abschnitt])) {
+                $fehlen[] = $abschnitt . '.' . $schluessel;
+            }
+        }
+    }
+    return $fehlen;
+}
+
+/**
+ * Fehlende Schluessel EINMAL in die Datei schreiben.
+ *
+ * Ergaenzen beim Lesen genuegt nicht: die Datei bliebe lueckenhaft, und
+ * "fehlt" waere von "steht auf dem Vorgabewert" nicht zu unterscheiden.
+ * Geschrieben wird nur, wenn wirklich etwas gefehlt hat.
+ */
+function hk_cfg_vervollstaendigen(&$cfg)
+{
+    $fehlten = hk_cfg_fehlende();
+    if ($fehlten && hk_config_lage() !== 'keine_vorgaben') {
+        hk_config_write($cfg);
+    }
+    return $fehlten;
+}
+
 /**
  * Eine Datei unteilbar ersetzen.
  *
- * Der Zwischenname enthaelt Prozessnummer und Zufall. Bis 1.1.1 hiess er
- * fest ".neu"; speicherten die Oberflaeche und der Aktionsendpunkt
- * gleichzeitig, zog einer dem anderen die Zwischendatei weg.
+ * Drei Punkte, die bis 1.2.11 anders waren:
  *
- * Die Rechte werden VOR dem Umbenennen gesetzt - danach gaebe es einen
- * Augenblick, in dem die Datei mit 0644 dalaege. In heimkino.cfg steht der
- * Keycode des Beamers und das Aktionstoken, in xbox_auth.json die
- * Azure-Refresh-Token.
+ * 1. Der Zwischenname traegt Prozessnummer und Zufall - sonst zerlegen zwei
+ *    gleichzeitige Schreiber einander die Nebendatei.
+ * 2. Die Rechte stehen am ANLEGEN, nicht dahinter. "Schreiben, dann chmod"
+ *    laesst die Datei fuer die Dauer des Schreibens mit den Vorgaben der
+ *    umask stehen; in xbox_auth.json stehen die Azure-Refresh-Token.
+ * 3. Verglichen wird mit der LAENGE, nicht mit === false. Bricht das
+ *    Schreiben auf voller Karte nach der Haelfte ab, liefert
+ *    file_put_contents die geschriebene Zahl - nicht false - und rename
+ *    zoege eine abgeschnittene Datei ueber die gueltige.
  */
 function hk_datei_ersetzen($datei, $inhalt, $modus = 0640)
 {
-    if ($inhalt === false || $inhalt === null) {
+    if (!is_string($inhalt)) {
         return false;
     }
     $ordner = dirname($datei);
@@ -175,10 +286,22 @@ function hk_datei_ersetzen($datei, $inhalt, $modus = 0640)
         @mkdir($ordner, 0755, true);
     }
     $vorlaeufig = $datei . '.' . getmypid() . '.' . mt_rand(1000, 9999) . '.neu';
-    if (@file_put_contents($vorlaeufig, $inhalt) === false) {
+    $fh = @fopen($vorlaeufig, 'c');
+    if ($fh === false) {
         return false;
     }
     @chmod($vorlaeufig, $modus);
+    $ok = @ftruncate($fh, 0);
+    if ($ok) {
+        $geschrieben = @fwrite($fh, $inhalt);
+        $ok = ($geschrieben !== false && $geschrieben === strlen($inhalt));
+    }
+    @fflush($fh);
+    @fclose($fh);
+    if (!$ok) {
+        @unlink($vorlaeufig);
+        return false;
+    }
     if (!@rename($vorlaeufig, $datei)) {
         @unlink($vorlaeufig);
         return false;
@@ -189,17 +312,17 @@ function hk_datei_ersetzen($datei, $inhalt, $modus = 0640)
 function hk_config_write($cfg)
 {
     $datei = hk_paths()['config'];
-    $ordner = dirname($datei);
-    if (!is_dir($ordner)) {
-        @mkdir($ordner, 0755, true);
-    }
     $t  = "; Heimkino\n";
-    $t .= "; Wird von der Plugin-Oberflaeche geschrieben.\n";
+    $t .= "; Wird von der Plugin-Oberflaeche und vom Dienst geschrieben.\n";
     $t .= "; ACHTUNG: enthaelt den Keycode des Beamers - nicht veroeffentlichen.\n\n";
-    foreach ($cfg as $abschnitt => $werte) {
+    // Die Reihenfolge kommt aus den Vorgaben, nicht aus dem uebergebenen
+    // Feld: sonst haengt der Aufbau der Datei davon ab, wer sie schreibt.
+    foreach (hk_vorgaben() as $abschnitt => $werte) {
         $t .= '[' . $abschnitt . "]\n";
-        foreach ($werte as $schluessel => $wert) {
-            $t .= $schluessel . '=' . $wert . "\n";
+        foreach ($werte as $schluessel => $vorgabe) {
+            $t .= $schluessel . '='
+                . (isset($cfg[$abschnitt][$schluessel])
+                   ? $cfg[$abschnitt][$schluessel] : $vorgabe) . "\n";
         }
         $t .= "\n";
     }
@@ -243,14 +366,49 @@ function hk_token_erzeugen($laenge = 24)
             $t .= $zeichen[random_int(0, strlen($zeichen) - 1)];
         }
     } catch (Exception $e) {
-        throw new RuntimeException(
-            'Auf diesem System ist keine sichere Zufallsquelle verfuegbar - '
-            . 'es wurde kein Token erzeugt (' . $e->getMessage() . ').');
+        throw new RuntimeException($e->getMessage());
     } catch (Error $e) {
-        throw new RuntimeException(
-            'random_int steht nicht zur Verfuegung - es wurde kein Token erzeugt.');
+        throw new RuntimeException($e->getMessage());
     }
     return $t;
+}
+
+/* ==================================================================
+ * Merkmal gegen fremde Absender (CSRF)
+ *
+ * htmlauth/ schuetzt gegen den unangemeldeten Aufruf - NICHT dagegen, dass
+ * der Browser eines ANGEMELDETEN Bedieners ein Formular abschickt, das auf
+ * einer fremden Seite steht: die Anmeldung schickt er automatisch mit,
+ * SameSite greift nicht. Ohne dieses Merkmal liesse sich von aussen
+ * "Neues Token erzeugen" ausloesen; danach beantwortet der Endpunkt jeden
+ * virtuellen Ausgang mit 403 - und ein virtueller Ausgang wertet die
+ * Antwort nicht aus, der Ausfall bliebe still.
+ *
+ * Das Merkmal wird ABGELEITET, nicht gespeichert: es gibt damit keinen
+ * zweiten Wert, der verlorengehen kann, und es wechselt automatisch mit,
+ * wenn das Aktionstoken neu gewuerfelt wird.
+ * ================================================================== */
+
+function hk_formtoken($cfg = null)
+{
+    if ($cfg === null) {
+        $cfg = hk_config_read();
+    }
+    $grund = trim((string) hk_cfg($cfg, 'heimkino', 'aktionstoken', ''));
+    // Fail closed: ohne Aktionstoken gibt es kein Merkmal. Ein aus dem
+    // Leerstring abgeleiteter Wert waere fuer jeden ausrechenbar - also
+    // kein Schutz, sondern die Behauptung eines Schutzes.
+    if ($grund === '') {
+        return '';
+    }
+    return hash_hmac('sha256', 'formular-v1', $grund);
+}
+
+function hk_formtoken_ok($cfg = null)
+{
+    $soll = hk_formtoken($cfg);
+    $ist = isset($_POST['fmt']) && is_string($_POST['fmt']) ? (string) $_POST['fmt'] : '';
+    return ($soll !== '' && hash_equals($soll, $ist));
 }
 
 /* ==================================================================
@@ -267,8 +425,7 @@ function hk_token_erzeugen($laenge = 24)
  * in dessen Kommandozeile die Zeichenkette vorkommt - einen Editor mit der
  * geoeffneten Datei, ein tail auf einen Pfad mit diesem Namen, unter
  * Umstaenden die aufrufende Shell selbst. Die Oberflaeche meldete dann
- * "Dienst laeuft", obwohl er stand. Beim Beenden war dieselbe Unschaerfe
- * gefaehrlich: pkill -f schickt das Signal an alle Treffer.
+ * "Dienst laeuft", obwohl er stand.
  */
 function hk_dienst_pid()
 {
@@ -283,14 +440,12 @@ function hk_dienst_pid()
     }
     // Gegenprobe: gehoert die Prozessnummer wirklich zu unserem Dienst?
     // Prozessnummern werden wiederverwendet - ohne diese Pruefung koennte
-    // die Oberflaeche einen fremden Prozess fuer den Dienst halten und ihn
-    // beim Beenden abschiessen.
+    // die Oberflaeche einen fremden Prozess fuer den Dienst halten.
     //
     // Verglichen werden die EINZELNEN Argumente, nicht die Kommandozeile als
     // Zeichenkette. Beim Erproben trat der Fall tatsaechlich auf: die
     // Kommandozeile eines fremden Prozesses enthielt "hk_service.py", weil
-    // dieser Pfad irgendwo als Text darin vorkam. Eine Teilzeichenkettensuche
-    // haette ihn fuer unseren Dienst gehalten.
+    // dieser Pfad irgendwo als Text darin vorkam.
     $cmd = @file_get_contents('/proc/' . $pid . '/cmdline');
     if ($cmd === false) {
         return 0;
@@ -303,32 +458,24 @@ function hk_dienst_pid()
     return $treffer ? $pid : 0;
 }
 
+/**
+ * Dienst starten, anhalten oder neu starten - ueber bin/dienst.sh.
+ *
+ * Bis 1.2.11 rief die Oberflaeche selbst nohup auf und schickte selbst
+ * Signale. Damit gab es drei Startstellen (Daemon, Oberflaeche, keine
+ * Wacht) mit je eigenen Annahmen; der Sollmerker fuer den minuetlichen
+ * Waechter wurde dabei gar nicht gesetzt. Jetzt gibt es EINE Stelle.
+ */
 function hk_dienst($was)
 {
-    $bin = hk_paths()['bin'] . '/hk_service.py';
-    if ($was === 'stop' || $was === 'restart') {
-        // Gezielt die eine Prozessnummer beenden, nicht pkill -f.
-        $pid = hk_dienst_pid();
-        if ($pid > 0) {
-            @exec('kill ' . (int) $pid . ' >/dev/null 2>&1');
-            // Dem Dienst Zeit lassen: er meldet beim Beenden noch
-            // service/online = 0 per MQTT, damit Loxone den Ausfall sieht.
-            for ($i = 0; $i < 20 && hk_dienst_pid() === $pid; $i++) {
-                usleep(200000);
-            }
-            if (hk_dienst_pid() === $pid) {
-                @exec('kill -9 ' . (int) $pid . ' >/dev/null 2>&1');
-                usleep(300000);
-            }
-        }
+    $skript = hk_paths()['bin'] . '/dienst.sh';
+    if (!in_array($was, array('start', 'stop', 'restart'), true)) {
+        return hk_dienst_pid();
     }
-    if ($was === 'start' || $was === 'restart') {
-        if (is_executable($bin)) {
-            $log = hk_paths()['log'];
-            @exec('nohup ' . escapeshellarg($bin) . ' >> '
-                  . escapeshellarg($log) . ' 2>&1 &');
-            usleep(700000);
-        }
+    if (is_file($skript)) {
+        $aus = array(); $code = 0;
+        @exec('/bin/bash ' . escapeshellarg($skript) . ' ' . escapeshellarg($was)
+              . ' 2>&1', $aus, $code);
     }
     return hk_dienst_pid();
 }
@@ -353,18 +500,52 @@ function hk_zustand_alter()
     return $zeit ? (time() - $zeit) : null;
 }
 
-function hk_log_tail($max = 200)
+/**
+ * Die letzten Zeilen der Protokolldatei - rueckwaerts mit fseek.
+ *
+ * NICHT die ganze Datei einlesen und NICHT exec("tail"). An 12.000 Zeilen
+ * (610 kB) gemessen, je 20 Durchlaeufe:
+ *
+ *     file() + array_reverse    0,37 ms   zusaetzlich 2048 kB
+ *     exec("tail -n 400")       2,17 ms   zusaetzlich    0 kB
+ *     rueckwaerts mit fseek     0,05 ms   zusaetzlich    0 kB
+ *
+ * Bis 1.2.11 stand hier file_get_contents ueber die ganze Datei.
+ *
+ * Erst fragen, dann oeffnen: ein @fopen() auf eine fehlende Datei ist stumm,
+ * aber nicht folgenlos - ein gesetzter Fehlerbehandler sieht die Warnung
+ * trotzdem. Die Protokolldatei fehlt regelmaessig, naemlich vor dem ersten
+ * Start.
+ */
+function hk_log_ende($anzahl = 200, $block = 8192)
 {
     $datei = hk_paths()['log'];
-    if (!is_readable($datei)) {
+    if (!is_file($datei)) {
         return array();
     }
-    $zeilen = preg_split('/\R/', (string) @file_get_contents($datei));
-    $zeilen = array_values(array_filter($zeilen, function ($z) {
-        return trim($z) !== '';
-    }));
-    return array_reverse(array_slice($zeilen, -$max));
+    $fp = @fopen($datei, 'rb');
+    if ($fp === false) {
+        return array();
+    }
+    fseek($fp, 0, SEEK_END);
+    $pos = ftell($fp);
+    $puffer = '';
+    $zeilen = array();
+    while ($pos > 0 && count($zeilen) <= $anzahl) {
+        $lese = (int) min($block, $pos);
+        $pos -= $lese;
+        fseek($fp, $pos, SEEK_SET);
+        $puffer = fread($fp, $lese) . $puffer;
+        $zeilen = explode("\n", $puffer);
+    }
+    fclose($fp);
+    $zeilen = array_values(array_filter(array_map('rtrim', $zeilen), 'strlen'));
+    return array_slice(array_reverse($zeilen), 0, $anzahl);
 }
+
+/* ==================================================================
+ * MQTT-Gateway
+ * ================================================================== */
 
 function hk_mqtt_broker()
 {
@@ -402,23 +583,50 @@ function hk_mqtt_broker()
         'lokal'     => (int) $hole('Uselocalbroker', 'uselocalbroker', 1) ? true : false,
         'autostart' => (int) $hole('Gatewayautostart', 'gatewayautostart', 1) ? true : false,
         'benutzer'  => trim((string) $hole('Brokeruser', 'brokeruser', '')),
+        // 0 = nicht lesbar. NICHT auf 1 vorbelegen: "unbekannt" und
+        // "Fassung 1" sind verschiedene Aussagen, und die Oberflaeche
+        // behandelt sie verschieden.
+        'fassung'   => isset($mqtt['Gatewayversion']) ? (int) $mqtt['Gatewayversion'] : 0,
     );
 }
+
+/**
+ * Fassung des MQTT-Gateways.
+ *
+ * Der Satz "Ohne diesen Eintrag kommt am Miniserver nichts an" gilt NUR fuer
+ * Gateway V1. Gemessen am LoxBerry-Kern (mqtt-gateway.cgi): unter V2
+ * schaltet der Kern auf der Abonnement-Seite die Knoepfe ab - von Hand
+ * eintragen kann man dort nichts mehr. Der unbedingte Satz schickte bis
+ * 1.2.11 jeden V2-Anwender zu einem Eingabefeld, das es nicht mehr gibt.
+ *
+ * Rueckgabe: 0 = nicht lesbar, sonst die Fassungsnummer.
+ */
+function hk_mqtt_fassung()
+{
+    $b = hk_mqtt_broker();
+    return $b === null ? 0 : (int) $b['fassung'];
+}
+
+/* ==================================================================
+ * Aufrufe nach bin/
+ * ================================================================== */
 
 /** Einen Befehl von bin/hk_cmd.py ausfuehren. */
 function hk_cmd($argumente)
 {
-    $bin = hk_paths()['bin'] . '/hk_cmd.py';
+    return hk_cmd_python('hk_cmd.py', (array) $argumente);
+}
+
+/** Ein Python-Programm aus bin/ aufrufen. */
+function hk_cmd_python($datei, $argumente = array())
+{
+    $bin = hk_paths()['bin'] . '/' . $datei;
     if (!is_readable($bin)) {
-        return array(1, 'hk_cmd.py nicht gefunden: ' . $bin);
+        return array(1, hk_tf('FEHLER.BIN_FEHLT', array('%1' => $datei, '%2' => $bin)));
     }
-    $teile = array('python3', $bin);
+    $befehl = escapeshellarg('python3') . ' ' . escapeshellarg($bin) . ' ';
     foreach ((array) $argumente as $a) {
-        $teile[] = $a;
-    }
-    $befehl = '';
-    foreach ($teile as $t) {
-        $befehl .= escapeshellarg($t) . ' ';
+        $befehl .= escapeshellarg($a) . ' ';
     }
     $aus = array();
     $code = 0;
@@ -427,36 +635,110 @@ function hk_cmd($argumente)
 }
 
 /* ==================================================================
- * MQTT-Themen
+ * MQTT-Themen und Aktionen - aus bin/hk_themen.json
+ *
+ * EINE Quelle fuer den Dienst, die Themen-Tabelle und die Loxone-Vorlage.
+ * Bis 1.2.11 standen die Themen zweimal: als Woerterbuch in hk_service.py
+ * und als Feld in dieser Datei.
  * ================================================================== */
 
 function hk_themen()
 {
-    return array(
-        'service/online'    => '1 = der Dienst l&auml;uft',
-        'last_error'        => 'letzte Fehlermeldung, sonst leer',
-        'beamer/aktiv'      => '1 = der Beamer ist in den Einstellungen eingeschaltet',
-        'beamer/erreichbar' => '1 = der Beamer antwortet auf Port 9761',
-        'beamer/status'     => 'an, aus oder unbekannt',
-        'beamer/an'         => '1 = der Beamer l&auml;uft',
-        'beamer/app'        => 'laufende Quelle, z. B. HDMI1',
-        'xbox/aktiv'        => '1 = die Xbox ist in den Einstellungen eingeschaltet',
-        'xbox/status'       => 'Zustandstext der Cloud, z. B. On oder ConnectedStandby',
-        'xbox/an'           => '1 = die Konsole l&auml;uft',
-        'xbox/angemeldet'   => '1 = die Anmeldung bei Microsoft ist g&uuml;ltig',
-        'xbox/geheimnis_ablauf' => 'Ablaufdatum des Clientgeheimnisses, JJJJ-MM-TT',
-        'xbox/geheimnis_tage'   => 'Tage bis zum Ablauf; negativ = abgelaufen, leer = kein Datum hinterlegt',
-    );
+    static $t = null;
+    if ($t !== null) {
+        return $t;
+    }
+    $t = array();
+    $roh = @file_get_contents(hk_paths()['themen']);
+    $j = $roh === false ? null : json_decode($roh, true);
+    $sprache = hk_sprache();
+    if (is_array($j) && isset($j['themen']) && is_array($j['themen'])) {
+        foreach ($j['themen'] as $e) {
+            if (!is_array($e) || empty($e['thema'])) { continue; }
+            $t[(string) $e['thema']] = array(
+                'art'     => isset($e['art']) ? (string) $e['art'] : 'text',
+                'min'     => isset($e['min']) ? (int) $e['min'] : 0,
+                'max'     => isset($e['max']) ? (int) $e['max'] : 0,
+                'einheit' => isset($e['einheit']) ? (string) $e['einheit'] : '',
+                'text'    => isset($e[$sprache]) ? (string) $e[$sprache]
+                             : (isset($e['en']) ? (string) $e['en'] : ''),
+            );
+        }
+    }
+    return $t;
 }
 
+/** Aktionen des Endpunkts: Name => Sprachschluessel der Beschriftung.
+ *
+ * Diese Liste ist zugleich die Weissliste des Aktionsendpunkts und die
+ * Quelle der Loxone-Vorlage fuer die virtuellen Ausgaenge. Was hier nicht
+ * steht, wird abgewiesen.
+ */
 function hk_aktionen()
 {
     return array(
-        'beamer-aus'  => 'Beamer ausschalten',
-        'beamer-wol'  => 'Beamer per Wake-on-LAN einschalten',
-        'xbox-an'     => 'Xbox wecken',
-        'xbox-aus'    => 'Xbox ausschalten',
+        'beamer-aus'       => 'AKTION.BEAMER_AUS',
+        'beamer-wol'       => 'AKTION.BEAMER_WOL',
+        // Bild aus, ohne das Geraet auszuschalten - fuer eine Pause, die
+        // Tuerklingel oder Licht an. Bei einem Beamer der Unterschied
+        // zwischen einer Sekunde und einem Lampenanlauf.
+        'beamer-bild-aus'  => 'AKTION.BEAMER_BILD_AUS',
+        'beamer-bild-an'   => 'AKTION.BEAMER_BILD_AN',
+        'beamer-stumm-an'  => 'AKTION.BEAMER_STUMM_AN',
+        'beamer-stumm-aus' => 'AKTION.BEAMER_STUMM_AUS',
+        'xbox-an'          => 'AKTION.XBOX_AN',
+        'xbox-aus'         => 'AKTION.XBOX_AUS',
+        // Die Szene laeuft im Dienst ab, nicht im Endpunkt: der Beamer nimmt
+        // nur eine Verbindung zur Zeit an, und ein virtueller Ausgang in
+        // Loxone hat ein Zeitlimit, das kuerzer ist als der Ablauf.
+        'kino-an'          => 'AKTION.KINO_AN',
+        'kino-aus'         => 'AKTION.KINO_AUS',
     );
+}
+
+/** Aktionen mit Wert - hier steht kein fertiger Befehl, sondern ein Muster. */
+function hk_aktionen_mit_wert()
+{
+    return array(
+        'beamer-taste'       => 'AKTION.BEAMER_TASTE',
+        'beamer-eingang'     => 'AKTION.BEAMER_EINGANG',
+        'beamer-lautstaerke' => 'AKTION.BEAMER_LAUTSTAERKE',
+        'beamer-bildmodus'   => 'AKTION.BEAMER_BILDMODUS',
+        'beamer-energie'     => 'AKTION.BEAMER_ENERGIE',
+        'beamer-app'         => 'AKTION.BEAMER_APP',
+    );
+}
+
+/**
+ * Die zulaessigen Werte fuer Eingang, Bildmodus und Energiesparstufe.
+ *
+ * Gefragt wird bin/lg_beamer.py --woerter, NICHT eine zweite Liste hier.
+ * Die Woerter stammen aus src/constants/TV.ts der Vorlage; sie ein zweites
+ * Mal zu fuehren waere die naechste zweite Wahrheit.
+ *
+ * Antwortet das Programm nicht, gibt es ein leeres Feld - dann zeigt die
+ * Oberflaeche ein Textfeld statt einer Auswahl und sagt das auch. Eine
+ * geratene Liste waere schlechter als keine.
+ */
+function hk_woerter()
+{
+    static $w = null;
+    if ($w !== null) {
+        return $w;
+    }
+    $w = array();
+    list($code, $aus) = hk_cmd_python('lg_beamer.py', array('--woerter'));
+    if ($code === 0) {
+        $j = json_decode($aus, true);
+        if (is_array($j)) {
+            foreach ($j as $art => $liste) {
+                if (is_array($liste)) {
+                    $w[(string) $art] = array_values(array_map('strval', $liste));
+                }
+            }
+        }
+    }
+    return $w;
 }
 
 /* ==================================================================
@@ -464,12 +746,31 @@ function hk_aktionen()
  *
  * Nachbau von LoxBerry::LoxoneTemplateBuilder; das Modul gibt es nur in
  * Perl. Attributreihenfolge, CRLF als Zeilenende und der Tabulator vor den
- * Kindelementen entsprechen dem Original.
+ * Kindelementen entsprechen den massgeblichen Ausfuhren aus Loxone Config.
  * ================================================================== */
 
 function hk_x($s)
 {
     return htmlspecialchars((string) $s, ENT_QUOTES | ENT_XML1, 'UTF-8');
+}
+
+/** Rechnername des LoxBerry - EINE Stelle fuer Anzeige und Vorlage. */
+function hk_hostname()
+{
+    // Bis 1.2.11 nahm die Anzeige gethostname() und die Vorlage
+    // $_SERVER['HTTP_HOST'] - zwei Quellen fuer dieselbe Adresse, die hinter
+    // einem Reverse Proxy oder bei abweichendem Port auseinanderlaufen.
+    // Massgeblich ist der Name, unter dem der Bediener die Seite gerade
+    // aufgerufen hat; er ist der einzige, von dem belegt ist, dass er
+    // funktioniert. Nur was gar nicht da ist, faellt auf gethostname zurueck.
+    $host = isset($_SERVER['HTTP_HOST']) ? trim((string) $_SERVER['HTTP_HOST']) : '';
+    // Nicht filtern, sondern abweisen: ein Host-Kopf, der nicht auf das
+    // Muster passt, ist keiner - dann lieber der eigene Rechnername.
+    if ($host !== '' && preg_match('/^[A-Za-z0-9._-]+(:[0-9]{1,5})?$/', $host)) {
+        return $host;
+    }
+    $eigen = gethostname();
+    return $eigen ? $eigen : 'loxberry';
 }
 
 function hk_xml_virtual_in_http($kopf, $cmds)
@@ -482,22 +783,27 @@ function hk_xml_virtual_in_http($kopf, $cmds)
     $o .= 'Address="' . hk_x(isset($kopf['address']) ? $kopf['address'] : '') . '" ';
     $o .= 'PollingTime="' . hk_x(isset($kopf['polling']) ? $kopf['polling'] : '60') . '"';
     $o .= '>' . $crlf;
-    $o .= "\t" . '<Info templateType="2" minVersion="17010727"/>' . $crlf; // wie Original-Export aus Loxone Config 17.1
+    $o .= "\t" . '<Info templateType="2" minVersion="17010727"/>' . $crlf;
     foreach ($cmds as $c) {
         $o .= "\t" . '<VirtualInHttpCmd ';
         $o .= 'Title="' . hk_x($c['title']) . '" ';
         $o .= 'Comment="' . hk_x(isset($c['comment']) ? $c['comment'] : '') . '" ';
         $o .= 'Check="' . hk_x(isset($c['check']) ? $c['check'] : ' ') . '" ';
         $o .= 'Signed="true" ';
-        $o .= 'Analog="true" ';
+        $o .= 'Analog="' . ($c['analog'] ? 'true' : 'false') . '" ';
         $o .= 'SourceValLow="0" ';
         $o .= 'DestValLow="0" ';
         $o .= 'SourceValHigh="100" ';
         $o .= 'DestValHigh="100" ';
         $o .= 'DefVal="0" ';
-        $o .= 'MinVal="-2147483647" ';
-        $o .= 'MaxVal="2147483647" ';
-        $o .= 'Unit="' . hk_x(isset($c['unit']) ? $c['unit'] : '<v>') . '" ';
+        // Grenzen NICHT pauschal auf +-2147483647: Loxone zieht daraus die
+        // Reglergrenzen und die Plausibilitaetspruefung. Und ein Feld, das
+        // negativ werden kann (Tage bis zum Ablauf), braucht ein negatives
+        // MinVal - sonst steht in der Visualisierung 0, und 0 heisst dort
+        // "heute" statt "abgelaufen".
+        $o .= 'MinVal="' . (int) $c['min'] . '" ';
+        $o .= 'MaxVal="' . (int) $c['max'] . '" ';
+        $o .= 'Unit="' . hk_x($c['unit']) . '" ';
         $o .= 'HintText=""';
         $o .= '/>' . $crlf;
     }
@@ -510,56 +816,77 @@ function hk_vorlage($cfg)
 {
     $praefix = hk_cfg($cfg, 'heimkino', 'themenpraefix', 'heimkino');
     $cmds = array();
-    foreach (hk_themen() as $thema => $bedeutung) {
+    foreach (hk_themen() as $thema => $e) {
+        // Textthemen bleiben draussen. Das nachgebaute Format ist nur fuer
+        // ZAHLENwerte belegt; bis 1.2.11 landeten last_error, beamer/status,
+        // beamer/app, xbox/status und das Ablaufdatum mit Analog="true" und
+        // Zahlengrenzen in der Datei.
+        if ($e['art'] === 'text') { continue; }
         $cmds[] = array(
             'title'   => $praefix . '_' . str_replace('/', '_', $thema),
-            'comment' => $bedeutung,
+            'comment' => $e['text'],
             'check'   => ' ',
+            'analog'  => ($e['art'] === 'analog'),
+            'min'     => $e['min'],
+            'max'     => $e['max'],
+            'unit'    => $e['einheit'] !== '' ? $e['einheit'] : '<v.1>',
         );
     }
-    return array('heimkino_eingaenge.xml', hk_xml_virtual_in_http(array(
-        'title'   => 'Heimkino',
-        'address' => 'http://localhost',
+    return array('VI_Heimkino.xml', hk_xml_virtual_in_http(array(
+        'title'   => 'Heimkino (LoxBerry-Plugin)',
+        'address' => 'http://' . hk_hostname(),
         'polling' => '604800',
-        'comment' => 'Erzeugt vom LoxBerry-Plugin Heimkino (' . date('d.m.Y') . ')',
+        'comment' => hk_tf('LOX.VORLAGE_KOMMENTAR', array('%1' => date('d.m.Y'))),
     ), $cmds));
 }
 
-
-/** Vorlage der Steuerbefehle (Virtueller Ausgang) - Format wie Original-Export aus Loxone Config 17.1. */
+/** Vorlage der Steuerbefehle (Virtueller Ausgang). */
 function hk_vo_vorlage($cfg)
 {
-    $host = isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== ''
-        ? preg_replace('/[^A-Za-z0-9\.\-:]/', '', (string) $_SERVER['HTTP_HOST'])
-        : (gethostname() ?: 'loxberry');
-    $ordner = getenv('LBPPLUGINDIR') ?: 'heimkino';
+    $host = hk_hostname();
+    $ordner = hk_paths()['plugin'];
     $tok = hk_cfg($cfg, 'heimkino', 'aktionstoken', '');
-    $aktionen = array(
-        array('Beamer ausschalten', 'beamer-aus'),
-        array('Beamer einschalten (Wake on LAN)', 'beamer-wol'),
-        array('Xbox einschalten', 'xbox-an'),
-        array('Xbox ausschalten', 'xbox-aus'),
-    );
     $crlf = "\r\n";
     $o = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
-    $o .= '<VirtualOut HintText="" Title="Heimkino steuern (LoxBerry-Plugin)" Comment="Aktionsaufrufe ueber das Plugin ' . hk_x($ordner) . ' - enthaelt das Aktionstoken." Address="http://' . hk_x($host) . '" CmdInit="" CloseAfterSend="true" CmdSep="">' . $crlf;
+    $o .= '<VirtualOut HintText="" Title="Heimkino steuern (LoxBerry-Plugin)" '
+        . 'Comment="' . hk_x(hk_t('LOX.VO_KOMMENTAR')) . '" '
+        . 'Address="http://' . hk_x($host) . '" CmdInit="" CloseAfterSend="true" CmdSep="">' . $crlf;
     $o .= "\t" . '<Info templateType="3" minVersion="17010727"/>' . $crlf;
-    foreach ($aktionen as $a) {
-        $o .= "\t" . '<VirtualOutCmd Title="' . hk_x($a[0]) . '" Comment="" CmdOnMethod="GET" CmdOffMethod="GET" ';
-        $o .= 'CmdOn="' . hk_x('/plugins/' . $ordner . '/index.php?token=' . $tok . '&aktion=' . $a[1]) . '" ';
+    foreach (hk_aktionen() as $aktion => $schluessel) {
+        $o .= "\t" . '<VirtualOutCmd Title="' . hk_x(hk_t($schluessel)) . '" Comment="" CmdOnMethod="GET" CmdOffMethod="GET" ';
+        $o .= 'CmdOn="' . hk_x(hk_aktionsadresse($cfg, $aktion)) . '" ';
         $o .= 'CmdOnHTTP="" CmdOnPost="" CmdOff="" CmdOffHTTP="" CmdOffPost="" CmdAnswer="" ';
         $o .= 'Analog="false" Repeat="0" RepeatRate="0" HintText=""/>' . $crlf;
     }
     $o .= '</VirtualOut>' . $crlf;
-    return array('heimkino_steuerbefehle.xml', $o);
+    return array('VQ_Heimkino.xml', $o);
+}
+
+/** Vollstaendige Aufrufadresse einer Aktion, wie sie in Loxone gehoert. */
+function hk_aktionsadresse($cfg, $aktion, $wert = null)
+{
+    $token = hk_cfg($cfg, 'heimkino', 'aktionstoken', '');
+    $a = '/plugins/' . hk_paths()['plugin'] . '/index.php?token='
+       . rawurlencode($token) . '&aktion=' . rawurlencode($aktion);
+    if ($wert !== null) {
+        $a .= '&wert=' . rawurlencode($wert);
+    }
+    return $a;
+}
+
+/** Die Selbsttest-Adresse - dieselbe Bauart, damit sie nie abweicht. */
+function hk_selftestadresse($cfg)
+{
+    $token = hk_cfg($cfg, 'heimkino', 'aktionstoken', '');
+    return '/plugins/' . hk_paths()['plugin'] . '/index.php?selftest=1&token='
+         . rawurlencode($token);
 }
 
 /* ==================================================================
  * Xbox - Anmeldedatei
  *
  * Anwendungskennung und Token liegen getrennt von der Konfiguration in
- * xbox_auth.json mit Rechten 0600. Bewusst nicht ueber die Kommandozeile
- * uebergeben: Argumente sind in der Prozessliste sichtbar.
+ * xbox_auth.json mit Rechten 0600.
  * ================================================================== */
 
 define('HK_RUECKLEITUNG', 'http://localhost/auth/callback');
@@ -577,24 +904,17 @@ function hk_xbox_auth_lesen()
 
 function hk_xbox_auth_schreiben($daten)
 {
-    $datei = hk_paths()['auth'];
-    $ordner = dirname($datei);
-    if (!is_dir($ordner)) {
-        @mkdir($ordner, 0755, true);
-    }
     // json_encode liefert bei ungueltigem UTF-8 FALSE, und
     // file_put_contents($pfad, false) schreibt daraufhin 0 Bytes - und gibt
-    // 0 zurueck, nicht false. Bis 1.1.1 haette die alte Pruefung das fuer
-    // einen Erfolg gehalten und rename() haette die geleerte Datei ueber die
-    // gueltige gezogen: die Azure-Refresh-Token waeren weg gewesen, und die
-    // gesamte Microsoft-Anmeldung muesste von vorn beginnen. Deshalb wird
-    // das Ergebnis der Kodierung HIER geprueft, vor dem Schreiben.
+    // 0 zurueck, nicht false. Deshalb wird das Ergebnis der Kodierung HIER
+    // geprueft, vor dem Schreiben; sonst zoege rename() die geleerte Datei
+    // ueber die gueltige und die Azure-Refresh-Token waeren weg.
     $js = json_encode($daten, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
                               | JSON_UNESCAPED_UNICODE);
     if ($js === false) {
         return false;
     }
-    return hk_datei_ersetzen($datei, $js, 0600);
+    return hk_datei_ersetzen(hk_paths()['auth'], $js, 0600);
 }
 
 /** Anwendungskennung hinterlegen, vorhandene Token behalten. */
@@ -610,6 +930,18 @@ function hk_xbox_app_speichern($client_id, $client_secret, $rueckleitung = '')
     $daten['redirect_uri'] = trim((string) $rueckleitung) !== ''
         ? trim((string) $rueckleitung) : HK_RUECKLEITUNG;
     return hk_xbox_auth_schreiben($daten);
+}
+
+/**
+ * Den Autorisierungscode fuer hk_cmd.py hinterlegen.
+ *
+ * Rechte 0600, und die Datei wird von hk_cmd.py nach dem Lesen geloescht.
+ * Bis 1.2.11 ging der Code als Argument ueber die Kommandozeile hinaus und
+ * stand damit in der Prozessliste.
+ */
+function hk_xbox_code_hinterlegen($code)
+{
+    return hk_datei_ersetzen(hk_paths()['code'], (string) $code, 0600);
 }
 
 /**
@@ -645,29 +977,23 @@ function hk_xbox_zustand()
         'geheim'       => !empty($daten['client_secret']),
         'angemeldet'   => !empty($daten['refresh_token']),
         'client_id'    => isset($daten['client_id']) ? $daten['client_id'] : '',
+        'dienst'       => isset($daten['dienst']) ? (string) $daten['dienst'] : 'live',
         'rueckleitung' => isset($daten['redirect_uri'])
                           ? $daten['redirect_uri'] : HK_RUECKLEITUNG,
     );
 }
 
-/** Vollst&auml;ndige Aufrufadresse einer Aktion, wie sie in Loxone geh&ouml;rt. */
-function hk_aktionsadresse($cfg, $aktion)
-{
-    $token = hk_cfg($cfg, 'heimkino', 'aktionstoken', '');
-    $host = gethostname();
-    if (!$host) { $host = 'loxberry'; }
-    return '/plugins/' . hk_paths()['plugin'] . '/index.php?token='
-         . rawurlencode($token) . '&aktion=' . rawurlencode($aktion);
-}
-
 /* ==================================================================
  * Form der Anmeldedaten beurteilen
  *
- * Die h&auml;ufigste Verwechslung: aus der Tabelle unter
- * "Zertifikate & Geheimnisse" wird die Spalte "Geheime ID" kopiert statt der
- * Spalte "Wert". Beides sind lange Zeichenketten, aber die Geheime ID ist eine
- * GUID mit vier Bindestrichen - das l&auml;sst sich erkennen, ohne das Geheimnis
+ * Die haeufigste Verwechslung: aus der Tabelle unter "Zertifikate &
+ * Geheimnisse" wird die Spalte "Geheime ID" kopiert statt der Spalte "Wert".
+ * Beides sind lange Zeichenketten, aber die Geheime ID ist eine GUID mit
+ * vier Bindestrichen - das laesst sich erkennen, ohne das Geheimnis
  * anzuzeigen.
+ *
+ * Diese Funktionen geben nur noch die BEURTEILUNG zurueck, keinen Text.
+ * Den Satz dazu holt die Oberflaeche aus der Sprachdatei.
  * ================================================================== */
 
 function hk_ist_guid($s)
@@ -678,70 +1004,48 @@ function hk_ist_guid($s)
 }
 
 /**
- * Beurteilt das gespeicherte Geheimnis. Gibt array(art, text) zur&uuml;ck.
+ * Beurteilt das gespeicherte Geheimnis. Gibt array(art, laenge) zurueck.
  * art: 'ok' | 'guid' | 'kurz' | 'leer'
  */
 function hk_geheimnis_form($wert)
 {
     $wert = (string) $wert;
     if (trim($wert) === '') {
-        return array('leer', 'Es ist kein Geheimnis gespeichert.');
+        return array('leer', 0);
     }
     if (hk_ist_guid($wert)) {
-        return array('guid',
-            'Das gespeicherte Geheimnis ist eine GUID (8-4-4-4-12 Zeichen mit vier '
-            . 'Bindestrichen). So sieht die Spalte <b>Geheime ID</b> aus, nicht die '
-            . 'Spalte <b>Wert</b>. Genau diese Verwechslung f&uuml;hrt zu '
-            . '<span class="sm-mono">invalid_client</span>.');
+        return array('guid', strlen($wert));
     }
     $laenge = strlen($wert);
-    if ($laenge < 20) {
-        return array('kurz', 'Das gespeicherte Geheimnis ist nur ' . $laenge
-            . ' Zeichen lang. Ein Wert aus Azure hat gut 40. Wahrscheinlich ist '
-            . 'beim Kopieren etwas abgeschnitten worden.');
-    }
-    return array('ok', 'L&auml;nge ' . $laenge . ' Zeichen, keine GUID-Form &mdash; '
-        . 'das sieht nach der Spalte <b>Wert</b> aus.');
+    return array($laenge < 20 ? 'kurz' : 'ok', $laenge);
 }
 
-/* ==================================================================
- * Restlaufzeit des Azure-Clientgeheimnisses
- *
- * Azure vergibt f&uuml;r einen geheimen Clientschl&uuml;ssel h&ouml;chstens 24 Monate.
- * L&auml;uft er ab, meldet Microsoft invalid_client und die Konsole l&auml;sst sich
- * nicht mehr aus Loxone wecken - zwei Jahre nach der Einrichtung, wenn niemand
- * mehr daran denkt. Deshalb wird das Datum hinterlegt und ausgewertet, statt
- * sich darauf zu verlassen, dass man es im Kopf beh&auml;lt.
- *
- * Gibt array(art, tage, text) zur&uuml;ck.
- * art: 'leer' | 'ok' | 'bald' | 'abgelaufen'
- * ================================================================== */
-
+/**
+ * Restlaufzeit des Azure-Clientgeheimnisses. Gibt array(art, tage, datum).
+ * art: 'leer' | 'unlesbar' | 'ok' | 'bald' | 'abgelaufen'
+ */
 function hk_ablauf_lage($datum)
 {
     $datum = trim((string) $datum);
     if ($datum === '') {
-        return array('leer', null,
-            'Kein Ablaufdatum hinterlegt &mdash; ohne Datum kann das Plugin nicht warnen.');
+        return array('leer', null, '');
+    }
+    if (!preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $datum)) {
+        return array('unlesbar', null, $datum);
     }
     $zeit = strtotime($datum . ' 23:59:59');
     if ($zeit === false) {
-        return array('leer', null, 'Das eingetragene Ablaufdatum ist unlesbar.');
+        return array('unlesbar', null, $datum);
     }
     $tage = (int) floor(($zeit - time()) / 86400);
-    $hin  = date('d.m.Y', $zeit);
+    $hin = date('d.m.Y', $zeit);
     if ($tage < 0) {
-        return array('abgelaufen', $tage,
-            'Das Clientgeheimnis ist am <b>' . $hin . '</b> abgelaufen. Bis ein neues '
-            . 'eingetragen ist, l&auml;sst sich die Konsole nicht mehr aus Loxone wecken.');
+        return array('abgelaufen', $tage, $hin);
     }
     if ($tage <= 60) {
-        return array('bald', $tage,
-            'Das Clientgeheimnis l&auml;uft am <b>' . $hin . '</b> ab &mdash; in ' . $tage
-            . ' Tagen. Jetzt ein neues anlegen und die Anmeldung wiederholen.');
+        return array('bald', $tage, $hin);
     }
-    return array('ok', $tage,
-        'Clientgeheimnis g&uuml;ltig bis <b>' . $hin . '</b> (' . $tage . ' Tage).');
+    return array('ok', $tage, $hin);
 }
 
 /** Vorschlag fuer das Ablaufdatum: heute plus 24 Monate, das Azure-Hoechstmass. */
@@ -751,21 +1055,268 @@ function hk_ablauf_vorschlag()
 }
 
 /* ==================================================================
+ * Selbstpruefung - Zeilen, die etwas ueber das PLUGIN aussagen
+ *
+ * Jede gibt array(zustand, text) zurueck:
+ *   1 = in Ordnung, 0 = Befund, 2 = nicht feststellbar.
+ *
+ * "Nicht feststellbar" ist ausdruecklich ein eigener Zustand. Ein "ich kann
+ * es nicht messen" darf nicht aussehen wie "in Ordnung".
+ *
+ * Jede Zeile, die eine MENGE beurteilt, nennt die Zahl der angesehenen
+ * Stellen. Eine Null ist dann kein Haken, sondern der Hinweis, dass nichts
+ * gemessen wurde.
+ * ================================================================== */
+
+/**
+ * Setzt der Server das sm-active - an der Leiste UND an den Bereichen?
+ *
+ * Ohne das ist die Seite ohne JavaScript vollstaendig leer, denn .sm-seite
+ * steht auf display:none. Und: die zusammengesetzte Klasse macht
+ * hausstandard_pruefen.py blind ("nicht pruefbar"), was sich beim
+ * Ueberfliegen wie ein Haken einsammelt. Wer eine Pruefung blind macht,
+ * ERSETZT sie.
+ */
+function hk_smactive_probe()
+{
+    $datei = __DIR__ . '/index.php';
+    if (!is_file($datei)) {
+        return array(2, '0');
+    }
+    $s = (string) @file_get_contents($datei);
+    $anzahl = preg_match_all('/data-ziel="tab-([a-z]+)"/', $s, $y);
+    $leiste = preg_match_all('/class="sm-tab<\?=[^>]*sm-active/', $s);
+    $bereiche = preg_match_all('/class="sm-seite<\?=[^>]*sm-active/', $s);
+    if ($anzahl > 0 && $leiste >= $anzahl && $bereiche >= $anzahl) {
+        return array(1, $anzahl . '/' . $anzahl);
+    }
+    return array(0, $leiste . ' / ' . $bereiche . ' / ' . $anzahl);
+}
+
+/** Tragen alle Formulare das Merkmal gegen fremde Absender? */
+function hk_formularprobe()
+{
+    $datei = __DIR__ . '/index.php';
+    if (!is_file($datei)) {
+        return array(2, '0/0');
+    }
+    $s = (string) @file_get_contents($datei);
+    $gesamt = 0;
+    $ohne = 0;
+    if (preg_match_all('/<form\s/', $s, $y, PREG_OFFSET_CAPTURE)) {
+        foreach ($y[0] as $f) {
+            $gesamt++;
+            $ende = strpos($s, '</form>', $f[1]);
+            $blk = substr($s, $f[1], ($ende === false ? 400 : $ende - $f[1]));
+            if (strpos($blk, 'name="fmt"') === false) { $ohne++; }
+        }
+    }
+    // Die leere Menge zuerst: "alle 0 von 0 sind in Ordnung" ist kein Haken.
+    if ($gesamt === 0) {
+        return array(0, '0/0');
+    }
+    return array($ohne > 0 ? 0 : 1, ($gesamt - $ohne) . '/' . $gesamt);
+}
+
+/** Passen Reiterleiste, Bereiche und Positivliste zusammen? */
+function hk_kongruenz_probe()
+{
+    $datei = __DIR__ . '/index.php';
+    if (!is_file($datei)) {
+        return array(2, '0');
+    }
+    $s = (string) @file_get_contents($datei);
+    preg_match_all('/data-ziel="(tab-[a-z]+)"/', $s, $leiste);
+    preg_match_all('/id="(tab-[a-z]+)"/', $s, $bereiche);
+    $liste = array();
+    if (preg_match('/\$hk_reiter\s*=\s*array\(([^)]*)\)/', $s, $m)) {
+        preg_match_all("/'(tab-[a-z]+)'/", $m[1], $x);
+        $liste = $x[1];
+    }
+    $a = $leiste[1];
+    $b = $bereiche[1];
+    if (!$liste || !$a || !$b) {
+        return array(0, count($liste) . ' / ' . count($a) . ' / ' . count($b));
+    }
+    $gleich = ($liste === $a && $a === $b);
+    return array($gleich ? 1 : 0,
+                 count($liste) . ' / ' . count($a) . ' / ' . count($b));
+}
+
+/**
+ * Nennt die Themen-Tabelle genau das, was der Dienst wirklich sendet?
+ *
+ * Gefragt wird der DIENST (--themen), nicht die Datei - sonst prueft die
+ * Zeile die Quelle gegen sich selbst.
+ */
+function hk_themen_probe()
+{
+    list($code, $aus) = hk_cmd_python('hk_service.py', array('--themen'));
+    $gesendet = $code === 0 ? json_decode($aus, true) : null;
+    if (!is_array($gesendet)) {
+        return array(2, '0');
+    }
+    $gezeigt = array_keys(hk_themen());
+    sort($gezeigt);
+    sort($gesendet);
+    if ($gezeigt === $gesendet) {
+        return array(1, (string) count($gesendet));
+    }
+    $fehlt = array_diff($gesendet, $gezeigt);
+    $zuviel = array_diff($gezeigt, $gesendet);
+    return array(0, count($gezeigt) . '/' . count($gesendet) . ' '
+                 . implode(' ', array_merge($fehlt, $zuviel)));
+}
+
+/** Kennen Oberflaeche und Dienst dieselben Vorgaben? */
+function hk_vorgaben_probe()
+{
+    list($code, $aus) = hk_cmd_python('hk_service.py', array('--vorgaben'));
+    $dienst = $code === 0 ? json_decode($aus, true) : null;
+    if (!is_array($dienst)) {
+        return array(2, '0');
+    }
+    $hier = hk_vorgaben();
+    $zahl = 0;
+    foreach ($hier as $werte) { $zahl += count($werte); }
+    return array($hier == $dienst ? 1 : 0, (string) $zahl);
+}
+
+/** Ist die Konfiguration vollstaendig? */
+function hk_vollstaendig_probe()
+{
+    $vorgaben = hk_vorgaben();
+    $gesamt = 0;
+    foreach ($vorgaben as $werte) { $gesamt += count($werte); }
+    if ($gesamt === 0) {
+        return array(2, '0');
+    }
+    $fehlen = hk_cfg_fehlende();
+    if (!$fehlen) {
+        return array(1, $gesamt . '/' . $gesamt);
+    }
+    return array(0, ($gesamt - count($fehlen)) . '/' . $gesamt . ': '
+                 . implode(', ', $fehlen));
+}
+
+/**
+ * Wirkt die Geraetesperre?
+ *
+ * Sie verhindert, dass Dienst und Einzelbefehl gleichzeitig mit dem Beamer
+ * sprechen - das Geraet nimmt nur EINE Verbindung zur Zeit an. Ohne einen
+ * Unterbau (fcntl auf dem LoxBerry) wird nicht gesperrt, und dann soll das
+ * hier stehen statt angenommen zu werden.
+ */
+function hk_sperre_probe()
+{
+    list($code, $aus) = hk_cmd_python('hk_sperre.py', array('--unterbau'));
+    $u = trim($aus);
+    if ($code !== 0) {
+        return array(2, '');
+    }
+    return array($u !== '' ? 1 : 0, $u);
+}
+
+/** Sind die erzeugbaren Loxone-Vorlagen wohlgeformt? */
+function hk_vorlagen_probe($cfg)
+{
+    if (!function_exists('simplexml_load_string')) {
+        return array(2, '0');
+    }
+    $zahl = 0;
+    foreach (array(hk_vorlage($cfg), hk_vo_vorlage($cfg)) as $paar) {
+        $zahl++;
+        $vorher = libxml_use_internal_errors(true);
+        $ok = simplexml_load_string($paar[1]);
+        libxml_clear_errors();
+        libxml_use_internal_errors($vorher);
+        if ($ok === false) {
+            return array(0, $paar[0]);
+        }
+    }
+    return array(1, (string) $zahl);
+}
+
+/**
+ * fsockopen, ohne dass ein gesetzter Fehlerbehandler etwas zu sehen bekommt.
+ *
+ * Ein @ unterdrueckt nur die AUSGABE. Wer einen eigenen Fehlerbehandler
+ * gesetzt hat - jeder Pruefstand tut das -, bekommt die Warnung trotzdem und
+ * meldet sie als Befund. Dabei ist ein Ziel, das nicht antwortet, hier der
+ * erwartete Fall: der Beamer ist im Tiefschlaf, oder auf dem Pruefstand
+ * horcht kein Webserver. Deshalb bekommt der Aufruf seinen eigenen
+ * Behandler, der schweigt, und gibt danach den alten zurueck.
+ */
+function hk_socket($host, $port, &$nr, &$txt, $zeitgrenze)
+{
+    set_error_handler(function () { return true; });
+    $fp = fsockopen($host, $port, $nr, $txt, $zeitgrenze);
+    restore_error_handler();
+    return $fp;
+}
+
+/**
+ * Antwortet der eigene Endpunkt?
+ *
+ * Ein ECHTER Aufruf auf 127.0.0.1 - nur der findet die getrennten Baeume,
+ * die keine Leseprobe sieht. Genau dieses Plugin war der Anlass der Regel:
+ * bis 1.2.10 antwortete der Endpunkt IMMER mit einem leeren HTTP 500, und
+ * beide Loxone-Ausgaenge hatten seit jeher nichts bewirkt.
+ *
+ * Das Ergebnis wird 300 s zwischengespeichert, sonst ruft sich der
+ * Webserver bei jedem Klick selbst auf - und alle Reiter werden dabei
+ * mitgerendert. Die Zeitgrenze ist bewusst kurz: der Bediener soll nicht
+ * vor einer leeren Seite warten, gerade wenn etwas nicht stimmt.
+ */
+function hk_endpunkt_probe($cfg, $hoechstalter = 300)
+{
+    $speicher = hk_paths()['probe'];
+    if (is_readable($speicher)) {
+        $alt = json_decode((string) @file_get_contents($speicher), true);
+        if (is_array($alt) && isset($alt['zeit'])
+            && (time() - (int) $alt['zeit']) < $hoechstalter) {
+            return array((int) $alt['zustand'], (string) $alt['text']);
+        }
+    }
+    $token = hk_cfg($cfg, 'heimkino', 'aktionstoken', '');
+    if ($token === '') {
+        return array(2, 'KEIN_TOKEN');
+    }
+    $port = isset($_SERVER['SERVER_PORT']) ? (int) $_SERVER['SERVER_PORT'] : 80;
+    if ($port < 1 || $port > 65535) { $port = 80; }
+    $pfad = hk_selftestadresse($cfg);
+    $ergebnis = array(2, 'KEINE_ANTWORT');
+    $fp = hk_socket('127.0.0.1', $port, $nr, $txt, 3);
+    if ($fp) {
+        stream_set_timeout($fp, 3);
+        fwrite($fp, "GET " . $pfad . " HTTP/1.0\r\n"
+                  . "Host: 127.0.0.1\r\n"
+                  . "Connection: close\r\n\r\n");
+        $antwort = '';
+        while (!feof($fp) && strlen($antwort) < 8192) {
+            $stueck = fread($fp, 2048);
+            if ($stueck === false || $stueck === '') { break; }
+            $antwort .= $stueck;
+        }
+        fclose($fp);
+        if ($antwort !== '') {
+            $ergebnis = (strpos($antwort, 'SELFTEST;OK=1;TOKEN=OK') !== false)
+                ? array(1, 'OK')
+                : array(0, trim(substr(strrchr($antwort, "\n"), 0, 120)));
+        }
+    }
+    @hk_datei_ersetzen($speicher, json_encode(array(
+        'zeit' => time(), 'zustand' => $ergebnis[0], 'text' => $ergebnis[1])), 0640);
+    return $ergebnis;
+}
+
+/* ==================================================================
  * Version des Plugins
  *
  * Wird NICHT fest eingetragen. Bis 1.0.2 stand die Nummer als Text in
  * index.php - und blieb bei jedem Release stehen: die Oberflaeche zeigte
  * 1.0.0, obwohl 1.0.2 lief. Eine Versionsnummer an zwei Stellen ist eine
  * Stelle zu viel.
- *
- * Massgeblich ist die Plugindatenbank von LoxBerry. Dort steht, was bei der
- * Installation aus plugin.cfg uebernommen wurde - also genau das, was der
- * Benutzer wirklich installiert hat, und nicht das, woran jemand beim
- * Veroeffentlichen gedacht hat.
- *
- * Laesst sich die Version nicht ermitteln, wird eine leere Zeichenkette
- * zurueckgegeben und in der Oberflaeche gar keine Nummer angezeigt. Keine
- * Angabe ist besser als eine falsche.
  * ================================================================== */
 
 function hk_version()
@@ -786,8 +1337,7 @@ function hk_version()
     }
 
     // 2. Weg: die Plugindatenbank unmittelbar lesen. Greift auch dann, wenn
-    // das SDK nicht eingebunden ist - etwa beim Aufruf ausserhalb der
-    // LoxBerry-Oberflaeche.
+    // das SDK nicht eingebunden ist.
     if ($v === '') {
         $db = hk_paths()['home'] . '/data/system/plugindatabase.json';
         if (is_readable($db)) {

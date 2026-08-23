@@ -5,6 +5,11 @@
 # Das Plugin fasst keine Systemdatei an. Der Dienst braucht keine Rootrechte:
 # er spricht nur TCP 9761 zum Beamer und HTTPS zur Xbox-Cloud. Deshalb laeuft
 # er als loxberry.
+#
+# Gestartet wird ueber bin/dienst.sh - dieselbe Stelle, die auch der
+# minuetliche Waechter und die Oberflaeche benutzen. Bis 1.2.11 stand hier
+# ein eigener nohup-Aufruf: eine zweite Startstelle mit eigenen Annahmen,
+# und der Sollmerker fuer den Waechter wurde dabei gar nicht gesetzt.
 
 pluginname=REPLACELBPPLUGINDIR
 pluginbindir=REPLACELBPBINDIR
@@ -16,7 +21,18 @@ if [ -x /usr/bin/logger ]; then
 fi
 
 mkdir -p "$logdir" 2>/dev/null
+# Das Verzeichnis wird hier als root angelegt, der Dienst laeuft aber als
+# loxberry. Ohne diesen Besitzerwechsel scheitert die Umleitung nach $log in
+# der su-Shell - und weil die Zeile ihre Ausgabe verwirft und das Skript
+# unbedingt mit 0 endet, saehe das von aussen nach einem gelungenen Start
+# aus. log/plugins liegt auf einer Ramdisk und ist nach jedem Neustart neu.
+chown loxberry:loxberry "$logdir" 2>/dev/null
+touch "$log" 2>/dev/null
+chown loxberry:loxberry "$log" 2>/dev/null
 
-su loxberry -c "nohup $pluginbindir/hk_service.py >> $log 2>&1 &" >/dev/null 2>&1
+# Der Start selbst darf sprechen: LoxBerry sammelt die Ausgabe eines Daemons
+# ein. Eine verworfene Fehlermeldung ist der Grund, warum der
+# Abfahrts-Assistent acht Fassungen lang scheinbar startete.
+su loxberry -c "/bin/bash '$pluginbindir/dienst.sh' start" 2>&1
 
 exit 0

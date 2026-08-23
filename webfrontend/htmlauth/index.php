@@ -1,69 +1,127 @@
 <?php
 /**
  * Heimkino - Admin-Oberflaeche
+ * Reiter: Einstellungen | MQTT | Einbindung in Loxone | Test | Logdateien
  *
  * Die Versionsnummer steht hier bewusst NICHT. Sie kommt aus der
  * Plugindatenbank von LoxBerry, siehe hk_version() in hk_lib.php.
- * Reiter: Einstellungen | Einbindung in Loxone | Test | Logdateien
+ *
+ * WICHTIG: LBWeb::lbheader() setzt SDK-Globals (u.a. $cfg als stdClass) und
+ * wuerde gleichnamige Plugin-Variablen ueberschreiben - deshalb tragen hier
+ * ALLE Variablen ein hk_-Praefix.
  *
  * Kompatibel mit PHP 7.4 und PHP 8.x (LoxBerry 3.x/4.x).
  */
 
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
-ini_set('display_errors', '1');
+// '0', nicht '1'. Eine PHP-Warnung mitten in der Seite nennt Pfade und
+// Zeilennummern und verschiebt das Markup; der unangemeldete Endpunkt macht
+// es seit jeher richtig.
+ini_set('display_errors', '0');
 
 require_once __DIR__ . '/hk_lib.php';
 
 $hk_p = hk_paths();
-if ($hk_p['home']) {
-    $sdk = $hk_p['home'] . '/libs/phplib/loxberry_system.php';
-    if (file_exists($sdk)) {
-        require_once $sdk;
-        require_once $hk_p['home'] . '/libs/phplib/loxberry_web.php';
-    }
+if ($hk_p['home'] !== '' && file_exists($hk_p['home'] . '/libs/phplib/loxberry_system.php')) {
+    require_once $hk_p['home'] . '/libs/phplib/loxberry_system.php';
+    require_once $hk_p['home'] . '/libs/phplib/loxberry_web.php';
+    $hk_p = hk_paths();   // nach dem Einbinden neu holen
 }
 
 $hk_saved   = false;
 $hk_fehler  = array();   // alle Beanstandungen, nicht nur die letzte
-$hk_hinweis = '';
-/* Wer einen Reiter hinzufuegt, muss DREI Stellen mitziehen: die
-   Reiterleiste, den Bereich (sm-pane mit gleicher id) und diese
-   Positivliste. Fehlt der Name hier, springt die Seite nach jedem Absenden
-   zurueck auf Einstellungen. */
-$hk_muster = '/^tab-(settings|mqtt|loxone|test|log)$/';
-$hk_tab = preg_match($hk_muster,
-                     (string) (isset($_POST['activetab']) ? $_POST['activetab'] : ''))
-    ? (string) $_POST['activetab'] : 'tab-settings';
-// Die Reiter sind echte Verweise. Wer sie anklickt oder ein Lesezeichen
-// darauf setzt, landet ueber ?form= im richtigen Bereich - auch dann, wenn
-// im Browser kein JavaScript laeuft. Bis 1.1.1 waren es <div>-Elemente, und
-// sm-active setzte ausschliesslich das JavaScript: ohne JavaScript stand
-// jeder Bereich auf display:none, die Seite war also LEER.
-if (isset($_GET['form'])) {
-    $hk_wunsch = 'tab-' . preg_replace('/[^a-z]/', '', (string) $_GET['form']);
-    if (preg_match($hk_muster, $hk_wunsch)) { $hk_tab = $hk_wunsch; }
-}
-/** Klasse fuer den gerade sichtbaren Reiter bzw. Bereich. */
-function hk_aktiv($id) { global $hk_tab; return $hk_tab === $id ? ' sm-active' : ''; }
+$hk_hinweis = array();
 
 $hk_cfg = hk_config_read();
 
+/* ==================================================================
+ * Aktionstoken beim ersten Oeffnen erzeugen.
+ *
+ * Es steckt in den Adressen im Miniserver - danach wird es nur auf
+ * ausdruecklichen Wunsch neu gewuerfelt. Und es ist die Wurzel des
+ * Formularmerkmals unten, muss also VOR dem Wachposten feststehen.
+ * ================================================================== */
+if (trim((string) hk_cfg($hk_cfg, 'heimkino', 'aktionstoken', '')) === ''
+    && hk_config_lage() !== 'keine_vorgaben') {
+    try {
+        $hk_cfg['heimkino']['aktionstoken'] = hk_token_erzeugen();
+        hk_config_write($hk_cfg);
+        $hk_cfg = hk_config_read();
+    } catch (RuntimeException $e) {
+        // Lieber gar kein Token als ein erratbares: der Aktionsendpunkt
+        // weist dann jeden Aufruf ab, und das ist die richtige Antwort.
+        $hk_fehler[] = hk_tf('FEHLER.KEIN_ZUFALL', array('%1' => hk_e($e->getMessage())));
+    }
+}
+
+/* ==================================================================
+ * Wachposten gegen fremde Absender - VOR allen Handlern.
+ *
+ * htmlauth/ schuetzt gegen den unangemeldeten Aufruf, NICHT dagegen, dass
+ * der Browser eines ANGEMELDETEN Bedieners ein Formular abschickt, das auf
+ * einer fremden Seite steht: die Anmeldung schickt er automatisch mit,
+ * SameSite greift nicht. Ohne dieses Merkmal liesse sich von aussen
+ * "Neues Token erzeugen" ausloesen - danach beantwortet der Endpunkt jeden
+ * virtuellen Ausgang mit 403, und ein virtueller Ausgang wertet die Antwort
+ * nicht aus: der Ausfall bliebe still.
+ *
+ * Einen einzelnen Handler kann man beim Erweitern vergessen, einen
+ * Wachposten am Eingang nicht.
+ * ================================================================== */
+$hk_fmt = hk_formtoken($hk_cfg);
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $hk_csrf_ok = true;
+    if ($hk_fmt === '') {
+        $hk_csrf_ok = false;
+        $hk_fehler[] = hk_t('FEHLER.CSRF_KEIN_TOKEN');
+    } elseif (!hk_formtoken_ok($hk_cfg)) {
+        $hk_csrf_ok = false;
+        $hk_fehler[] = hk_t('FEHLER.CSRF');
+    }
+    if (!$hk_csrf_ok) {
+        // $_POST leeren, damit danach KEIN Handler mehr anlaeuft, ohne dass
+        // jeder einzelne davon wissen muesste. Den aktiven Reiter behalten -
+        // die Meldung soll dort stehen, wo der Bediener war.
+        $hk_behalten = isset($_POST['activetab']) ? $_POST['activetab'] : null;
+        $_POST = array();
+        if ($hk_behalten !== null) { $_POST['activetab'] = $hk_behalten; }
+    }
+}
+
+/* Aktiver Reiter. Die Positivliste steht ausgeschrieben - so findet
+ * hausstandard_pruefen.py sie; dass sie von Leiste und Bereichen abweichen
+ * KANN, ist der Preis, und dagegen steht keine Hoffnung, sondern die
+ * Pruefzeile "Passen Reiterleiste, Bereiche und Positivliste zusammen?" im
+ * Reiter Test. */
+$hk_reiter = array('tab-settings', 'tab-mqtt', 'tab-loxone', 'tab-test', 'tab-log');
+$hk_tab = 'tab-settings';
+if (isset($_POST['activetab']) && is_string($_POST['activetab'])
+    && in_array((string) $_POST['activetab'], $hk_reiter, true)) {
+    $hk_tab = (string) $_POST['activetab'];
+} elseif (isset($_GET['form']) && is_string($_GET['form'])
+          && in_array('tab-' . (string) $_GET['form'], $hk_reiter, true)) {
+    $hk_tab = 'tab-' . (string) $_GET['form'];
+}
+
 /* ============ Loxone-Vorlage herunterladen ============ */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['download'])) {
-    list($name, $inhalt) = $_POST['download'] === 'vo' && function_exists('hk_vo_vorlage')
+    list($hk_dname, $hk_dinhalt) = $_POST['download'] === 'vo'
         ? hk_vo_vorlage($hk_cfg)
         : hk_vorlage($hk_cfg);
     header('Content-Type: application/x-download');
-    header('Content-Disposition: attachment; filename=' . $name);
-    header('Content-Length: ' . strlen($inhalt));
-    echo $inhalt;
+    // Die Anfuehrungszeichen um den Dateinamen sind Pflicht: ohne sie
+    // bricht jeder Name, der ein Leerzeichen enthaelt.
+    header('Content-Disposition: attachment; filename="' . $hk_dname . '"');
+    header('Content-Length: ' . strlen($hk_dinhalt));
+    echo $hk_dinhalt;
     exit;
 }
 
 /* ============ Test-Aktionen ============ */
 $hk_test_titel = '';
 $hk_test_text  = '';
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['test'])) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['test'])
+    && is_string($_POST['test'])) {
     require_once __DIR__ . '/hk_test.php';
     list($hk_test_titel, $hk_test_text) = hk_test_ausfuehren((string) $_POST['test']);
     $hk_tab = 'tab-test';
@@ -71,39 +129,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['test'])) {
 
 /* ============ Xbox: Anwendungskennung ============ */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['xbox_app'])) {
-    $geheim = isset($_POST['client_secret']) ? trim((string) $_POST['client_secret']) : '';
+    $hk_geheim = isset($_POST['client_secret']) ? trim((string) $_POST['client_secret']) : '';
     // Eine GUID kann nicht die Spalte "Wert" sein. Lieber hier abweisen als
     // den Benutzer in ein invalid_client von Microsoft laufen lassen.
-    if ($geheim !== '' && hk_ist_guid($geheim)) {
-        $hk_fehler[] = 'Das eingegebene Geheimnis ist eine GUID und damit die Spalte '
-            . '<b>Geheime ID</b>. Gebraucht wird die Spalte <b>Wert</b> aus derselben '
-            . 'Zeile. Sie ist nur unmittelbar nach dem Anlegen sichtbar &mdash; sonst '
-            . 'ein neues Geheimnis anlegen und das alte l&ouml;schen.';
-        $geheim = '';
+    //
+    // Beanstandet wird NUR diese eine Zeile: die gueltige Anwendungskennung
+    // und die Umleitungs-URI werden trotzdem gespeichert. Bis 1.2.11
+    // verhinderte eine Beanstandung das ganze Speichern.
+    if ($hk_geheim !== '' && hk_ist_guid($hk_geheim)) {
+        $hk_fehler[] = hk_t('FEHLER.GEHEIMNIS_GUID');
+        $hk_geheim = '';
     }
-    $ok = $hk_fehler ? false : hk_xbox_app_speichern(
+    $hk_ok = hk_xbox_app_speichern(
         isset($_POST['client_id']) ? $_POST['client_id'] : '',
-        $geheim,
+        $hk_geheim,
         isset($_POST['rueckleitung']) ? $_POST['rueckleitung'] : '');
-    $hk_hinweis = $ok
-        ? 'Anwendungskennung gespeichert. Jetzt der Anmeldung folgen.'
-        : '';
-    if (!$ok && !$hk_fehler) {
-        $hk_fehler[] = 'Die Anmeldedatei konnte nicht geschrieben werden: '
-                  . hk_e($hk_p['auth']);
+    if ($hk_ok) {
+        $hk_hinweis[] = hk_t('MELD.KENNUNG_GESPEICHERT');
+    } else {
+        $hk_fehler[] = hk_tf('FEHLER.AUTH_SCHREIBEN', array('%1' => hk_e($hk_p['auth'])));
     }
     // Wurde ein neues Geheimnis hinterlegt und steht noch kein Ablaufdatum in
     // der Konfiguration, wird das Azure-Hoechstmass von 24 Monaten eingetragen.
     // Niemand soll sich einen Termin zwei Jahre im Voraus merken muessen.
-    if ($ok && $geheim !== ''
+    if ($hk_ok && $hk_geheim !== ''
         && trim(hk_cfg($hk_cfg, 'xbox', 'geheimnis_ablauf', '')) === '') {
-        $mit_datum = $hk_cfg;
-        $mit_datum['xbox']['geheimnis_ablauf'] = hk_ablauf_vorschlag();
-        if (hk_config_write($mit_datum)) {
+        $hk_mit = $hk_cfg;
+        $hk_mit['xbox']['geheimnis_ablauf'] = hk_ablauf_vorschlag();
+        if (hk_config_write($hk_mit)) {
             $hk_cfg = hk_config_read();
-            $hk_hinweis .= ' Als Ablauf wurden 24 Monate eingetragen ('
-                . hk_e(date('d.m.Y', strtotime(hk_cfg($hk_cfg, 'xbox', 'geheimnis_ablauf', ''))))
-                . '). Wer in Azure eine k&uuml;rzere Frist gew&auml;hlt hat, korrigiert das unten.';
+            $hk_hinweis[] = hk_tf('MELD.FRIST_EINGETRAGEN', array(
+                '%1' => hk_e(date('d.m.Y', strtotime(hk_cfg($hk_cfg, 'xbox', 'geheimnis_ablauf', ''))))));
         }
     }
     $hk_tab = 'tab-settings';
@@ -111,16 +167,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['xbox_app'])) {
 
 /* ============ Xbox: Code einloesen ============ */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['xbox_code'])) {
-    $code = trim((string) (isset($_POST['code']) ? $_POST['code'] : ''));
-    if ($code === '') {
-        $hk_fehler[] = 'Es wurde kein Code und keine Adresse eingegeben.';
+    $hk_code = trim((string) (isset($_POST['code']) ? $_POST['code'] : ''));
+    if ($hk_code === '') {
+        $hk_fehler[] = hk_t('FEHLER.KEIN_CODE');
+    } elseif (!hk_xbox_code_hinterlegen($hk_code)) {
+        $hk_fehler[] = hk_tf('FEHLER.CODE_SCHREIBEN', array('%1' => hk_e($hk_p['code'])));
     } else {
-        list($code_r, $ausgabe) = hk_cmd(array('xbox-code', $code));
-        if ($code_r === 0) {
-            $hk_hinweis = 'Anmeldung bei Microsoft erfolgreich. Jetzt im '
-                        . 'Reiter Test die Konsolen suchen.';
+        // Der Code geht ueber eine Datei mit Rechten 0600, NICHT als
+        // Argument: Argumente stehen in /proc/<pid>/cmdline und sind fuer
+        // jeden lokalen Benutzer lesbar. Zusammen mit dem Clientgeheimnis
+        // laesst sich aus dem Code ein Erneuerungstoken loesen.
+        list($hk_rc, $hk_aus) = hk_cmd(array('xbox-code'));
+        if ($hk_rc === 0) {
+            $hk_hinweis[] = hk_t('MELD.ANMELDUNG_OK');
         } else {
-            $hk_fehler[] = 'Die Anmeldung hat nicht geklappt: ' . hk_e($ausgabe);
+            $hk_fehler[] = hk_tf('FEHLER.ANMELDUNG', array('%1' => hk_e($hk_aus)));
         }
     }
     $hk_tab = 'tab-settings';
@@ -128,147 +189,255 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['xbox_code'])) {
 
 /* ============ Xbox: Anmeldung loeschen ============ */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['xbox_vergessen'])) {
-    list($code_r, $ausgabe) = hk_cmd(array('xbox-vergessen'));
-    $hk_hinweis = $code_r === 0 ? 'Anmeldung gel&ouml;scht.' : '';
-    if ($code_r !== 0) { $hk_fehler[] = hk_e($ausgabe); }
+    list($hk_rc, $hk_aus) = hk_cmd(array('xbox-vergessen'));
+    if ($hk_rc === 0) {
+        $hk_hinweis[] = hk_t('MELD.ANMELDUNG_GELOESCHT');
+    } else {
+        $hk_fehler[] = hk_e($hk_aus);
+    }
+    $hk_tab = 'tab-settings';
+}
+
+/* ============ MQTT speichern - eigener Handler, eigener Reiter ============
+ *
+ * MQTT wohnt vollstaendig im Reiter MQTT (Beschluss 14.08.2026). Bis 1.2.11
+ * lagen Haken und Themenpraefix im Einstellungsformular, waehrend der
+ * MQTT-Reiter kein einziges Eingabefeld hatte.
+ */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_mqtt'])) {
+    $hk_neu = $hk_cfg;
+    $hk_neu['heimkino']['mqtt'] = isset($_POST['mqtt']) ? '1' : '0';
+
+    $hk_praefix_roh = isset($_POST['themenpraefix']) && is_string($_POST['themenpraefix'])
+        ? trim((string) $_POST['themenpraefix']) : '';
+    // ABWEISEN, nicht zurechtbiegen. Bis 1.2.11 wurden unerlaubte Zeichen
+    // stillschweigend entfernt und ein vollstaendig weggefilterter Wert
+    // wortlos auf "heimkino" zurueckgesetzt - damit aenderten sich in einem
+    // Zug alle MQTT-Themen, das einzutragende Abo und saemtliche Titel der
+    // virtuellen Eingaenge, und der Bediener sah nur "gespeichert".
+    if ($hk_praefix_roh === '') {
+        $hk_fehler[] = hk_t('FEHLER.PRAEFIX_LEER');
+    } elseif (!preg_match('#^[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*$#', $hk_praefix_roh)) {
+        $hk_fehler[] = hk_t('FEHLER.PRAEFIX');
+    } else {
+        $hk_neu['heimkino']['themenpraefix'] = $hk_praefix_roh;
+    }
+
+    if (hk_config_write($hk_neu)) {
+        $hk_saved = true;
+        $hk_cfg = hk_config_read();
+        $hk_pid_neu = hk_dienst('restart');
+        $hk_hinweis[] = $hk_pid_neu ? hk_t('MELD.DIENST_NEU') : hk_t('MELD.DIENST_AUS');
+    } else {
+        $hk_fehler[] = hk_tf('FEHLER.CFG_SCHREIBEN', array('%1' => hk_e($hk_p['config'])));
+    }
+    $hk_tab = 'tab-mqtt';
+}
+
+/* ============ Dienst steuern ============ */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['dienst'])
+    && is_string($_POST['dienst'])
+    && in_array($_POST['dienst'], array('start', 'stop', 'restart'), true)) {
+    $hk_pid_neu = hk_dienst((string) $_POST['dienst']);
+    $hk_hinweis[] = $hk_pid_neu
+        ? hk_tf('PRUEF.DIENST_JA', array('%1' => (string) $hk_pid_neu))
+        : hk_t('PRUEF.DIENST_NEIN');
     $hk_tab = 'tab-settings';
 }
 
 /* ============ Einstellungen speichern ============ */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
-    $neu = $hk_cfg;
+    $hk_neu = $hk_cfg;
 
-    $saeubern = function ($s) {
-        return trim(preg_replace('/[\x00-\x1F\x7F"\']+/u', '', (string) $s));
+    /* Steuerzeichen entfernen - und zwar OHNE /u.
+     *
+     * Bis 1.2.11 stand hier preg_replace('/[\x00-\x1F\x7F"\']+/u', ...). Mit
+     * /u gibt preg_replace bei ungueltigem UTF-8 NULL zurueck, trim(null)
+     * ergibt '' - und ein aus einer Latin-1-Quelle eingefuegtes Zeichen
+     * loeschte das ganze Feld, waehrend die Seite "gespeichert" meldete.
+     * Der Zweig "war da, ist jetzt weg" konnte das nicht auffangen, weil
+     * der Ausgangswert selbst schon leer war.
+     */
+    $hk_saeubern = function ($s) {
+        if (!is_string($s)) { return ''; }
+        return trim(preg_replace('/[\x00-\x1F\x7F"\']+/', '', $s));
     };
-    $ganz = function ($wert, $vorgabe, $min, $max) {
-        if (!is_numeric($wert)) { return (string) $vorgabe; }
+    $hk_ganz = function ($wert, $vorgabe, $min, $max, &$fehler, $schluessel) {
+        if (!is_string($wert) && !is_numeric($wert)) { return (string) $vorgabe; }
+        if (!preg_match('/^-?[0-9]+$/', trim((string) $wert))) {
+            $fehler[] = hk_t($schluessel);
+            return (string) $vorgabe;
+        }
         $n = (int) $wert;
-        return ($n >= $min && $n <= $max) ? (string) $n : (string) $vorgabe;
+        if ($n < $min || $n > $max) {
+            $fehler[] = hk_t($schluessel);
+            return (string) $vorgabe;
+        }
+        return (string) $n;
     };
 
-    $neu['heimkino']['enabled']   = isset($_POST['enabled']) ? '1' : '0';
-    $neu['heimkino']['mqtt']      = isset($_POST['mqtt']) ? '1' : '0';
-    $neu['heimkino']['intervall'] = $ganz($_POST['intervall'] ?? '', 60, 10, 3600);
+    $hk_neu['heimkino']['enabled'] = isset($_POST['enabled']) ? '1' : '0';
+    $hk_neu['heimkino']['nachfassen'] = isset($_POST['nachfassen']) ? '1' : '0';
+    $hk_neu['heimkino']['intervall'] = $hk_ganz(
+        isset($_POST['intervall']) ? $_POST['intervall'] : '',
+        hk_cfg($hk_cfg, 'heimkino', 'intervall', '60'), 10, 3600,
+        $hk_fehler, 'FEHLER.INTERVALL');
 
-    $praefix = preg_replace('/[^A-Za-z0-9_\/-]+/', '',
-                            $saeubern($_POST['themenpraefix'] ?? ''));
-    $neu['heimkino']['themenpraefix'] = $praefix !== '' ? $praefix : 'heimkino';
-
-    // Token einmal erzeugen und dann behalten. Wer es neu wuerfelt, muss die
-    // Adressen in Loxone anpassen - deshalb nur auf ausdruecklichen Wunsch.
-    if (isset($_POST['token_neu']) || $neu['heimkino']['aktionstoken'] === '') {
-        // hk_token_erzeugen() bricht seit 1.2.0 mit einer Ausnahme ab, wenn
-        // das System keinen sicheren Zufall liefert. Abgefangen wird sie
-        // HIER - sonst zerlegte sie die Oberflaeche mitten im Speichern, und
-        // zwar an einer Stelle, an der niemand danach sucht.
+    // Token nur auf ausdruecklichen Wunsch neu wuerfeln - es steckt in den
+    // Adressen im Miniserver.
+    if (isset($_POST['token_neu'])) {
         try {
-            $neu['heimkino']['aktionstoken'] = hk_token_erzeugen();
-            if (isset($_POST['token_neu'])) {
-                $hk_hinweis = 'Neues Aktionstoken erzeugt. Die Adressen im '
-                            . 'Miniserver m&uuml;ssen angepasst werden.';
-            }
+            $hk_neu['heimkino']['aktionstoken'] = hk_token_erzeugen();
+            $hk_hinweis[] = hk_t('MELD.TOKEN_NEU');
         } catch (RuntimeException $e) {
-            // Lieber gar kein Token als ein erratbares: der Aktionsendpunkt
-            // weist dann jeden Aufruf ab, und das ist die richtige Antwort.
-            $neu['heimkino']['aktionstoken'] = '';
-            $hk_fehler[] = 'Es liess sich kein sicheres Aktionstoken erzeugen ('
-                         . hk_e($e->getMessage()) . '). Ohne Token weist der '
-                         . 'Aktionsendpunkt jeden Aufruf ab - das ist Absicht, '
-                         . 'denn ein erratbares Token waere schlimmer als keines.';
+            $hk_fehler[] = hk_tf('FEHLER.KEIN_ZUFALL', array('%1' => hk_e($e->getMessage())));
         }
     }
 
     /* --- Beamer --- */
-    $neu['beamer']['aktiv'] = isset($_POST['beamer_aktiv']) ? '1' : '0';
+    $hk_neu['beamer']['aktiv'] = isset($_POST['beamer_aktiv']) ? '1' : '0';
 
-    $ip = $saeubern($_POST['beamer_ip'] ?? '');
-    $neu['beamer']['ip'] = ($ip === '' || preg_match('/^[A-Za-z0-9._-]+$/', $ip))
-        ? $ip : '';
-    if ($ip !== '' && $neu['beamer']['ip'] === '') {
-        $hk_fehler[] = 'Die IP-Adresse des Beamers sieht nicht wie eine Adresse '
-                  . 'oder ein Rechnername aus und wurde verworfen.';
-    }
-
-    $mac = strtoupper(preg_replace('/[^0-9A-Fa-f]/', '',
-                                   $saeubern($_POST['beamer_mac'] ?? '')));
-    if ($mac === '') {
-        $neu['beamer']['mac'] = '';
-    } elseif (strlen($mac) === 12) {
-        $neu['beamer']['mac'] = implode(':', str_split($mac, 2));
+    $hk_ip = $hk_saeubern(isset($_POST['beamer_ip']) ? $_POST['beamer_ip'] : '');
+    if ($hk_ip === '' || preg_match('/^[A-Za-z0-9._-]+$/', $hk_ip)) {
+        $hk_neu['beamer']['ip'] = $hk_ip;
     } else {
-        $neu['beamer']['mac'] = '';
-        $hk_fehler[] = 'Die MAC-Adresse hat nicht 12 Hexstellen und wurde verworfen.';
+        $hk_fehler[] = hk_t('FEHLER.BEAMER_IP');
     }
 
-    $key = strtoupper($saeubern($_POST['beamer_keycode'] ?? ''));
-    if ($key === '' || preg_match('/^[A-Z0-9]{8}$/', $key)) {
-        $neu['beamer']['keycode'] = $key;
+    // Die MAC wird zur Anzeige in Zweiergruppen gesetzt - das ist eine
+    // Darstellungsfrage und keine Umschrift des Wertes: Hexziffern sind
+    // gross wie klein derselbe Wert, und die Trennzeichen sind bedeutungslos.
+    // Anders als beim Keycode, wo genau diese acht Zeichen in die
+    // Schluesselableitung gehen.
+    $hk_mac_roh = $hk_saeubern(isset($_POST['beamer_mac']) ? $_POST['beamer_mac'] : '');
+    if ($hk_mac_roh === '') {
+        $hk_neu['beamer']['mac'] = '';
+    } elseif (preg_match('/^[0-9A-Fa-f]{2}([:.-]?[0-9A-Fa-f]{2}){5}$/', $hk_mac_roh)) {
+        $hk_hex = strtoupper(preg_replace('/[^0-9A-Fa-f]/', '', $hk_mac_roh));
+        $hk_neu['beamer']['mac'] = implode(':', str_split($hk_hex, 2));
     } else {
-        $hk_fehler[] = 'Der Keycode muss aus genau 8 Zeichen A-Z und 0-9 bestehen. '
-                  . 'Der alte Wert bleibt stehen.';
+        $hk_fehler[] = hk_t('FEHLER.BEAMER_MAC');
     }
 
-    $neu['beamer']['port']       = $ganz($_POST['beamer_port'] ?? '', 9761, 1, 65535);
-    $neu['beamer']['zeitgrenze'] = $ganz($_POST['beamer_zeitgrenze'] ?? '', 5, 1, 60);
+    // Der Keycode wird NICHT grossgeschrieben, sondern geprueft. Aus genau
+    // diesen acht Zeichen leitet PBKDF2 den Schluessel ab; eine stille
+    // Umschrift waere eine Umschrift des Schluessels. Die Vorlage
+    // (lgtv-ip-control) prueft ebenfalls /[A-Z0-9]{8}/ und wandelt nichts.
+    $hk_key = $hk_saeubern(isset($_POST['beamer_keycode']) ? $_POST['beamer_keycode'] : '');
+    if ($hk_key === '' || preg_match('/^[A-Z0-9]{8}$/', $hk_key)) {
+        $hk_neu['beamer']['keycode'] = $hk_key;
+    } else {
+        $hk_fehler[] = hk_t('FEHLER.BEAMER_KEYCODE');
+    }
+
+    $hk_neu['beamer']['port'] = $hk_ganz(
+        isset($_POST['beamer_port']) ? $_POST['beamer_port'] : '',
+        hk_cfg($hk_cfg, 'beamer', 'port', '9761'), 1, 65535,
+        $hk_fehler, 'FEHLER.BEAMER_PORT');
+    $hk_neu['beamer']['zeitgrenze'] = $hk_ganz(
+        isset($_POST['beamer_zeitgrenze']) ? $_POST['beamer_zeitgrenze'] : '',
+        hk_cfg($hk_cfg, 'beamer', 'zeitgrenze', '5'), 1, 60,
+        $hk_fehler, 'FEHLER.BEAMER_ZEITGRENZE');
+    $hk_neu['beamer']['zusatzwerte'] = isset($_POST['beamer_zusatzwerte']) ? '1' : '0';
+
+    /* --- Kino-Szene ---
+     *
+     * Eingang und Bildmodus werden gegen die Wortliste der Vorlage gehalten,
+     * nicht gegen ein Muster: ein Wert, den das Geraet nicht kennt, kaeme als
+     * unlesbare Antwort zurueck statt als Fehler. Leer heisst "diesen Schritt
+     * ueberspringen". Laesst sich die Liste nicht holen (lg_beamer.py nicht
+     * aufrufbar), wird nur die Form geprueft - und die Oberflaeche sagt das
+     * dann auch, statt eine Auswahl vorzutaeuschen, die sie nicht hat.
+     */
+    $hk_neu['szene']['aktiv'] = isset($_POST['szene_aktiv']) ? '1' : '0';
+    $hk_woerter_h = hk_woerter();
+    $hk_pruefe_wort = function ($feld, $art, $schluessel) use (&$hk_fehler, $hk_woerter_h) {
+        $w = isset($_POST[$feld]) && is_string($_POST[$feld]) ? trim((string) $_POST[$feld]) : '';
+        if ($w === '') { return ''; }
+        $liste = isset($hk_woerter_h[$art]) ? $hk_woerter_h[$art] : array();
+        if ($liste) {
+            if (in_array($w, $liste, true)) { return $w; }
+        } elseif (preg_match('/^[A-Za-z0-9_]{1,32}$/', $w)) {
+            return $w;
+        }
+        $hk_fehler[] = hk_tf($schluessel, array('%1' => hk_e($w),
+            '%2' => hk_e(implode(', ', $liste))));
+        return null;
+    };
+    $hk_se = $hk_pruefe_wort('szene_eingang', 'eingang', 'FEHLER.SZENE_EINGANG');
+    if ($hk_se !== null) { $hk_neu['szene']['eingang'] = $hk_se; }
+    $hk_sb = $hk_pruefe_wort('szene_bildmodus', 'bildmodus', 'FEHLER.SZENE_BILDMODUS');
+    if ($hk_sb !== null) { $hk_neu['szene']['bildmodus'] = $hk_sb; }
+    $hk_neu['szene']['warten_beamer'] = $hk_ganz(
+        isset($_POST['szene_warten_beamer']) ? $_POST['szene_warten_beamer'] : '',
+        hk_cfg($hk_cfg, 'szene', 'warten_beamer', '120'), 10, 600,
+        $hk_fehler, 'FEHLER.SZENE_WARTEN');
+    $hk_neu['szene']['warten_xbox'] = $hk_ganz(
+        isset($_POST['szene_warten_xbox']) ? $_POST['szene_warten_xbox'] : '',
+        hk_cfg($hk_cfg, 'szene', 'warten_xbox', '90'), 10, 600,
+        $hk_fehler, 'FEHLER.SZENE_WARTEN');
 
     /* --- Xbox --- */
-    $neu['xbox']['aktiv'] = isset($_POST['xbox_aktiv']) ? '1' : '0';
-    // Die Kennung ist eine undurchsichtige Zeichenkette. Sie wird deshalb
-    // NICHT in Grossbuchstaben gewandelt und es werden nur Zeichen entfernt,
-    // die in einer Adresse nichts zu suchen haben. Die erste Fassung warf
-    // Bindestriche weg und schrieb alles gross - das verdirbt eine gueltige
-    // Kennung, ohne dass man es sieht.
-    $kennung = $saeubern($_POST['xbox_geraete_id'] ?? '');
-    if ($kennung === '' || preg_match('/^[A-Za-z0-9._:-]{1,128}$/', $kennung)) {
-        $neu['xbox']['geraete_id'] = $kennung;
+    $hk_neu['xbox']['aktiv'] = isset($_POST['xbox_aktiv']) ? '1' : '0';
+    // Die Kennung ist eine undurchsichtige Zeichenkette. Sie wird NICHT in
+    // Grossbuchstaben gewandelt und es werden keine Zeichen entfernt. Die
+    // erste Fassung warf Bindestriche weg und schrieb alles gross - das
+    // verdirbt eine gueltige Kennung, ohne dass man es sieht.
+    $hk_kennung = $hk_saeubern(isset($_POST['xbox_geraete_id']) ? $_POST['xbox_geraete_id'] : '');
+    if ($hk_kennung === '' || preg_match('/^[A-Za-z0-9._:-]{1,128}$/', $hk_kennung)) {
+        $hk_neu['xbox']['geraete_id'] = $hk_kennung;
     } else {
-        $hk_fehler[] = 'Die XBOX-Netzwerk-Ger&auml;teidentit&auml;t enth&auml;lt Zeichen, die dort nicht '
-            . 'vorkommen k&ouml;nnen (erlaubt sind Buchstaben, Ziffern, Punkt, '
-            . 'Doppelpunkt, Bindestrich und Unterstrich). Der alte Wert bleibt stehen.';
+        $hk_fehler[] = hk_t('FEHLER.XBOX_ID');
     }
 
-    // Ablaufdatum des Azure-Clientgeheimnisses. Leer ist erlaubt - dann warnt
-    // das Plugin nicht. Ein unlesbares Datum wird abgewiesen, statt still eine
-    // Warnung zu verschlucken, die in zwei Jahren gebraucht wird.
-    $frist = trim((string) ($_POST['xbox_geheimnis_ablauf'] ?? ''));
-    if ($frist === '') {
-        $neu['xbox']['geheimnis_ablauf'] = '';
-    } elseif (preg_match('/^\d{4}-\d{2}-\d{2}$/', $frist)
-              && strtotime($frist) !== false) {
-        $neu['xbox']['geheimnis_ablauf'] = $frist;
+    // Ablaufdatum. Leer ist erlaubt - dann warnt das Plugin nicht. Ein
+    // unlesbares Datum wird abgewiesen, statt still eine Warnung zu
+    // verschlucken, die in zwei Jahren gebraucht wird.
+    $hk_frist = isset($_POST['xbox_geheimnis_ablauf']) && is_string($_POST['xbox_geheimnis_ablauf'])
+        ? trim((string) $_POST['xbox_geheimnis_ablauf']) : '';
+    if ($hk_frist === '') {
+        $hk_neu['xbox']['geheimnis_ablauf'] = '';
+    } elseif (preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $hk_frist)
+              && strtotime($hk_frist) !== false) {
+        $hk_neu['xbox']['geheimnis_ablauf'] = $hk_frist;
     } else {
-        $hk_fehler[] = 'Das Ablaufdatum des Clientgeheimnisses muss die Form '
-            . '<span class="sm-mono">JJJJ-MM-TT</span> haben. Der alte Wert bleibt stehen.';
+        $hk_fehler[] = hk_t('FEHLER.FRIST');
     }
 
-    if (hk_config_write($neu)) {
+    // Gespeichert wird IMMER, auch wenn eine Zeile beanstandet wurde: die
+    // beanstandete behaelt ihren alten Wert, alle uebrigen werden
+    // uebernommen. Wer alles verwirft, laesst den Bediener seine ganze
+    // Eingabe noch einmal machen.
+    if (hk_config_write($hk_neu)) {
         $hk_saved = true;
-        $pid = hk_dienst('restart');
-        if ($hk_hinweis === '') {
-            $hk_hinweis = $pid
-                ? 'Der Dienst wurde neu gestartet.'
-                : 'Der Dienst l&auml;uft nicht - siehe Reiter Logdateien.';
-        }
         $hk_cfg = hk_config_read();
+        $hk_fmt = hk_formtoken($hk_cfg);   // wechselt mit dem Aktionstoken
+        $hk_pid_neu = hk_dienst('restart');
+        $hk_hinweis[] = $hk_pid_neu ? hk_t('MELD.DIENST_NEU') : hk_t('MELD.DIENST_AUS');
     } else {
-        $hk_fehler[] = 'Die Konfigurationsdatei konnte nicht geschrieben werden: '
-                  . hk_e($hk_p['config']);
+        $hk_fehler[] = hk_tf('FEHLER.CFG_SCHREIBEN', array('%1' => hk_e($hk_p['config'])));
     }
+    $hk_tab = 'tab-settings';
 }
 
 /* ============ Anzeige vorbereiten ============ */
-$hk_ablauf      = hk_cfg($hk_cfg, 'xbox', 'geheimnis_ablauf', '');
-list($hk_ablauf_art, $hk_ablauf_tage, $hk_ablauf_text) = hk_ablauf_lage($hk_ablauf);
+hk_cfg_vervollstaendigen($hk_cfg);
+$hk_ablauf = hk_cfg($hk_cfg, 'xbox', 'geheimnis_ablauf', '');
+list($hk_ablauf_art, $hk_ablauf_tage, $hk_ablauf_datum) = hk_ablauf_lage($hk_ablauf);
 $hk_praefix = hk_cfg($hk_cfg, 'heimkino', 'themenpraefix', 'heimkino');
 $hk_pid     = hk_dienst_pid();
 $hk_z       = hk_zustand();
 $hk_alter   = hk_zustand_alter();
 $hk_broker  = hk_mqtt_broker();
-$hk_zeilen  = hk_log_tail();
+$hk_gwf     = hk_mqtt_fassung();
+$hk_zeilen  = hk_log_ende();
 $hk_xb      = hk_xbox_zustand();
 $hk_anmelde = hk_xbox_anmeldeadresse();
 $hk_token   = hk_cfg($hk_cfg, 'heimkino', 'aktionstoken', '');
+$hk_host    = hk_hostname();
+
+require_once __DIR__ . '/hk_test.php';
+$hk_pruefzeilen = hk_test_zeilen($hk_cfg);
 
 $hk_frame = class_exists('LBWeb', false);
 if ($hk_frame) {
@@ -276,96 +445,129 @@ if ($hk_frame) {
 }
 ?>
 <style>
+/* Hausstandard: eigener Behaelter, kein Schattenwurf, Reiter im Fluss.
+   Wortgleich aus VORLAGE_hausstandard.css.html uebernommen. */
 .sm-wrap { max-width: 980px; margin: 0 auto; font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; color: #333; }
-.sm-wrap, .sm-wrap * { text-shadow: none !important; }
+.sm-wrap, .sm-wrap *, .sm-tabs, .sm-tabs * { text-shadow: none !important; }
 .sm-wrap h2 { color: #6dac20; margin: 24px 0 10px; font-size: 1.15em; border-bottom: 2px solid #e0e0e0; padding-bottom: 6px; }
-.sm-wrap label { display: block; font-weight: 600; font-size: 0.88em; color: #555; margin: 10px 0 4px; }
-.sm-wrap input[type=text], .sm-wrap input[type=password], .sm-wrap input[type=number], .sm-wrap select {
-  width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 0.95em; box-sizing: border-box; }
-.sm-wrap input[type=checkbox] { width: 17px; height: 17px; margin: 0 6px 0 0; vertical-align: middle; }
-.sm-check { font-weight: 400 !important; font-size: 0.95em !important; color: #333 !important; }
-.sm-row { display: flex; gap: 12px; flex-wrap: wrap; }
-.sm-row > div { flex: 1; min-width: 180px; }
-/* Die Rahmen-CSS von LoxBerry (jQuery Mobile) formatiert jedes <button> mit
-   eigenem Hintergrund und eigenen Hover-Regeln. Ohne !important gewinnt sie,
-   und dann steht wei&szlig;e Schrift auf hellgrauem Grund - beim Ueberfahren sogar
-   wei&szlig; auf wei&szlig;. Deshalb hier durchgesetzt, samt eigener Hover-Farben. */
-.sm-wrap .sm-btn, .sm-wrap a.sm-btn, .sm-wrap button.sm-btn {
-  background: #6dac20 !important; color: #fff !important; border: 0 !important;
-  border-radius: 6px !important; padding: 10px 22px !important; font-size: 1em !important;
-  cursor: pointer; margin-top: 18px; font-weight: 600 !important;
-  text-shadow: none !important; box-shadow: none !important; opacity: 1 !important;
-  text-decoration: none !important; }
-.sm-wrap .sm-btn:hover, .sm-wrap a.sm-btn:hover, .sm-wrap button.sm-btn:hover,
-.sm-wrap .sm-btn:focus, .sm-wrap a.sm-btn:focus, .sm-wrap button.sm-btn:focus {
-  background: #5c9219 !important; color: #fff !important; }
-.sm-wrap button { box-shadow: none !important; }
-.sm-alert { border-radius: 8px; padding: 10px 14px; margin: 12px 0; }
-.sm-ok { background: #e8f5e9; border: 1px solid #a5d6a7; }
-.sm-err { background: #ffebee; border: 1px solid #ef9a9a; }
-.sm-info { background: #e3f2fd; border: 1px solid #90caf9; font-size: 0.9em; }
-.sm-mono { font-family: ui-monospace, monospace; background: #f5f5f5; padding: 2px 6px; border-radius: 4px; word-break: break-all; }
-.sm-small { font-size: 0.82em; color: #666; margin-top: 3px; }
-.sm-ok-text { color: #4f7d17; font-weight: 600; }
-.sm-err-text { color: #c62828; font-weight: 600; }
+.sm-wrap h3 { color: #4f7d17; font-size: 1.0em; font-weight: 700; margin: 16px 0 2px; }
 .sm-tabs { display: flex; gap: 4px; margin: 14px 0 0; border-bottom: 2px solid #6dac20; flex-wrap: wrap; }
-.sm-tab { background: #eee; border: 1px solid #ccc; border-bottom: 0; border-radius: 8px 8px 0 0; padding: 9px 18px; cursor: pointer; font-size: 0.95em; color: #444 !important;
-  display: inline-block; text-decoration: none !important; text-shadow: none !important; }
-.sm-tab:visited, .sm-tab:hover { text-decoration: none !important; }
+.sm-tab { background: #eee; border: 1px solid #ccc; border-bottom: 0; border-radius: 8px 8px 0 0;
+          padding: 9px 18px; font-size: 0.95em; color: #444 !important; text-decoration: none; display: inline-block; }
 .sm-tab.sm-active { background: #6dac20; color: #fff !important; border-color: #6dac20; font-weight: 600; }
-.sm-pane { display: none; padding-top: 4px; }
-.sm-pane.sm-active { display: block; }
-.sm-log { background: #1e1e1e; color: #d4d4d4; font-family: ui-monospace, monospace; font-size: 0.82em; padding: 12px; border-radius: 8px; max-height: 480px; overflow: auto; white-space: pre-wrap; }
-.sm-step { margin: 10px 0; padding: 10px 14px; background: #fafafa; border-left: 4px solid #6dac20; border-radius: 0 8px 8px 0; }
-.sm-tbl { border-collapse: collapse; margin: 8px 0; width: 100%; }
-.sm-tbl th, .sm-tbl td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; font-size: 0.9em; vertical-align: middle; }
-.sm-tbl th { background: #f0f0f0; }
-.sm-h3 { color: #4f7d17; font-size: 1.0em; font-weight: 700; margin: 16px 0 2px; }
+.sm-feld { margin: 14px 0; }
+.sm-feld > label { display: block; font-weight: 600; font-size: 0.9em; color: #555; margin: 0 0 4px; }
+/* Bedienelemente werden von jQuery Mobile umgebaut und bekommen einen eigenen
+   Behaelter. Begrenzt man das Feld selbst, bleibt der Behaelter breit - man
+   sieht ein schmales Feld in einem breiten weissen Kasten. Deshalb wird
+   ausschliesslich der Behaelter begrenzt. */
+.sm-feld .ui-input-text, .sm-feld .ui-select, .sm-feld .ui-textinput { max-width: 520px; }
+.sm-feld .ui-input-text input, .sm-feld .ui-input-text textarea { font-size: 0.95em; }
+.sm-hilfe { font-size: 0.85em; color: #555; margin: 4px 0 0; max-width: 640px; }
+.sm-step { border: 1px solid #ddd; border-left: 4px solid #6dac20; background: #fafafa;
+    border-radius: 6px; padding: 12px 14px; margin: 12px 0; font-size: 0.92em; line-height: 1.5; }
+.sm-tbl { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 0.9em; }
+.sm-tbl th, .sm-tbl td { border: 1px solid #ccc; padding: 5px 7px; text-align: left; vertical-align: top; }
+.sm-tbl th { background: #eef3e6; font-weight: 600; }
+.sm-mono { font-family: Consolas, "Courier New", monospace; background: #f0f0f0;
+    padding: 1px 4px; border-radius: 3px; font-size: 0.94em; word-break: break-all; }
+.sm-pre { background: #f4f4f4; border: 1px solid #ccc; padding: 10px; font-size: 0.85em;
+    overflow: auto; margin: 8px 0; white-space: pre-wrap; }
 .sm-knopfreihe { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0 4px; align-items: stretch; }
 .sm-knopfreihe form { margin: 0; display: flex; }
-.sm-wrap .sm-knopfreihe button {
-  border: 0 !important; border-radius: 6px !important; padding: 9px 16px !important;
-  font-size: 0.9em !important; cursor: pointer; color: #fff !important;
-  font-weight: 600 !important; text-shadow: none !important;
-  box-shadow: none !important; opacity: 1 !important; margin: 0 !important;
-  width: auto !important; }
-.sm-wrap .sm-b-lesen button,   .sm-wrap .sm-btn.sm-b-lesen   { background: #6dac20 !important; }
-.sm-wrap .sm-b-lesen button:hover,   .sm-wrap .sm-b-lesen button:focus   { background: #5c9219 !important; color: #fff !important; }
-.sm-wrap .sm-b-technik button, .sm-wrap .sm-btn.sm-b-technik { background: #546e7a !important; }
-.sm-wrap .sm-b-technik button:hover, .sm-wrap .sm-b-technik button:focus { background: #435962 !important; color: #fff !important; }
-.sm-wrap .sm-b-aktion button,  .sm-wrap .sm-btn.sm-b-aktion  { background: #e0620d !important; }
-.sm-wrap .sm-b-aktion button:hover,  .sm-wrap .sm-b-aktion button:focus  { background: #b84f0a !important; color: #fff !important; }
+/* LoxBerry bringt jQuery Mobile mit. Das formatiert JEDEN Knopf mit eigenem
+   Hintergrund UND eigenen Hover-Regeln. Ohne !important steht weisse Schrift
+   auf hellgrauem Grund - und beim Ueberfahren weiss auf weiss. Die
+   Hover-Farben unten sind kein Feinschliff, sondern Pflicht. */
+.sm-wrap .sm-knopfreihe .sm-btn, .sm-wrap a.sm-btn, .sm-wrap button.sm-btn {
+    flex: 0 0 auto; min-width: 250px; text-align: center; display: inline-flex;
+    align-items: center; justify-content: center; line-height: 1.25;
+    padding: 10px 14px !important; border-radius: 6px !important;
+    color: #fff !important; text-decoration: none !important; font-size: 0.92em;
+    border: 0 !important; cursor: pointer; font-weight: 600 !important;
+    text-shadow: none !important; box-shadow: none !important;
+    opacity: 1 !important; margin: 0 !important; width: auto !important; }
+/* Statuskacheln - bewusst ein anderer Name als sm-knopfreihe. */
+.sm-kacheln { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0; }
+.sm-kachel { border: 1px solid #ddd; border-radius: 10px; padding: 10px 14px; min-width: 130px; }
+.sm-kachel b { display: block; font-size: 1.35em; color: #33691e; }
 .sm-legende { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 0 2px; font-size: 0.86em; color: #555; }
 .sm-legende span { display: inline-flex; align-items: center; gap: 6px; }
 .sm-punkt { width: 13px; height: 13px; border-radius: 3px; display: inline-block; }
+.sm-wrap .sm-btn.sm-b-lesen   { background: #6dac20 !important; }
+.sm-wrap .sm-btn.sm-b-technik { background: #546e7a !important; }
+.sm-wrap .sm-btn.sm-b-aktion  { background: #e0620d !important; }
+/* Eigene Hover- und Fokusfarben je Gruppe - sonst uebernimmt der Rahmen. */
+.sm-wrap .sm-btn.sm-b-lesen:hover,   .sm-wrap .sm-btn.sm-b-lesen:focus   { background: #5c9219 !important; color: #fff !important; }
+.sm-wrap .sm-btn.sm-b-technik:hover, .sm-wrap .sm-btn.sm-b-technik:focus { background: #435962 !important; color: #fff !important; }
+.sm-wrap .sm-btn.sm-b-aktion:hover,  .sm-wrap .sm-btn.sm-b-aktion:focus  { background: #b84f0a !important; color: #fff !important; }
 .sm-punkt.sm-b-lesen   { background: #6dac20; }
 .sm-punkt.sm-b-technik { background: #546e7a; }
 .sm-punkt.sm-b-aktion  { background: #e0620d; }
+/* Reiterinhalte: nur der aktive ist sichtbar. MIT diesen zwei Zeilen und
+   OHNE serverseitiges sm-active ist die Seite vollstaendig leer, sobald das
+   Skript nicht laeuft. Die Klasse steht deshalb schon im ausgelieferten
+   HTML - an der Leiste UND am Bereich. */
+.sm-seite { display: none; padding-top: 4px; }
+.sm-seite.sm-active { display: block; }
+.sm-hinweis { border: 1px solid #cfe3b0; background: #f2f8ea; border-radius: 6px;
+    padding: 10px 12px; margin: 12px 0; font-size: 0.9em; }
+.sm-warnung { border: 1px solid #f0c9a0; background: #fdf4ec; border-radius: 6px;
+    padding: 10px 12px; margin: 12px 0; font-size: 0.9em; }
+.sm-an  { color: #1a7f1a; font-weight: 700; }
+.sm-aus { color: #b00000; font-weight: 700; }
+/* Jede Tabelle mit mehr als sechs Spalten oder mit Eingabefeldern kommt in
+   einen Rollbehaelter: .sm-tbl hat width:100% und .sm-wrap ein max-width
+   ohne Ueberlauf - eine zu breite Spalte waere sonst UNERREICHBAR. */
+.sm-breit { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 10px 0; }
+.sm-breit .sm-tbl { margin: 0; min-width: 760px; }
+/* Ein <select> ueber die volle Breite mit data-role="none" sieht aus wie ein
+   Textfeld. Die Raute im SVG wird als %23 geschrieben: eine rohe Raute
+   beendet in einer CSS-Adresse den Wert. */
+.sm-wrap select {
+    appearance: none; -webkit-appearance: none; -moz-appearance: none;
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='9' viewBox='0 0 14 9'%3E%3Cpath d='M1 1l6 6 6-6' fill='none' stroke='%234f7d17' stroke-width='2'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center;
+    padding-right: 32px; cursor: pointer; }
+.sm-tbl select { padding-right: 28px; background-position: right 7px center; }
+/* Eigene Zutaten dieses Plugins - erlaubt, aber sie gehoeren benannt (Regel
+   vom 22.08.2026, die Klassenliste gegen die Vorlage zaehlen):
+   sm-check   - Beschriftung neben einem Haken, kein eigenes Feld-Label
+   sm-reihe   - zwei bis drei Felder nebeneinander
+   sm-scheibe - runder Zustandspunkt vor einer Zeile, dazu die drei
+                Farbvarianten sm-gruen, sm-rot und sm-grau
+   sm-log     - dunkler Protokollkasten
+   Umgekehrt fehlt aus der Vorlage nur sm-tabelle - die tote Klasse, die am
+   19.08.2026 zurueckgenommen wurde. Gemessen mit dem Zweizeiler aus der
+   Vorlage. */
+.sm-check { display: block; font-weight: 400; font-size: 0.95em; color: #333; margin: 10px 0 4px; }
+.sm-wrap input[type=checkbox] { width: 17px; height: 17px; margin: 0 6px 0 0; vertical-align: middle; }
+.sm-wrap input[type=text], .sm-wrap input[type=password], .sm-wrap input[type=number], .sm-wrap input[type=date] {
+  width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 0.95em; box-sizing: border-box; }
+.sm-reihe { display: flex; gap: 12px; flex-wrap: wrap; }
+.sm-reihe > div { flex: 1; min-width: 180px; }
 .sm-scheibe { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
-.sm-gruen { background: #6dac20; }
-.sm-rot { background: #c62828; }
-.sm-grau { background: #9e9e9e; }
-
-/* Nachgetragene Definitionen (CSS-Luecken-Durchgang 13.08.2026):
-   benutzt, aber nie definiert - wortgleich aus der Hausstandard-Vorlage
-   bzw. der Referenzimplementierung uebernommen. */
-.sm-warn { background: #fdf3e3; border: 1px solid #e0620d; }
+.sm-scheibe.sm-gruen { background: #6dac20; }
+.sm-scheibe.sm-rot   { background: #c62828; }
+.sm-scheibe.sm-grau  { background: #9e9e9e; }
+.sm-log { background: #1e1e1e; color: #d4d4d4; font-family: Consolas, "Courier New", monospace;
+    font-size: 0.82em; padding: 12px; border-radius: 8px; max-height: 480px; overflow: auto; white-space: pre-wrap; }
 </style>
 
 <div class="sm-wrap">
 <h1 style="font-size:1.4em;margin:0 0 2px;">Heimkino</h1>
-<p class="sm-small">LG-Beamer und Xbox vom Miniserver aus schalten.<?php
+<p class="sm-hilfe"><?= hk_te('KOPF.UNTERTITEL') ?><?php
   $hk_ver = hk_version();
-  echo $hk_ver !== '' ? ' Version ' . hk_e($hk_ver) : ''; ?></p>
+  echo $hk_ver !== '' ? ' &mdash; ' . hk_te('KOPF.VERSION') . ' ' . hk_e($hk_ver) : ''; ?></p>
 
 <?php if ($hk_saved) { ?>
-  <div class="sm-alert sm-ok">Die Einstellungen wurden gespeichert.</div>
+  <div class="sm-hinweis"><?= hk_te('MELD.GESPEICHERT') ?></div>
 <?php } ?>
-<?php if ($hk_hinweis !== '') { ?>
-  <div class="sm-alert sm-info"><?php echo $hk_hinweis; ?></div>
+<?php if ($hk_hinweis) { ?>
+  <div class="sm-hinweis"><?php echo implode('<br>', $hk_hinweis); ?></div>
 <?php } ?>
 <?php if ($hk_fehler) { ?>
-  <div class="sm-alert sm-err"><?php
+  <div class="sm-warnung"><?php
     echo count($hk_fehler) === 1
         ? $hk_fehler[0]
         : '<ul style="margin:0 0 0 18px;padding:0;"><li>'
@@ -373,718 +575,689 @@ if ($hk_frame) {
   ?></div>
 <?php } ?>
 
-<div class="sm-alert sm-info">
-  <span class="sm-scheibe <?php echo $hk_pid ? 'sm-gruen' : 'sm-rot'; ?>"></span>
-  <?php echo $hk_pid ? 'Der Dienst l&auml;uft (PID ' . (int) $hk_pid . ').'
-                     : 'Der Dienst l&auml;uft nicht.'; ?>
-  <?php if ($hk_alter !== null) {
-      echo ' Letzte Abfrage vor ' . (int) $hk_alter . ' Sekunden.';
-  } ?>
-  <?php echo $hk_broker
-      ? ' MQTT-Broker: ' . hk_e($hk_broker['host']) . ':' . (int) $hk_broker['port'] . '.'
-      : ' <b>Kein MQTT-Broker in general.json</b> - ist das MQTT-Gateway eingerichtet?'; ?>
+<div class="sm-kacheln">
+  <div class="sm-kachel"><b><?php
+    echo $hk_pid ? '<span class="sm-an">' . hk_te('ALLGEMEIN.LAEUFT') . '</span>'
+                 : '<span class="sm-aus">' . hk_te('ALLGEMEIN.GESTOPPT') . '</span>'; ?></b>
+    <?= hk_te('KACHEL.DIENST') ?><?php echo $hk_pid ? ' &middot; PID ' . (int) $hk_pid : ''; ?></div>
+  <div class="sm-kachel"><b><?php
+    echo $hk_alter === null ? '&ndash;' : (int) $hk_alter . '&nbsp;s'; ?></b>
+    <?= hk_te('KACHEL.LETZTE_ABFRAGE') ?></div>
+  <div class="sm-kachel"><b><?php
+    echo $hk_broker ? hk_e($hk_broker['host']) : '&ndash;'; ?></b>
+    <?= hk_te('KACHEL.BROKER') ?></div>
 </div>
 
+<!-- Reiterleiste: echte Verweise, JavaScript faengt den Klick ab. Der Link
+     traegt die Adresse - jeder Reiter ist damit verlinkbar und die
+     Zurueck-Taste tut das Erwartete. Das Skript verhindert nur das Neuladen.
+     WELCHER REITER OFFEN IST, ENTSCHEIDET DER SERVER: sm-active steht schon
+     im ausgelieferten HTML. Ausgeschrieben, nicht in einer Schleife erzeugt -
+     eine Schleife macht hausstandard_pruefen.py blind. -->
 <div class="sm-tabs">
-  <a class="sm-tab<?php echo hk_aktiv('tab-settings'); ?>" data-ziel="tab-settings" href="index.php?form=settings"><?php echo hk_e(hk_t('REITER.EINSTELLUNGEN')); ?></a>
-  <a class="sm-tab<?php echo hk_aktiv('tab-mqtt'); ?>" data-ziel="tab-mqtt" href="index.php?form=mqtt"><?php echo hk_e(hk_t('REITER.MQTT')); ?></a>
-  <a class="sm-tab<?php echo hk_aktiv('tab-loxone'); ?>" data-ziel="tab-loxone" href="index.php?form=loxone"><?php echo hk_e(hk_t('REITER.LOXONE')); ?></a>
-  <a class="sm-tab<?php echo hk_aktiv('tab-test'); ?>" data-ziel="tab-test" href="index.php?form=test"><?php echo hk_e(hk_t('REITER.TEST')); ?></a>
-  <a class="sm-tab<?php echo hk_aktiv('tab-log'); ?>" data-ziel="tab-log" href="index.php?form=log"><?php echo hk_e(hk_t('REITER.LOG')); ?></a>
+	<a class="sm-tab<?= $hk_tab === 'tab-settings' ? ' sm-active' : '' ?>" data-ziel="tab-settings"
+	   href="index.php?form=settings"><?= hk_te('REITER.EINSTELLUNGEN') ?></a>
+	<a class="sm-tab<?= $hk_tab === 'tab-mqtt' ? ' sm-active' : '' ?>" data-ziel="tab-mqtt"
+	   href="index.php?form=mqtt">MQTT</a>
+	<a class="sm-tab<?= $hk_tab === 'tab-loxone' ? ' sm-active' : '' ?>" data-ziel="tab-loxone"
+	   href="index.php?form=loxone"><?= hk_te('REITER.LOXONE') ?></a>
+	<a class="sm-tab<?= $hk_tab === 'tab-test' ? ' sm-active' : '' ?>" data-ziel="tab-test"
+	   href="index.php?form=test"><?= hk_te('REITER.TEST') ?></a>
+	<a class="sm-tab<?= $hk_tab === 'tab-log' ? ' sm-active' : '' ?>" data-ziel="tab-log"
+	   href="index.php?form=log"><?= hk_te('REITER.LOG') ?></a>
 </div>
 
 <!-- ============================ Einstellungen ============================ -->
-<div class="sm-pane<?php echo hk_aktiv('tab-settings'); ?>" id="tab-settings">
+<div class="sm-seite<?= $hk_tab === 'tab-settings' ? ' sm-active' : '' ?>" id="tab-settings">
 <div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> <?php echo hk_e(hk_t('LEGENDE.AKTION')); ?></span>
+<span><i class="sm-punkt sm-b-lesen"></i> <?= hk_te('LEGENDE.LESEN') ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?= hk_te('LEGENDE.AKTION') ?></span>
 </div>
+
+<h2><?= hk_te('SET.H_DIENST') ?></h2>
+<p class="sm-hilfe"><?php
+  echo $hk_pid ? hk_tf('PRUEF.DIENST_JA', array('%1' => (string) $hk_pid))
+               : hk_t('PRUEF.DIENST_NEIN'); ?></p>
+<div class="sm-knopfreihe">
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="dienst" value="start"><?= hk_te('ALLGEMEIN.K_DIENST_START') ?></button>
+  </form>
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="dienst" value="restart"><?= hk_te('ALLGEMEIN.K_DIENST_NEU') ?></button>
+  </form>
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="dienst" value="stop"><?= hk_te('ALLGEMEIN.K_DIENST_STOP') ?></button>
+  </form>
+</div>
+<p class="sm-hilfe"><?php echo hk_t('SET.WAECHTER_HINWEIS'); ?></p>
+
 <form method="post" action="index.php">
+<input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
 <input data-role="none" type="hidden" name="activetab" value="tab-settings">
 
-<h2>Allgemein</h2>
+<h2><?= hk_te('SET.H_ALLGEMEIN') ?></h2>
 <label class="sm-check"><input data-role="none" type="checkbox" name="enabled" value="1"
   <?php echo hk_an($hk_cfg, 'heimkino', 'enabled') ? 'checked' : ''; ?>>
-  Plugin eingeschaltet</label>
-<label class="sm-check"><input data-role="none" type="checkbox" name="mqtt" value="1"
-  <?php echo hk_an($hk_cfg, 'heimkino', 'mqtt') ? 'checked' : ''; ?>>
-  Zustand per MQTT melden</label>
+  <?= hk_te('SET.EINGESCHALTET') ?></label>
+<label class="sm-check"><input data-role="none" type="checkbox" name="nachfassen" value="1"
+  <?php echo hk_an($hk_cfg, 'heimkino', 'nachfassen') ? 'checked' : ''; ?>>
+  <?= hk_te('SET.NACHFASSEN') ?></label>
+<div class="sm-hilfe"><?php echo hk_t('SET.NACHFASSEN_HILFE'); ?></div>
 
-<div class="sm-row">
-  <div>
-    <label for="intervall">Abfragetakt in Sekunden</label>
-    <input data-role="none" type="number" id="intervall" name="intervall" min="10" max="3600"
-      value="<?php echo hk_e(hk_cfg($hk_cfg, 'heimkino', 'intervall', '60')); ?>">
-    <div class="sm-small">Der Beamer nimmt nur eine Verbindung zur Zeit an.
-      Ein zu kurzer Takt sperrt die Fernbedienung der App aus. 60 Sekunden
-      sind eine gute Vorgabe.</div>
-  </div>
-  <div>
-    <label for="themenpraefix">MQTT-Themenpr&auml;fix</label>
-    <input data-role="none" type="text" id="themenpraefix" name="themenpraefix"
-      value="<?php echo hk_e($hk_praefix); ?>">
-    <div class="sm-small">Alle Themen liegen darunter, alle sind retained.</div>
-  </div>
+<div class="sm-feld">
+  <label for="intervall"><?= hk_te('SET.INTERVALL') ?></label>
+  <input data-role="none" type="number" id="intervall" name="intervall" min="10" max="3600"
+    value="<?= hk_e(hk_cfg($hk_cfg, 'heimkino', 'intervall', '60')) ?>">
+  <div class="sm-hilfe"><?php echo hk_t('SET.INTERVALL_HILFE'); ?></div>
 </div>
 
-<h2>Beamer (LG, ab Baujahr 2018)</h2>
-
-<div class="sm-alert sm-info">
-<b>Einstellungen am Ger&auml;t &mdash; ohne diese vier bleibt das Plugin wirkungslos.</b>
-<ol style="margin:6px 0 0 18px;padding:0;">
-<li><b>Verstecktes Men&uuml;: Netzwerk-IP-Steuerung.</b> Mit der Fernbedienung
-<i>Alle Einstellungen &rarr; Allgemein &rarr; Netzwerk</i> ansteuern, sodass
-<i>Netzwerk</i> markiert ist &mdash; und <b>nicht</b> &ouml;ffnen, nichts
-anklicken. Dann z&uuml;gig die Ziffern <b>8&nbsp;2&nbsp;8&nbsp;8&nbsp;8</b>
-tippen. Es klappt ein zus&auml;tzliches Men&uuml; auf, das im normalen Betrieb
-nicht sichtbar ist.
-<div class="sm-small">Klappt es nicht: langsam getippt, oder es war schon eine
-Ebene tiefer. Einmal ganz aus dem Men&uuml; heraus und neu ansteuern. Bei
-&auml;lteren Ger&auml;ten hei&szlig;t der Punkt <i>Netzwerkverbindung</i> statt
-<i>Netzwerk</i>.</div></li>
-<li><b>Netzwerk-IP-Steuerung einschalten.</b> Danach <b>Keycode erzeugen</b>
-&mdash; acht Zeichen, unten eintragen. Ohne Keycode nimmt das Ger&auml;t keinen
-Befehl an; ein neu erzeugter Keycode macht den alten ungültig.</li>
-<li><b>Schnellstart+ einschalten</b> (<i>Allgemein &rarr; Ger&auml;te &rarr;
-Zus&auml;tzliche Einstellungen</i>). Ohne Schnellstart+ trennt das Ger&auml;t im
-Standby die Netzwerkschnittstelle &mdash; dann antwortet Port 9761 nicht mehr,
-und Wake-on-LAN kommt gar nicht erst an.</li>
-<li><b>Kabel statt Funk und feste Adresse.</b> LAN ist im Standby zuverl&auml;ssiger
-als WLAN. Die Adresse in der Fritz!Box festnageln: wandert sie, schl&auml;gt alles
-fehl, ohne dass die Ursache sichtbar w&uuml;rde.</li>
-</ol>
-<div class="sm-small" style="margin-top:8px;"><b>Zwei Automatiken, die St&ouml;rungen
-vort&auml;uschen</b> (<i>Allgemein &rarr; System &rarr; Zus&auml;tzliche
-Einstellungen</i>): die <i>Ausschaltautomatik</i> (schaltet nach vier Stunden
-ohne Bedienung ab) und der <i>Bildschirmschoner</i>. Wer sich fragt, warum der
-Beamer &bdquo;von selbst&ldquo; ausgeht, findet die Antwort meist hier und nicht
-in Loxone.</div>
-</div>
+<h2><?= hk_te('SET.H_BEAMER') ?></h2>
+<div class="sm-hinweis"><?php echo hk_t('BEAMER.EINRICHTUNG'); ?></div>
 
 <label class="sm-check"><input data-role="none" type="checkbox" name="beamer_aktiv" value="1"
   <?php echo hk_an($hk_cfg, 'beamer', 'aktiv') ? 'checked' : ''; ?>>
-  Beamer verwenden</label>
-<div class="sm-row">
-  <div>
-    <label for="beamer_ip">IP-Adresse</label>
+  <?= hk_te('SET.BEAMER_VERWENDEN') ?></label>
+<div class="sm-reihe">
+  <div class="sm-feld">
+    <label for="beamer_ip"><?= hk_te('FELD.BEAMER_IP') ?></label>
     <input data-role="none" type="text" id="beamer_ip" name="beamer_ip" placeholder="192.168.x.y"
-      value="<?php echo hk_e(hk_cfg($hk_cfg, 'beamer', 'ip', '')); ?>">
+      value="<?= hk_e(hk_cfg($hk_cfg, 'beamer', 'ip', '')) ?>">
   </div>
-  <div>
-    <label for="beamer_mac">MAC-Adresse</label>
+  <div class="sm-feld">
+    <label for="beamer_mac"><?= hk_te('FELD.BEAMER_MAC') ?></label>
     <input data-role="none" type="text" id="beamer_mac" name="beamer_mac" placeholder="AA:BB:CC:DD:EE:FF"
-      value="<?php echo hk_e(hk_cfg($hk_cfg, 'beamer', 'mac', '')); ?>">
-    <div class="sm-small">Nur f&uuml;r den Testknopf. Das Einschalten macht Loxone
-      selbst mit <span class="sm-mono">wol://</span>.</div>
+      value="<?= hk_e(hk_cfg($hk_cfg, 'beamer', 'mac', '')) ?>">
+    <div class="sm-hilfe"><?php echo hk_t('FELD.BEAMER_MAC_HILFE'); ?></div>
   </div>
 </div>
-<div class="sm-row">
-  <div>
-    <label for="beamer_keycode">Keycode (8 Zeichen)</label>
+<div class="sm-reihe">
+  <div class="sm-feld">
+    <label for="beamer_keycode"><?= hk_te('FELD.BEAMER_KEYCODE') ?></label>
     <input data-role="none" type="text" id="beamer_keycode" name="beamer_keycode" maxlength="8"
-      placeholder="ABCD1234" style="text-transform:uppercase"
-      value="<?php echo hk_e(hk_cfg($hk_cfg, 'beamer', 'keycode', '')); ?>">
-    <div class="sm-small">Am Ger&auml;t erzeugen: Alle Einstellungen &rarr;
-      Allgemein &rarr; Netzwerk, dann <b>82888</b> auf der Fernbedienung
-      tippen &rarr; Netzwerk-IP-Steuerung einschalten &rarr; Keycode erzeugen.
-      Ohne ihn nimmt das Ger&auml;t keinen Befehl an.</div>
+      placeholder="ABCD1234"
+      value="<?= hk_e(hk_cfg($hk_cfg, 'beamer', 'keycode', '')) ?>">
+    <div class="sm-hilfe"><?php echo hk_t('FELD.BEAMER_KEYCODE_HILFE'); ?></div>
   </div>
-  <div>
-    <label for="beamer_port">Port</label>
+  <div class="sm-feld">
+    <label for="beamer_port"><?= hk_te('FELD.BEAMER_PORT') ?></label>
     <input data-role="none" type="number" id="beamer_port" name="beamer_port" min="1" max="65535"
-      value="<?php echo hk_e(hk_cfg($hk_cfg, 'beamer', 'port', '9761')); ?>">
+      value="<?= hk_e(hk_cfg($hk_cfg, 'beamer', 'port', '9761')) ?>">
   </div>
-  <div>
-    <label for="beamer_zeitgrenze">Zeitgrenze in Sekunden</label>
+  <div class="sm-feld">
+    <label for="beamer_zeitgrenze"><?= hk_te('FELD.BEAMER_ZEITGRENZE') ?></label>
     <input data-role="none" type="number" id="beamer_zeitgrenze" name="beamer_zeitgrenze" min="1" max="60"
-      value="<?php echo hk_e(hk_cfg($hk_cfg, 'beamer', 'zeitgrenze', '5')); ?>">
+      value="<?= hk_e(hk_cfg($hk_cfg, 'beamer', 'zeitgrenze', '5')) ?>">
+  </div>
+</div>
+<label class="sm-check"><input data-role="none" type="checkbox" name="beamer_zusatzwerte" value="1"
+  <?php echo hk_an($hk_cfg, 'beamer', 'zusatzwerte') ? 'checked' : ''; ?>>
+  <?= hk_te('SET.ZUSATZWERTE') ?></label>
+<div class="sm-hilfe"><?php echo hk_t('SET.ZUSATZWERTE_HILFE'); ?></div>
+
+<h2><?= hk_te('SET.H_SZENE') ?></h2>
+<div class="sm-hinweis"><?php echo hk_t('SET.SZENE_HILFE'); ?></div>
+<label class="sm-check"><input data-role="none" type="checkbox" name="szene_aktiv" value="1"
+  <?php echo hk_an($hk_cfg, 'szene', 'aktiv') ? 'checked' : ''; ?>>
+  <?= hk_te('SET.SZENE_AKTIV') ?></label>
+<?php $hk_w = hk_woerter(); ?>
+<div class="sm-reihe">
+  <div class="sm-feld">
+    <label for="szene_eingang"><?= hk_te('FELD.SZENE_EINGANG') ?></label>
+<?php if (!empty($hk_w['eingang'])) { ?>
+    <select data-role="none" id="szene_eingang" name="szene_eingang">
+      <option value=""><?= hk_te('ALLGEMEIN.KEINE_AUSWAHL') ?></option>
+<?php   foreach ($hk_w['eingang'] as $hk_o) { ?>
+      <option value="<?= hk_e($hk_o) ?>"<?php
+        echo hk_cfg($hk_cfg, 'szene', 'eingang', '') === $hk_o ? ' selected' : ''; ?>><?= hk_e($hk_o) ?></option>
+<?php   } ?>
+    </select>
+<?php } else { ?>
+    <input data-role="none" type="text" id="szene_eingang" name="szene_eingang"
+      value="<?= hk_e(hk_cfg($hk_cfg, 'szene', 'eingang', '')) ?>">
+    <div class="sm-hilfe"><?php echo hk_t('FELD.SZENE_KEINE_WOERTER'); ?></div>
+<?php } ?>
+  </div>
+  <div class="sm-feld">
+    <label for="szene_bildmodus"><?= hk_te('FELD.SZENE_BILDMODUS') ?></label>
+<?php if (!empty($hk_w['bildmodus'])) { ?>
+    <select data-role="none" id="szene_bildmodus" name="szene_bildmodus">
+      <option value=""><?= hk_te('ALLGEMEIN.KEINE_AUSWAHL') ?></option>
+<?php   foreach ($hk_w['bildmodus'] as $hk_o) { ?>
+      <option value="<?= hk_e($hk_o) ?>"<?php
+        echo hk_cfg($hk_cfg, 'szene', 'bildmodus', '') === $hk_o ? ' selected' : ''; ?>><?= hk_e($hk_o) ?></option>
+<?php   } ?>
+    </select>
+<?php } else { ?>
+    <input data-role="none" type="text" id="szene_bildmodus" name="szene_bildmodus"
+      value="<?= hk_e(hk_cfg($hk_cfg, 'szene', 'bildmodus', '')) ?>">
+<?php } ?>
+  </div>
+</div>
+<div class="sm-reihe">
+  <div class="sm-feld">
+    <label for="szene_warten_beamer"><?= hk_te('FELD.SZENE_WARTEN_BEAMER') ?></label>
+    <input data-role="none" type="number" id="szene_warten_beamer" name="szene_warten_beamer" min="10" max="600"
+      value="<?= hk_e(hk_cfg($hk_cfg, 'szene', 'warten_beamer', '120')) ?>">
+  </div>
+  <div class="sm-feld">
+    <label for="szene_warten_xbox"><?= hk_te('FELD.SZENE_WARTEN_XBOX') ?></label>
+    <input data-role="none" type="number" id="szene_warten_xbox" name="szene_warten_xbox" min="10" max="600"
+      value="<?= hk_e(hk_cfg($hk_cfg, 'szene', 'warten_xbox', '90')) ?>">
   </div>
 </div>
 
-<h2>Xbox</h2>
-
-<div class="sm-alert sm-info">
-<b>Einstellungen an der Konsole.</b> Ohne die ersten beiden kommt kein
-Weckbefehl an &mdash; auch nicht &uuml;ber die Cloud.
-<ol style="margin:6px 0 0 18px;padding:0;">
-<li><b>Energiesparmodus auf <i>Ruhezustand</i></b> (<i>Profil &amp; System &rarr;
-Einstellungen &rarr; Allgemein &rarr; Energiesparmodus</i>, fr&uuml;her
-<i>Energiesparen &amp; Start</i>). Steht dort <i>Energiesparen</i>, ist die
-Konsole im Aus wirklich aus und durch nichts zu wecken.</li>
-<li><b>Fernstart / Remote-Features einschalten</b> (<i>Ger&auml;te &amp;
-Verbindungen &rarr; Remote-Features</i>): <i>Remote-Features aktivieren</i>. Das
-ist derselbe Schalter, den die Xbox-App braucht.</li>
-<li><b>Ger&auml;teidentit&auml;t ablesen</b> (<i>System &rarr; Konsoleninfo</i>):
-Feld <b>XBOX-Netzwerk-Ger&auml;teidentit&auml;t</b>, 16 Zeichen. Geh&ouml;rt unten
-ins Feld &mdash; nicht die <i>Konsolen-ID</i>, nicht die <i>Globale
-Ger&auml;te-ID</i>, nicht die <i>Seriennummer</i>.</li>
-<li><b>HDMI-CEC</b> (<i>Allgemein &rarr; TV- &amp; A/V-Energieoptionen &rarr;
-HDMI-CEC</i>): dort <i>HDMI-CEC aktivieren</i> und <i>Konsole schaltet andere
-Ger&auml;te aus</i>. Zum <b>Wecken</b> taugt CEC nicht &mdash; die Begr&uuml;ndung
-steht weiter unten.</li>
-</ol>
-<div class="sm-small" style="margin-top:8px;">Die Konsole muss im Ruhezustand am
-Netzwerk h&auml;ngen. Feste Adresse in der Fritz!Box vergeben; im Ruhezustand
-verl&auml;ngert WLAN die Weckzeit merklich.</div>
-</div>
+<h2><?= hk_te('SET.H_XBOX') ?></h2>
+<div class="sm-hinweis"><?php echo hk_t('XBOX.EINRICHTUNG'); ?></div>
 
 <label class="sm-check"><input data-role="none" type="checkbox" name="xbox_aktiv" value="1"
   <?php echo hk_an($hk_cfg, 'xbox', 'aktiv') ? 'checked' : ''; ?>>
-  Xbox verwenden</label>
-<label for="xbox_geraete_id">XBOX-Netzwerk-Ger&auml;teidentit&auml;t</label>
-<input data-role="none" type="text" id="xbox_geraete_id" name="xbox_geraete_id"
-  value="<?php echo hk_e(hk_cfg($hk_cfg, 'xbox', 'geraete_id', '')); ?>">
-<div class="sm-alert sm-info" style="margin-top:6px;">
-<b>Diese Ger&auml;teidentit&auml;t steht nicht in Azure.</b> Azure kennt nur die Anwendung, nicht
-deine Konsole. Es gibt zwei Quellen:
-<ul style="margin:6px 0 0 18px;padding:0;">
-<li><b>Reiter Test &rarr; Konsolen suchen</b> &mdash; sobald die Anmeldung steht,
-holt das Plugin die Liste aller Konsolen des Kontos samt Identit&auml;t. Der bequeme
-Weg.</li>
-<li><b>An der Konsole:</b> Einstellungen &rarr; System &rarr; <i>Konsoleninfo</i>,
-Feld <b>XBOX-Netzwerk-Ger&auml;teidentit&auml;t</b> &mdash; 16 Zeichen. Nicht die
-<i>Konsolen-ID</i>, nicht die <i>Globale Ger&auml;te-ID</i> und nicht die
-<i>Seriennummer</i>, die auf derselben Seite stehen.</li>
-</ul>
-<div class="sm-small" style="margin-top:6px;">Hier geh&ouml;rt die
-<b>Ger&auml;teidentit&auml;t</b> hin, nicht der <b>Name</b> der Konsole.
-„XBOX-Heimkino" ist ein Name und wird nicht angenommen.</div>
+  <?= hk_te('SET.XBOX_VERWENDEN') ?></label>
+<div class="sm-feld">
+  <label for="xbox_geraete_id"><?= hk_te('FELD.XBOX_ID') ?></label>
+  <input data-role="none" type="text" id="xbox_geraete_id" name="xbox_geraete_id"
+    value="<?= hk_e(hk_cfg($hk_cfg, 'xbox', 'geraete_id', '')) ?>">
+  <div class="sm-hilfe"><?php echo hk_t('FELD.XBOX_ID_HILFE'); ?></div>
 </div>
 
-<label for="xbox_geheimnis_ablauf">Clientgeheimnis g&uuml;ltig bis
-  <span class="sm-small">(JJJJ-MM-TT, leer = keine Warnung)</span></label>
-<input data-role="none" type="date" id="xbox_geheimnis_ablauf" name="xbox_geheimnis_ablauf"
-  value="<?php echo hk_e($hk_ablauf); ?>">
-<div class="sm-alert <?php
-    echo in_array($hk_ablauf_art, array('abgelaufen', 'bald'), true)
-         ? 'sm-err' : 'sm-info'; ?>" style="margin-top:6px;">
-<b>Der geheime Clientschl&uuml;ssel h&auml;lt h&ouml;chstens 24 Monate.</b> Azure
-vergibt keine l&auml;ngere Frist &mdash; auch nicht mit eigenem Datum. L&auml;uft
-er ab, antwortet Microsoft mit
-<span class="sm-mono">invalid_client</span> und die Konsole l&auml;sst sich nicht
-mehr aus Loxone wecken. Das passiert zwei Jahre nach der Einrichtung, wenn
-niemand mehr daran denkt.
-<div style="margin-top:6px;"><?php echo $hk_ablauf_text; ?></div>
-<div class="sm-small" style="margin-top:6px;">Der Dienst meldet das Datum und die
-Restlaufzeit per MQTT
-(<span class="sm-mono"><?php echo hk_e($hk_praefix); ?>/xbox/geheimnis_ablauf</span>
-und <span class="sm-mono">&hellip;/xbox/geheimnis_tage</span>) &mdash; damit kann
-Loxone rechtzeitig eine Nachricht schicken, statt dass es beim n&auml;chsten
-Filmabend auffällt. Ab 60 Tagen Restlaufzeit steht zus&auml;tzlich eine Warnung
-im Protokoll.</div>
-<div class="sm-small" style="margin-top:6px;"><b>Erneuern:</b> in Azure unter
-<i>Zertifikate &amp; Geheimnisse</i> ein neues Geheimnis anlegen, die Spalte
-<i>Wert</i> unten eintragen, die Anmeldung wiederholen &mdash; und das alte
-Geheimnis l&ouml;schen. Die Anwendungskennung bleibt dieselbe, die
-Ger&auml;teidentit&auml;t auch.</div>
+<div class="sm-feld">
+  <label for="xbox_geheimnis_ablauf"><?= hk_te('FELD.FRIST') ?></label>
+  <input data-role="none" type="date" id="xbox_geheimnis_ablauf" name="xbox_geheimnis_ablauf"
+    value="<?= hk_e($hk_ablauf) ?>">
+  <div class="<?php echo in_array($hk_ablauf_art, array('abgelaufen', 'bald', 'unlesbar'), true)
+      ? 'sm-warnung' : 'sm-hinweis'; ?>">
+    <?php echo hk_t('FELD.FRIST_HILFE'); ?>
+    <div style="margin-top:6px;"><?php echo hk_tf('FRIST.' . strtoupper($hk_ablauf_art),
+        array('%1' => hk_e($hk_ablauf_datum),
+              '%2' => (string) (int) abs((int) $hk_ablauf_tage))); ?></div>
+  </div>
 </div>
 
-<h2>Aktionstoken</h2>
-<p class="sm-small">Der Miniserver ruft die Aktionen &uuml;ber eine Adresse im
-unangemeldeten Bereich auf. Damit das nicht jedes Ger&auml;t im Netz kann, geh&ouml;rt
-in jede Adresse dieses Token. Es wird beim ersten Speichern erzeugt.</p>
-<div class="sm-mono"><?php echo $hk_token !== '' ? hk_e($hk_token)
-    : 'wird beim ersten Speichern erzeugt'; ?></div>
+<h2><?= hk_te('SET.H_TOKEN') ?></h2>
+<p class="sm-hilfe"><?php echo hk_t('TOKEN.HILFE'); ?></p>
+<div class="sm-mono"><?php echo $hk_token !== '' ? hk_e($hk_token) : hk_te('TOKEN.KEINES'); ?></div>
 <label class="sm-check" style="margin-top:8px;">
   <input data-role="none" type="checkbox" name="token_neu" value="1">
-  <!-- margin-left, nicht ein Leerzeichen im Text: .sm-check ist im
-       Hausstandard "display: inline-flex", und ein Flex-Behaelter VERWIRFT
-       den Zwischenraum zwischen seinen Elementen. Deshalb stand auf dem
-       Bildschirm "erzeugen(die Adressen", obwohl im Quelltext ein
-       Leerzeichen steht.
-       An der laufenden Anlage nachgemessen: Text endet bei x=85, die
-       Klammer begann bei x=85 - Luecke 0. Mit "display:inline" am Span
-       aendert sich daran NICHTS (Flex-Elemente werden ohnehin
-       blockartig); erst margin-left ergibt die Luecke, gemessen 5 px. -->
-  Neues Token erzeugen <span class="sm-small" style="margin-left:.35em;">(die
-  Adressen im Miniserver m&uuml;ssen danach angepasst werden)</span></label>
+  <?= hk_te('TOKEN.NEU') ?></label>
 
-<!-- Der Knopf gehoert in eine eigene Zeile mit Abstand, nicht unmittelbar
-     hinter den Text. -->
-<div style="margin-top:28px;text-align:center;">
-  <button data-role="none" type="submit" name="save" value="1" class="sm-btn"><?php echo hk_t('ALLGEMEIN.K_SPEICHERN'); ?></button>
+<div style="margin-top:28px;">
+  <div class="sm-knopfreihe">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="save" value="1"><?= hk_te('ALLGEMEIN.K_SPEICHERN') ?></button>
+  </div>
 </div>
 </form>
 
-<!-- Rund fuenf Leerzeilen Abstand, bevor der naechste Abschnitt beginnt. -->
-<h2 style="margin-top:120px;">Xbox: Anmeldung bei Microsoft</h2>
-<div class="sm-alert sm-info">
-Das unauthentifizierte Weckpaket auf UDP&nbsp;5050, mit dem sich Xbox-One-Konsolen
-wecken lie&szlig;en, wird von neueren Firmwarest&auml;nden ignoriert. Nachgemessen an
-einer Series&nbsp;X: Paketinhalt, Zieladresse und Ger&auml;tekennung waren richtig,
-die Konsole reagierte nicht &mdash; die Xbox-App weckt dieselbe Konsole ohne
-Weiteres. Sie geht &uuml;ber den Cloud-Dienst von Microsoft, und diesen Weg geht
-dieses Plugin auch. Der Preis: eine eigene App-Registrierung, eine einmalige
-Anmeldung und eine Internetverbindung.
-</div>
-
-<div class="sm-alert sm-err">
-<b>Voraussetzung, an der die meisten scheitern:</b> die Registrierung braucht ein
-<b>Verzeichnis</b> (Mandant). Ein pers&ouml;nliches Microsoft-Konto hat keines. Unter
-<i>App-Registrierungen</i> steht dann „diesem Konto zugeordnet, jedoch in keinem
-Verzeichnis enthalten", und <i>Neue Registrierung</i> &ouml;ffnet kein Formular,
-sondern ein Fenster mit einem einzigen Knopf: <i>Abbrechen</i>.
-<div style="margin-top:8px;">Ein Verzeichnis bekommt man &uuml;ber eine
-<b>Azure-Registrierung</b> (kostenloses Konto, verlangt Zahlungsdaten zur
-Identit&auml;tspr&uuml;fung) oder das <b>M365-Entwicklerprogramm</b> (kostenlos, Zugang
-eingeschr&auml;nkt).</div>
-<div style="margin-top:8px;"><b>Und danach unbedingt abmelden und neu
-anmelden.</b> Die Portalsitzung tr&auml;gt die Verzeichniszugeh&ouml;rigkeit in sich;
-eine Sitzung von vor der Registrierung kennt das neue Verzeichnis nicht. Das
-Portal meldet dann <span class="sm-mono">AADSTS16000 &hellip; does not exist in
-tenant</span> und unter <i>Portaleinstellungen &rarr; Verzeichnisse +
-Abonnements</i> steht „Keine Verzeichnisse gefunden".</div>
-</div>
-
-<div class="sm-step">
-  <b>Schritt 0 &ndash; pr&uuml;fen, ob das Verzeichnis wirklich da ist.</b> Im
-  Azure-Portal oben rechts auf den Kontonamen, dann <i>Verzeichnis wechseln</i>.
-  Unter <i>Alle Verzeichnisse</i> muss eines aufgelistet und ausgew&auml;hlt sein.
-  Steht dort „Keine Verzeichnisse gefunden", ist die Azure-Registrierung nicht
-  abgeschlossen oder auf einem anderen Konto gelaufen &mdash; alles Weitere ist
-  dann zwecklos.
-</div>
-
-<div class="sm-alert sm-info">
-<b>HDMI-CEC weckt die Konsole nicht &mdash; nachgesehen, nicht vermutet.</b>
-Unter <i>Allgemein &rarr; TV- &amp; A/V-Energieoptionen &rarr; HDMI-CEC</i>
-kennt die Xbox genau diese Richtungen:
-<ul style="margin:6px 0 6px 18px;padding:0;">
-<li>Konsole schaltet andere Ger&auml;te <b>ein</b></li>
-<li>Konsole schaltet andere Ger&auml;te <b>aus</b></li>
-<li>Andere Ger&auml;te k&ouml;nnen die Konsole <b>deaktivieren</b></li>
-</ul>
-Eine Zeile <i>andere Ger&auml;te k&ouml;nnen die Konsole einschalten</i> gibt es nicht.
-Die Konsole nimmt von au&szlig;en nur den Ausschaltbefehl an. CEC kann sie also
-<b>ausschalten</b>, aber nicht wecken &mdash; unabh&auml;ngig von Kabel und
-Verst&auml;rker.
-<div class="sm-small">Praktische Folge: <b>xbox-aus</b> aus diesem Plugin ist
-oft &uuml;berfl&uuml;ssig, weil der Verst&auml;rker das per CEC schon erledigt. F&uuml;r das
-<b>Wecken</b> bleiben der Controller oder der Cloud-Weg unten.</div>
-</div>
-
-<div class="sm-step">
-  <b>Schritt 1 &ndash; Anwendung registrieren.</b>
-  <i>App-Registrierungen &rarr; Neue Registrierung</i>.
-  <ul style="margin:6px 0 6px 18px;padding:0;">
-  <li><b>Name:</b> frei w&auml;hlbar, z. B. <span class="sm-mono">LoxBerry Heimkino</span></li>
-  <li><b>Unterst&uuml;tzte Kontotypen:</b> <b>Nur pers&ouml;nliche Microsoft-Konten</b> &mdash; die
-      Konsole h&auml;ngt an einem pers&ouml;nlichen Konto, nicht am Verzeichnis. Das
-      Verzeichnis wird nur gebraucht, um die Anwendung &uuml;berhaupt anlegen zu
-      d&uuml;rfen.</li>
-  <li><b>Umleitungs-URI:</b> Typ <b>Web</b>, Adresse genau
-      <span class="sm-mono"><?php echo hk_e($hk_xb['rueckleitung']); ?></span></li>
-  </ul>
-  Dann <i>Registrieren</i>.
-</div>
-
-<div class="sm-step">
-  <b>Schritt 2 &ndash; Kennung abschreiben.</b> Auf der Seite <i>&Uuml;bersicht</i>
-  der Anwendung steht <b>Anwendungs-ID (Client)</b>. Diese Nummer unten einsetzen.
-  Sie ist kein Geheimnis.
-  <div class="sm-small">Nicht zu verwechseln mit <i>Verzeichnis-ID (Mandant)</i> oder
-  <i>Objekt-ID</i>, die auf derselben Seite direkt darunter stehen.</div>
-</div>
-
-<div class="sm-step">
-  <b>Schritt 3 &ndash; Geheimnis erzeugen.</b> Links <i>Zertifikate &amp;
-  Geheimnisse</i>, Reiter <i>Geheime Clientschl&uuml;ssel</i>,
-  <i>Neuer geheimer Clientschl&uuml;ssel</i>. Beschreibung frei, <i>G&uuml;ltig bis</i> nach Wunsch &mdash; nach Ablauf
-  ist ein neues Geheimnis und eine neue Anmeldung f&auml;llig.
-  <div class="sm-alert sm-err" style="margin-top:8px;">
-  Die Tabelle zeigt danach vier Spalten: <i>Beschreibung</i>, <i>G&uuml;ltig bis</i>,
-  <b>Wert</b> und <i>Geheime ID</i>.
-  <b>Gebraucht wird die Spalte „Wert".</b> Die Spalte „Geheime ID" ist es
-  <b>nicht</b> &mdash; sie sieht aus wie eine Kennung und wird deshalb gern
-  verwechselt.
-  <div class="sm-small" style="margin-top:6px;">Die Spalte „Wert" ist <b>nur
-  dieses eine Mal</b> sichtbar. Wer die Seite verl&auml;sst, sieht sie nie wieder und
-  muss ein neues Geheimnis anlegen &mdash; das alte kann man dann l&ouml;schen.</div>
-  </div>
-</div>
-
+<h2 style="margin-top:60px;"><?= hk_te('XBOX.H_ANMELDUNG') ?></h2>
+<div class="sm-hinweis"><?php echo hk_t('XBOX.CLOUD_WARUM'); ?></div>
+<div class="sm-warnung"><?php echo hk_t('XBOX.VERZEICHNIS'); ?></div>
+<div class="sm-step"><?php echo hk_t('XBOX.SCHRITT0'); ?></div>
+<div class="sm-step"><?php echo hk_tf('XBOX.SCHRITT1',
+    array('%1' => hk_e($hk_xb['rueckleitung']))); ?></div>
+<div class="sm-step"><?php echo hk_t('XBOX.SCHRITT2'); ?></div>
+<div class="sm-step"><?php echo hk_t('XBOX.SCHRITT3'); ?></div>
 
 <form method="post" action="index.php">
+<input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
 <input data-role="none" type="hidden" name="activetab" value="tab-settings">
-<div class="sm-row">
-  <div>
-    <label for="client_id">Anwendungskennung (Client-ID)</label>
+<div class="sm-reihe">
+  <div class="sm-feld">
+    <label for="client_id"><?= hk_te('FELD.CLIENT_ID') ?></label>
     <input data-role="none" type="text" id="client_id" name="client_id"
-      value="<?php echo hk_e($hk_xb['client_id']); ?>">
+      value="<?= hk_e($hk_xb['client_id']) ?>">
   </div>
-  <div>
-    <label for="client_secret">Geheimer Clientschl&uuml;ssel &mdash; Spalte <i>Wert</i></label>
+  <div class="sm-feld">
+    <label for="client_secret"><?= hk_te('FELD.CLIENT_SECRET') ?></label>
     <input data-role="none" type="password" id="client_secret" name="client_secret"
-      placeholder="<?php echo $hk_xb['geheim'] ? 'gespeichert - leer lassen, um es zu behalten' : ''; ?>">
+      placeholder="<?php echo $hk_xb['geheim'] ? hk_te('FELD.CLIENT_SECRET_DA') : ''; ?>">
   </div>
 </div>
-<!-- Der Knopf steht ABSICHTLICH vor der Umleitungs-URI, mit je rund fuenf
-     Leerzeilen Abstand. Am Verhalten aendert das nichts: es ist EIN Formular,
-     der Knopf schickt alle Felder ab - auch das darunter liegende. -->
-<div style="margin-top:60px;margin-bottom:60px;text-align:center;">
-  <button data-role="none" type="submit" name="xbox_app" value="1" class="sm-btn"><?php echo hk_t('ALLGEMEIN.K_KENNUNG_SPEICHERN'); ?></button>
+<div class="sm-feld">
+  <label for="rueckleitung"><?= hk_te('FELD.RUECKLEITUNG') ?></label>
+  <input data-role="none" type="text" id="rueckleitung" name="rueckleitung"
+    value="<?= hk_e($hk_xb['rueckleitung']) ?>">
 </div>
-
-<label for="rueckleitung">Umleitungs-URI</label>
-<input data-role="none" type="text" id="rueckleitung" name="rueckleitung"
-  value="<?php echo hk_e($hk_xb['rueckleitung']); ?>">
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="xbox_app" value="1"><?= hk_te('ALLGEMEIN.K_KENNUNG_SPEICHERN') ?></button>
+</div>
 </form>
 
 <?php if ($hk_anmelde !== '') { ?>
-<div class="sm-step">
-  <b>Schritt 2 &ndash; anmelden.</b> Diese Adresse in einem Browser &ouml;ffnen und
-  mit dem Microsoft-Konto anmelden, an dem die Konsole h&auml;ngt.
-  <p><a href="<?php echo hk_e($hk_anmelde); ?>" target="_blank" rel="noopener"
-    class="sm-btn" style="display:inline-block;text-decoration:none;">Anmeldeseite
-    &ouml;ffnen</a></p>
-  <div class="sm-small">Der Browser landet danach auf einer Seite, die nicht
-  l&auml;dt &mdash; das ist richtig so. Entscheidend ist die Adresszeile: sie
-  enth&auml;lt <span class="sm-mono">?code=&hellip;</span>. Die ganze Adresse
-  kopieren und unten einsetzen.</div>
+<div class="sm-step"><?php echo hk_t('XBOX.SCHRITT4'); ?>
+  <p><a data-role="none" class="sm-btn sm-b-lesen" href="<?= hk_e($hk_anmelde) ?>"
+     target="_blank" rel="noopener"><?= hk_te('ALLGEMEIN.K_ANMELDESEITE') ?></a></p>
+  <div class="sm-hilfe"><?php echo hk_t('XBOX.SCHRITT4_HILFE'); ?></div>
 </div>
 
 <form method="post" action="index.php">
+<input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
 <input data-role="none" type="hidden" name="activetab" value="tab-settings">
-<label for="code">Zur&uuml;ckgeleitete Adresse oder Code</label>
-<input data-role="none" type="text" id="code" name="code"
-  placeholder="http://localhost/auth/callback?code=...">
-<button data-role="none" type="submit" name="xbox_code" value="1" class="sm-btn"><?php echo hk_t('ALLGEMEIN.K_ANMELDUNG_FERTIG'); ?></button>
-</form>
-<div class="sm-alert sm-info">
-Meldet Microsoft hier <span class="sm-mono">invalid_client &mdash; The provided
-value for the 'client_secret' parameter is not valid</span>, dann liegt es an
-einem von zwei Dingen:
-<ol style="margin:6px 0 0 18px;padding:0;">
-<li><b>Es wurde die falsche Spalte kopiert.</b> Weitaus h&auml;ufigster Fall.
-<i>Geheime ID</i> statt <i>Wert</i>. Der Reiter <b>Test &rarr; Anmeldedaten
-pr&uuml;fen</b> sagt, welche Form das gespeicherte Geheimnis hat &mdash; ohne es
-anzuzeigen.</li>
-<li><b>Das Geheimnis ist abgelaufen</b> &mdash; Spalte <i>G&uuml;ltig bis</i>.
-Dann ein neues anlegen.</li>
-</ol>
-<div class="sm-small" style="margin-top:6px;">Bleibt es dabei, obwohl die Spalte
-<i>Wert</i> frisch kopiert wurde, hilft der andere Anmeldedienst: in
-<span class="sm-mono">xbox_auth.json</span> den Eintrag
-<span class="sm-mono">"dienst": "v2"</span> setzen. Dann l&auml;uft die Anmeldung
-&uuml;ber <span class="sm-mono">login.microsoftonline.com</span> statt
-<span class="sm-mono">login.live.com</span> &mdash; manche Registrierungen nimmt
-nur der eine oder nur der andere an.</div>
+<div class="sm-feld">
+  <label for="code"><?= hk_te('FELD.CODE') ?></label>
+  <input data-role="none" type="text" id="code" name="code"
+    placeholder="http://localhost/auth/callback?code=...">
+  <div class="sm-hilfe"><?php echo hk_t('FELD.CODE_HILFE'); ?></div>
 </div>
-<form method="post" action="index.php" style="display:none">
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="xbox_code" value="1"><?= hk_te('ALLGEMEIN.K_ANMELDUNG_FERTIG') ?></button>
+</div>
 </form>
+<div class="sm-hinweis"><?php echo hk_t('XBOX.INVALID_CLIENT'); ?></div>
 <?php } ?>
 
 <p style="margin-top:14px;">
   <span class="sm-scheibe <?php echo $hk_xb['angemeldet'] ? 'sm-gruen' : 'sm-grau'; ?>"></span>
-  <?php echo $hk_xb['angemeldet']
-      ? 'Angemeldet. Das Erneuerungstoken liegt vor, eine neue Anmeldung ist '
-        . 'erst n&ouml;tig, wenn Microsoft es verwirft.'
-      : 'Noch nicht angemeldet.'; ?>
+  <?php echo $hk_xb['angemeldet'] ? hk_te('XBOX.ANGEMELDET') : hk_te('XBOX.NICHT_ANGEMELDET'); ?>
 </p>
 <?php if ($hk_xb['angemeldet']) { ?>
-<div class="sm-knopfreihe sm-b-aktion">
+<div class="sm-knopfreihe">
   <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
-    <button data-role="none" type="submit" name="xbox_vergessen" value="1"><?php echo hk_t('ALLGEMEIN.K_ANMELDUNG_LOESCHEN'); ?></button>
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="xbox_vergessen" value="1"><?= hk_te('ALLGEMEIN.K_ANMELDUNG_LOESCHEN') ?></button>
   </form>
 </div>
 <?php } ?>
 </div>
 
 <!-- ================================= MQTT ================================= -->
-<div class="sm-pane<?php echo hk_aktiv('tab-mqtt'); ?>" id="tab-mqtt">
-<h2><?php echo hk_e(hk_t('MQTT.H_ZUSTAND')); ?></h2>
-<p class="sm-small"><?php echo hk_t('MQTT.KERNBESTANDTEIL'); ?></p>
+<div class="sm-seite<?= $hk_tab === 'tab-mqtt' ? ' sm-active' : '' ?>" id="tab-mqtt">
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-aktion"></i> <?= hk_te('LEGENDE.AKTION') ?></span>
+</div>
 
+<h2><?= hk_te('MQTT.H_EINSTELLUNGEN') ?></h2>
+<p class="sm-hilfe"><?php echo hk_t('MQTT.KERNBESTANDTEIL'); ?></p>
+<form method="post" action="index.php">
+<input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+<input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
+<label class="sm-check"><input data-role="none" type="checkbox" name="mqtt" value="1"
+  <?php echo hk_an($hk_cfg, 'heimkino', 'mqtt') ? 'checked' : ''; ?>>
+  <?= hk_te('MQTT.MELDEN') ?></label>
+<div class="sm-feld">
+  <label for="themenpraefix"><?= hk_te('MQTT.PRAEFIX') ?></label>
+  <input data-role="none" type="text" id="themenpraefix" name="themenpraefix"
+    value="<?= hk_e($hk_praefix) ?>">
+  <div class="sm-hilfe"><?php echo hk_t('MQTT.PRAEFIX_HILFE'); ?></div>
+</div>
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="save_mqtt" value="1"><?= hk_te('ALLGEMEIN.K_SPEICHERN') ?></button>
+</div>
+</form>
+
+<h2><?= hk_te('MQTT.H_ZUSTAND') ?></h2>
 <?php if (!$hk_broker) { ?>
-<div class="sm-alert sm-warn"><?php echo hk_t('MQTT.KEIN_BROKER'); ?></div>
+<div class="sm-warnung"><?php echo hk_t('MQTT.KEIN_BROKER'); ?></div>
 <?php } else { ?>
 <table class="sm-tbl">
-<tr><th style="width:34%"><?php echo hk_e(hk_t('MQTT.SP_GROESSE')); ?></th><th><?php echo hk_e(hk_t('MQTT.SP_WERT')); ?></th></tr>
-<tr><td><?php echo hk_e(hk_t('MQTT.BROKER')); ?></td><td class="sm-mono"><?php
-  echo hk_e($hk_broker['host'] . ':' . $hk_broker['port']); ?></td></tr>
-<tr><td><?php echo hk_e(hk_t('MQTT.LOKAL')); ?></td><td><?php
-  echo $hk_broker['lokal'] ? hk_e(hk_t('ALLGEMEIN.JA')) : hk_t('MQTT.LOKAL_NEIN'); ?></td></tr>
-<tr><td><?php echo hk_e(hk_t('MQTT.AUTOSTART')); ?></td><td><?php
-  echo $hk_broker['autostart'] ? hk_e(hk_t('ALLGEMEIN.JA')) : hk_t('MQTT.AUTOSTART_NEIN'); ?></td></tr>
-<tr><td><?php echo hk_e(hk_t('MQTT.BENUTZER')); ?></td><td class="sm-mono"><?php
+<tr><th style="width:34%"><?= hk_te('MQTT.SP_GROESSE') ?></th><th><?= hk_te('MQTT.SP_WERT') ?></th></tr>
+<tr><td><?= hk_te('MQTT.BROKER') ?></td><td class="sm-mono"><?= hk_e($hk_broker['host'] . ':' . $hk_broker['port']) ?></td></tr>
+<tr><td><?= hk_te('MQTT.FASSUNG') ?></td><td><?php
+  echo $hk_gwf > 0 ? (int) $hk_gwf : hk_te('MQTT.FASSUNG_UNBEKANNT'); ?></td></tr>
+<tr><td><?= hk_te('MQTT.LOKAL') ?></td><td><?php
+  echo $hk_broker['lokal'] ? hk_te('ALLGEMEIN.JA') : hk_t('MQTT.LOKAL_NEIN'); ?></td></tr>
+<tr><td><?= hk_te('MQTT.AUTOSTART') ?></td><td><?php
+  echo $hk_broker['autostart'] ? hk_te('ALLGEMEIN.JA') : hk_t('MQTT.AUTOSTART_NEIN'); ?></td></tr>
+<tr><td><?= hk_te('MQTT.BENUTZER') ?></td><td class="sm-mono"><?php
   echo $hk_broker['benutzer'] !== '' ? hk_e($hk_broker['benutzer']) : '&ndash;'; ?></td></tr>
-<tr><td><?php echo hk_e(hk_t('MQTT.MELDUNG')); ?></td><td><?php
-  echo hk_an($hk_cfg, 'heimkino', 'mqtt')
-     ? hk_e(hk_t('MQTT.MELDUNG_AN'))
-     : hk_t('MQTT.MELDUNG_AUS'); ?></td></tr>
+<tr><td><?= hk_te('MQTT.MELDUNG') ?></td><td><?php
+  echo hk_an($hk_cfg, 'heimkino', 'mqtt') ? hk_te('MQTT.MELDUNG_AN') : hk_t('MQTT.MELDUNG_AUS'); ?></td></tr>
 </table>
 <?php } ?>
 
-<h2><?php echo hk_e(hk_t('MQTT.H_ABO')); ?></h2>
-<p class="sm-small"><?php echo hk_t('MQTT.ABO_HINWEIS'); ?></p>
-<pre class="sm-mono" style="background:#f4f4f4;border:1px solid #ccc;padding:10px;"><?php
-echo hk_e($hk_praefix); ?>/#</pre>
+<h2><?= hk_te('MQTT.H_ABO') ?></h2>
+<?php
+/* Der Satz "Ohne diesen Eintrag kommt am Miniserver nichts an" gilt NUR fuer
+   Gateway V1. Unter V2 schaltet der LoxBerry-Kern auf der Abonnement-Seite
+   die Knoepfe ab - von Hand eintragen kann man dort nichts mehr, und der
+   unbedingte Satz schickte jeden V2-Anwender zu einem Eingabefeld, das es
+   nicht mehr gibt. Ist die Fassung nicht lesbar, stehen BEIDE Saetze da:
+   einen von beiden zu behaupten waere fuer die Haelfte der Anlagen falsch. */
+if ($hk_gwf >= 2) { ?>
+<div class="sm-hinweis"><?php echo hk_t('MQTT.ABO_V2'); ?></div>
+<?php } elseif ($hk_gwf === 1) { ?>
+<div class="sm-warnung"><?php echo hk_t('MQTT.ABO_PFLICHT'); ?></div>
+<?php } else { ?>
+<div class="sm-warnung"><?php echo hk_t('MQTT.ABO_PFLICHT'); ?></div>
+<div class="sm-hilfe"><?php echo hk_t('MQTT.ABO_V2'); ?></div>
+<?php } ?>
+<pre class="sm-pre"><?= hk_e($hk_praefix) ?>/#</pre>
 
-<h2><?php echo hk_e(hk_t('MQTT.H_THEMEN')); ?></h2>
-<p class="sm-small"><?php echo hk_t('MQTT.THEMEN_RETAINED'); ?></p>
+<h2><?= hk_te('MQTT.H_THEMEN') ?></h2>
+<p class="sm-hilfe"><?php echo hk_t('MQTT.THEMEN_RETAINED'); ?></p>
 <table class="sm-tbl">
-<tr><th style="width:44%"><?php echo hk_e(hk_t('MQTT.SP_THEMA')); ?></th><th><?php echo hk_e(hk_t('MQTT.SP_BEDEUTUNG')); ?></th></tr>
-<?php foreach (hk_themen() as $thema => $bedeutung) { ?>
-<tr><td class="sm-mono"><?php echo hk_e($hk_praefix . '/' . $thema); ?></td>
-    <td><?php echo $bedeutung; ?></td></tr>
+<tr><th style="width:38%"><?= hk_te('MQTT.SP_THEMA') ?></th><th style="width:10%"><?= hk_te('MQTT.SP_ART') ?></th><th><?= hk_te('MQTT.SP_BEDEUTUNG') ?></th></tr>
+<?php foreach (hk_themen() as $hk_thema => $hk_e_thema) { ?>
+<tr><td class="sm-mono"><?= hk_e($hk_praefix . '/' . $hk_thema) ?></td>
+    <td><?= hk_te('ART.' . strtoupper($hk_e_thema['art'])) ?></td>
+    <td><?= hk_e($hk_e_thema['text']) ?></td></tr>
 <?php } ?>
 </table>
-
-<p class="sm-small"><?php echo hk_t('MQTT.REGELWEG'); ?></p>
 </div>
 
 <!-- ========================= Einbindung in Loxone ========================= -->
-<div class="sm-pane<?php echo hk_aktiv('tab-loxone'); ?>" id="tab-loxone">
+<div class="sm-seite<?= $hk_tab === 'tab-loxone' ? ' sm-active' : '' ?>" id="tab-loxone">
 <div class="sm-legende">
-<span><i class="sm-punkt sm-b-lesen"></i> <?php echo hk_e(hk_t('LEGENDE.LESEN')); ?></span>
+<span><i class="sm-punkt sm-b-technik"></i> <?= hk_te('LEGENDE.TECHNIK') ?></span>
 </div>
 
-<h2>Einbindung in Loxone &ndash; Schritt f&uuml;r Schritt</h2>
-<p class="sm-small">Das Plugin fragt Beamer und Xbox ab und meldet jeden Zustand als eigenes
-MQTT-Thema (Schritt&nbsp;1 und&nbsp;2). Umgekehrt nimmt es &uuml;ber einfache Adressen Befehle
-entgegen (Schritt&nbsp;3). Daraus l&auml;sst sich eine Kino-Szene bauen, die auf Knopfdruck
-alles einschaltet und beim Verlassen wieder abr&auml;umt.</p>
+<h2><?= hk_te('LOX.H_SCHRITTWEISE') ?></h2>
+<p class="sm-hilfe"><?php echo hk_t('LOX.EINLEITUNG'); ?></p>
 
-<h2>Schritt 1: Abo im MQTT-Gateway eintragen</h2>
-<p class="sm-small"><b>Ohne diesen Eintrag kommt am Miniserver nichts an.</b> Einzutragen unter
-<i>System-Einstellungen &rarr; MQTT Gateway &rarr; Abonnements</i>:</p>
-<pre class="sm-mono" style="background:#f4f4f4;border:1px solid #ccc;padding:10px;"><?php
-echo hk_e($hk_praefix); ?>/#</pre>
-
-<h2>Schritt 2: Zustand lesen &ndash; &uuml;ber MQTT</h2>
-<p class="sm-small">Der Dienst meldet jeden Wert <b>retained</b> an den Broker.
-Das MQTT-Gateway von LoxBerry leitet sie an den Miniserver weiter. Alle Themen
-liegen unter <span class="sm-mono"><?php echo hk_e($hk_praefix); ?>/</span>.</p>
-
-<table class="sm-tbl">
-<tr><th>Thema</th><th>Bedeutung</th></tr>
-<?php foreach (hk_themen() as $thema => $bedeutung) { ?>
-<tr><td class="sm-mono"><?php echo hk_e($hk_praefix . '/' . $thema); ?></td>
-    <td><?php echo hk_e($bedeutung); ?></td></tr>
-<?php } ?>
-</table>
-
-<div class="sm-knopfreihe sm-b-lesen">
-  <form method="post" action="index.php">
-    <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
-    <button data-role="none" type="submit" name="download" value="mqtt_in"><?php echo hk_t('ALLGEMEIN.K_VORLAGE_EINGAENGE'); ?></button>
-  </form>
-</div>
-<p class="sm-small">Die Datei l&auml;sst sich in Loxone Config unter
-<i>Virtuelle Eing&auml;nge</i> einlesen. Sie legt die Eing&auml;nge mit den richtigen
-Namen an; die Werte kommen dann vom MQTT-Gateway.</p>
-
-<h2>Schritt 3: Schalten &ndash; &uuml;ber virtuelle Ausg&auml;nge</h2>
-<?php if ($hk_token === '') { ?>
-<div class="sm-alert sm-err">Es gibt noch kein Aktionstoken. Einmal im Reiter
-<i>Einstellungen</i> speichern, dann erscheinen hier die vollst&auml;ndigen
-Adressen.</div>
+<h2><?= hk_te('LOX.H_SCHRITT1') ?></h2>
+<?php if ($hk_gwf >= 2) { ?>
+<div class="sm-hinweis"><?php echo hk_t('MQTT.ABO_V2'); ?></div>
+<?php } elseif ($hk_gwf === 1) { ?>
+<div class="sm-warnung"><?php echo hk_t('MQTT.ABO_PFLICHT'); ?></div>
 <?php } else { ?>
-<p class="sm-small">In Loxone Config einen <b>virtuellen Ausgang</b> anlegen.
-Bei ihm steht nur die Adresse des LoxBerry, die Befehle kommen in die
-<b>virtuellen Ausgangsbefehle</b> darunter.</p>
+<div class="sm-warnung"><?php echo hk_t('MQTT.ABO_PFLICHT'); ?></div>
+<div class="sm-hilfe"><?php echo hk_t('MQTT.ABO_V2'); ?></div>
+<?php } ?>
+<pre class="sm-pre"><?= hk_e($hk_praefix) ?>/#</pre>
 
+<h2><?= hk_te('LOX.H_SCHRITT2') ?></h2>
+<p class="sm-hilfe"><?php echo hk_t('LOX.SCHRITT2'); ?></p>
 <table class="sm-tbl">
-<tr><th style="width:22%">Feld</th><th>Wert</th></tr>
-<tr><td>Adresse des Ausgangs</td>
-    <td class="sm-mono">http://<?php echo hk_e(gethostname() ?: 'loxberry'); ?></td></tr>
+<tr><th style="width:38%"><?= hk_te('MQTT.SP_THEMA') ?></th><th style="width:10%"><?= hk_te('MQTT.SP_ART') ?></th><th><?= hk_te('MQTT.SP_BEDEUTUNG') ?></th></tr>
+<?php foreach (hk_themen() as $hk_thema => $hk_e_thema) { ?>
+<tr><td class="sm-mono"><?= hk_e($hk_praefix . '/' . $hk_thema) ?></td>
+    <td><?= hk_te('ART.' . strtoupper($hk_e_thema['art'])) ?></td>
+    <td><?= hk_e($hk_e_thema['text']) ?></td></tr>
+<?php } ?>
 </table>
-<div class="sm-knopfreihe sm-b-lesen">
+<div class="sm-knopfreihe">
   <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
     <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
-    <button data-role="none" type="submit" name="download" value="vo"><?php echo hk_t('ALLGEMEIN.K_VORLAGE_VO'); ?></button>
+    <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="download" value="mqtt_in"><?= hk_te('ALLGEMEIN.K_VORLAGE_EINGAENGE') ?></button>
   </form>
 </div>
-<p class="sm-small">Die Datei l&auml;sst sich in Loxone Config unter <i>Virtuelle Ausg&auml;nge</i>
-einlesen. Sie legt die Aktionsaufrufe samt Aktionstoken an.</p>
-<p class="sm-small">Statt des Rechnernamens geht auch die IP des LoxBerry. Kein
-Benutzer und kein Passwort &mdash; der Aktionsendpunkt liegt im unangemeldeten
-Bereich und pr&uuml;ft stattdessen das Token.</p>
+<p class="sm-hilfe"><?php echo hk_t('LOX.VORLAGE_HINWEIS'); ?></p>
 
+<h2><?= hk_te('LOX.H_SCHRITT3') ?></h2>
+<?php if ($hk_token === '') { ?>
+<div class="sm-warnung"><?php echo hk_t('LOX.KEIN_TOKEN'); ?></div>
+<?php } else { ?>
+<p class="sm-hilfe"><?php echo hk_t('LOX.SCHRITT3'); ?></p>
 <table class="sm-tbl">
-<tr><th style="width:22%">Ausgangsbefehl</th><th>Befehl bei EIN (Methode GET)</th></tr>
-<?php foreach (hk_aktionen() as $aktion => $bezeichnung) { ?>
-<tr><td><?php echo hk_e($bezeichnung); ?></td>
-    <td class="sm-mono"><?php echo hk_e(hk_aktionsadresse($hk_cfg, $aktion)); ?></td></tr>
+<tr><th style="width:26%"><?= hk_te('LOX.SP_FELD') ?></th><th><?= hk_te('LOX.SP_WERT') ?></th></tr>
+<tr><td><?= hk_te('LOX.ADRESSE_AUSGANG') ?></td><td class="sm-mono">http://<?= hk_e($hk_host) ?></td></tr>
+</table>
+<div class="sm-knopfreihe">
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+    <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="download" value="vo"><?= hk_te('ALLGEMEIN.K_VORLAGE_VO') ?></button>
+  </form>
+</div>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th style="width:26%"><?= hk_te('LOX.SP_BEFEHL') ?></th><th><?= hk_te('LOX.SP_EIN') ?></th></tr>
+<?php foreach (hk_aktionen() as $hk_a => $hk_s) { ?>
+<tr><td><?= hk_te($hk_s) ?></td>
+    <td class="sm-mono"><?= hk_e(hk_aktionsadresse($hk_cfg, $hk_a)) ?></td></tr>
+<?php } ?>
+<?php foreach (hk_aktionen_mit_wert() as $hk_a => $hk_s) { ?>
+<tr><td><?= hk_te($hk_s) ?></td>
+    <td class="sm-mono"><?= hk_e(hk_aktionsadresse($hk_cfg, $hk_a, 'WERT')) ?></td></tr>
 <?php } ?>
 </table>
-<div class="sm-alert sm-info">
-Ein virtueller Ausgangsbefehl feuert bei der Flanke 0&rarr;1, nicht dauerhaft.
-F&uuml;r das <b>Einschalten des Beamers</b> braucht es dieses Plugin nicht: Loxone
-kann Wake-on-LAN selbst. Ein virtueller Ausgang mit der Adresse
-<span class="sm-mono">wol://</span> und der MAC ohne Trennzeichen als Befehl
-gen&uuml;gt und ist der k&uuml;rzere Weg.
 </div>
+<div class="sm-hinweis"><?php echo hk_t('LOX.FLANKE'); ?></div>
+<?php if (hk_an($hk_cfg, 'szene', 'aktiv')) { ?>
+<div class="sm-hinweis"><?php echo hk_t('LOX.SZENE'); ?></div>
+<?php } ?>
 <?php } ?>
 
-<h2>Schritt 4: Kachel in der App</h2>
-<p class="sm-small">Einen <i>Status</i>-Baustein anlegen: <span class="sm-mono">v1</span> mit
-<span class="sm-mono">beamer_an</span>, <span class="sm-mono">v2</span> mit
-<span class="sm-mono">xbox_an</span> verbinden. Zwei Statustexte gen&uuml;gen &mdash; einer f&uuml;r
-&bdquo;Kino l&auml;uft&ldquo;, einer f&uuml;r &bdquo;alles aus&ldquo;. H&auml;kchen
-<i>Visualisierung</i> setzen, fertig.</p>
+<h2><?= hk_te('LOX.H_SCHRITT4') ?></h2>
+<p class="sm-hilfe"><?php echo hk_t('LOX.SCHRITT4'); ?></p>
+<?php if ($hk_token !== '') { ?>
+<pre class="sm-pre">http://<?= hk_e($hk_host) . hk_e(hk_selftestadresse($hk_cfg)) ?></pre>
+<p class="sm-hilfe"><?php echo hk_t('LOX.SELFTEST_ANTWORT'); ?></p>
+<?php } ?>
 
-<h2>Schritt 5: Das Clientgeheimnis l&auml;uft ab</h2>
-<p class="sm-small">Das Geheimnis der Xbox-Anmeldung bei Microsoft hat ein Ablaufdatum. L&auml;uft es
-ab, meldet sich die Konsole nicht mehr &mdash; ohne jede Fehlermeldung in der App. Das Plugin liefert
-deshalb <span class="sm-mono">xbox_geheimnis_tage</span>: Tage bis zum Ablauf, negativ bedeutet
-abgelaufen. Ein Schwellwertschalter darauf und eine Benachrichtigung ersparen die b&ouml;se
-&Uuml;berraschung. Aufbau in Schritt&nbsp;6, Zeilen 12 und 13.</p>
+<h2><?= hk_te('LOX.H_SCHRITT5') ?></h2>
+<div class="sm-warnung"><?php echo hk_tf('LOX.AUSFALL', array('%1' => hk_e($hk_praefix))); ?></div>
 
-<h2>Schritt 6: Komplette Baustein-Liste zum 1:1-Nachbauen</h2>
-<p class="sm-small">So sieht die vollst&auml;ndige Logik auf der Programmierseite aus (jede Zeile =
-ein Baustein). Alle Bausteine findet man in Loxone Config &uuml;ber die Baustein-Suche (F5):</p>
+<h2><?= hk_te('LOX.H_SCHRITT6') ?></h2>
+<p class="sm-hilfe"><?php echo hk_t('LOX.SCHRITT6'); ?></p>
+
+<h2><?= hk_te('LOX.H_SCHRITT7') ?></h2>
+<p class="sm-hilfe"><?php echo hk_t('LOX.BAUSTEINE_EINLEITUNG'); ?></p>
+<div class="sm-breit">
 <table class="sm-tbl">
-<tr><th>#</th><th>Baustein (Typ)</th><th>Name (Vorschlag)</th><th>Parameter</th><th>Eing&auml;nge verbinden mit</th></tr>
-<tr><td>1</td><td>Virtueller Eingang</td><td class="sm-mono"><?php echo hk_e($hk_praefix); ?>_beamer_an</td><td>digital</td><td>&mdash; (kommt &uuml;ber das Gateway)</td></tr>
-<tr><td>2</td><td>Virtueller Eingang</td><td class="sm-mono"><?php echo hk_e($hk_praefix); ?>_beamer_erreichbar</td><td>digital</td><td>&mdash;</td></tr>
-<tr><td>3</td><td>Virtueller Eingang</td><td class="sm-mono"><?php echo hk_e($hk_praefix); ?>_xbox_an</td><td>digital</td><td>&mdash;</td></tr>
-<tr><td>4</td><td>Virtueller Eingang</td><td class="sm-mono"><?php echo hk_e($hk_praefix); ?>_xbox_angemeldet</td><td>digital</td><td>&mdash;</td></tr>
-<tr><td>5</td><td>Virtueller Eingang</td><td class="sm-mono"><?php echo hk_e($hk_praefix); ?>_xbox_geheimnis_tage</td><td>analog, Einheit Tage</td><td>&mdash;</td></tr>
-<tr><td>6</td><td>Virtueller Eingang</td><td class="sm-mono"><?php echo hk_e($hk_praefix); ?>_service_online</td><td>digital</td><td>&mdash;</td></tr>
-<tr><td>7</td><td>Merker (remanent, Visu)</td><td>Kino-Modus</td><td>Visualisierung EIN &mdash; der Schalter in der App</td><td>&mdash; (Bedienung)</td></tr>
-<tr><td>8</td><td>Flankenerkennung (steigend)</td><td>Kino startet</td><td>&mdash;</td><td>Eingang = #7</td></tr>
-<tr><td>9</td><td>Flankenerkennung (fallend)</td><td>Kino endet</td><td>&mdash;</td><td>Eingang = #7</td></tr>
-<tr><td>10</td><td>Virtueller Ausgang + Befehle</td><td>Heimkino</td><td>Adresse des LoxBerry, Befehle wie in Schritt&nbsp;3</td><td><span class="sm-mono">beamer-wol</span> und <span class="sm-mono">xbox-an</span> &larr; #8, <span class="sm-mono">beamer-aus</span> und <span class="sm-mono">xbox-aus</span> &larr; #9</td></tr>
-<tr><td>11</td><td>Einschaltverz&ouml;gerung</td><td>Beamer kam nicht hoch</td><td>90&nbsp;s</td><td>Eingang = #7 UND NICHT #1 &rarr; Benachrichtigung</td></tr>
-<tr><td>12</td><td>Schwellwertschalter</td><td>Xbox-Geheimnis l&auml;uft ab</td><td>Ein <b>14</b> / Aus <b>21</b> (Ein &lt; Aus = schaltet beim <b>Unter</b>schreiten ein)</td><td>Eingang = #5</td></tr>
-<tr><td>13</td><td>Benachrichtigung</td><td>Xbox-Geheimnis erneuern</td><td>Text z.&nbsp;B. &bdquo;Das Clientgeheimnis der Xbox-Anmeldung l&auml;uft in weniger als 14 Tagen ab.&ldquo;</td><td>&larr; #12</td></tr>
-<tr><td>14</td><td>Status</td><td>Heimkino</td><td>Statustext siehe Schritt&nbsp;4, Visualisierung EIN</td><td>v1 = #1, v2 = #3</td></tr>
+<tr><th>#</th><th><?= hk_te('LOX.SP_BAUSTEIN') ?></th><th><?= hk_te('LOX.SP_NAME') ?></th><th><?= hk_te('LOX.SP_PARAMETER') ?></th><th><?= hk_te('LOX.SP_VERBINDEN') ?></th></tr>
+<tr><td>1</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e($hk_praefix) ?>_beamer_an</td><td><?= hk_te('ART.DIGITAL') ?></td><td>&mdash;</td></tr>
+<tr><td>2</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e($hk_praefix) ?>_beamer_erreichbar</td><td><?= hk_te('ART.DIGITAL') ?></td><td>&mdash;</td></tr>
+<tr><td>3</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e($hk_praefix) ?>_xbox_an</td><td><?= hk_te('ART.DIGITAL') ?></td><td>&mdash;</td></tr>
+<tr><td>4</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e($hk_praefix) ?>_xbox_angemeldet</td><td><?= hk_te('ART.DIGITAL') ?></td><td>&mdash;</td></tr>
+<tr><td>5</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e($hk_praefix) ?>_xbox_geheimnis_tage</td><td><?= hk_te('ART.ANALOG') ?>, MinVal -10000</td><td>&mdash;</td></tr>
+<tr><td>6</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e($hk_praefix) ?>_service_online</td><td><?= hk_te('ART.DIGITAL') ?></td><td>&mdash;</td></tr>
+<tr><td>7</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e($hk_praefix) ?>_service_zeitstempel</td><td><?= hk_te('ART.ANALOG') ?></td><td>&mdash;</td></tr>
+<tr><td>8</td><td><?= hk_te('LOX.MERKER') ?></td><td>Kino-Modus</td><td><?= hk_te('LOX.P_VISU') ?></td><td>&mdash;</td></tr>
+<tr><td>9</td><td><?= hk_te('LOX.FLANKE_AUF') ?></td><td>Kino startet</td><td>&mdash;</td><td>#8</td></tr>
+<tr><td>10</td><td><?= hk_te('LOX.FLANKE_AB') ?></td><td>Kino endet</td><td>&mdash;</td><td>#8</td></tr>
+<tr><td>11</td><td><?= hk_te('LOX.VO') ?></td><td>Heimkino</td><td>http://<?= hk_e($hk_host) ?></td><td><span class="sm-mono">beamer-wol</span>, <span class="sm-mono">xbox-an</span> &larr; #9; <span class="sm-mono">beamer-aus</span>, <span class="sm-mono">xbox-aus</span> &larr; #10</td></tr>
+<tr><td>12</td><td><?= hk_te('LOX.EINSCHALTVERZ') ?></td><td>Beamer kam nicht hoch</td><td>90 s</td><td>#8 UND NICHT #1</td></tr>
+<tr><td>13</td><td><?= hk_te('LOX.SCHWELLWERT') ?></td><td>Xbox-Geheimnis</td><td><?= hk_te('LOX.P_SCHWELLE') ?></td><td>#5</td></tr>
+<tr><td>14</td><td><?= hk_te('LOX.MELDUNG') ?></td><td>Xbox-Geheimnis erneuern</td><td>&mdash;</td><td>&larr; #13</td></tr>
+<tr><td>15</td><td><?= hk_te('LOX.STATUS') ?></td><td>Heimkino</td><td><?= hk_te('LOX.P_VISU') ?></td><td>v1 = #1, v2 = #3</td></tr>
 </table>
-<div class="sm-alert sm-info">
-<b>Zu #10:</b> ein virtueller Ausgangsbefehl feuert bei der Flanke 0&rarr;1, nicht dauerhaft. Deshalb
-die beiden Flankenbausteine #8 und #9 &mdash; ein Merker allein w&uuml;rde beim Einschalten genau
-einmal ausl&ouml;sen und beim Ausschalten gar nicht.<br>
-<b>Zu #11:</b> der Beamer braucht nach dem Einschalten rund eine Minute, bis er auf Port 9761
-antwortet. Eine k&uuml;rzere Verz&ouml;gerung meldet einen Fehler, der keiner ist.<br>
-<b>Zu #13:</b> der Benachrichtigungs-Baustein sendet nur bei einem Wechsel von Aus auf Ein. Niemals
-mehrere Quellen direkt an seinen Eingang legen &mdash; erst &uuml;ber einen ODER-Baustein
-zusammenf&uuml;hren.
 </div>
+<div class="sm-hinweis"><?php echo hk_t('LOX.BAUSTEINE_HINWEISE'); ?></div>
+
+<h2><?= hk_te('LOX.H_SCHRITT8') ?></h2>
+<p class="sm-hilfe"><?php echo hk_tf('LOX.GEGENPROBE', array('%1' => hk_e($hk_praefix))); ?></p>
 </div>
 
 <!-- ================================ Test ================================ -->
-<div class="sm-pane<?php echo hk_aktiv('tab-test'); ?>" id="tab-test">
+<div class="sm-seite<?= $hk_tab === 'tab-test' ? ' sm-active' : '' ?>" id="tab-test">
 <div class="sm-legende">
-<span><i class="sm-punkt sm-b-lesen"></i> <?php echo hk_e(hk_t('LEGENDE.LESEN')); ?></span>
-<span><i class="sm-punkt sm-b-aktion"></i> <?php echo hk_e(hk_t('LEGENDE.AKTION')); ?></span>
+<span><i class="sm-punkt sm-b-lesen"></i> <?= hk_te('LEGENDE.LESEN') ?></span>
+<span><i class="sm-punkt sm-b-technik"></i> <?= hk_te('LEGENDE.TECHNIK') ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?= hk_te('LEGENDE.AKTION') ?></span>
 </div>
 
+<h2><?= hk_te('TEST.H_SELBSTPRUEFUNG') ?></h2>
+<table class="sm-tbl">
+<tr><th style="width:6%"></th><th style="width:40%"><?= hk_te('TEST.SP_FRAGE') ?></th><th><?= hk_te('TEST.SP_ANTWORT') ?></th></tr>
+<?php foreach ($hk_pruefzeilen as $hk_zeile) { ?>
+<tr><td style="text-align:center;"><?php
+  echo $hk_zeile[0] === 1 ? '<span class="sm-an">&#10004;</span>'
+     : ($hk_zeile[0] === 2 ? '<span style="color:#546e7a;">?</span>'
+                           : '<span class="sm-aus">&#10008;</span>'); ?></td>
+  <td><?= hk_e($hk_zeile[1]) ?></td><td><?= hk_e($hk_zeile[2]) ?></td></tr>
+<?php } ?>
+</table>
+<p class="sm-hilfe"><?php echo hk_t('TEST.SELBSTPRUEFUNG_HINWEIS'); ?></p>
+
 <?php if ($hk_test_titel !== '') { ?>
-<div class="sm-alert sm-ok"><b><?php echo hk_e($hk_test_titel); ?></b></div>
+<h2><?= hk_e($hk_test_titel) ?></h2>
 <?php echo $hk_test_text; ?>
 <?php } ?>
 
-<h2>Nachsehen</h2>
-<div class="sm-knopfreihe sm-b-lesen">
-<?php
-$ansehen = array(
-    'umgebung'          => 'Umgebung pr&uuml;fen',
-    'anmeldedaten'      => 'Anmeldedaten pr&uuml;fen',
-    'krypto'            => 'Verschl&uuml;sselung pr&uuml;fen',
-    'beamer_erreichbar' => 'Beamer erreichbar?',
-    'beamer_status'     => 'Beamer: Zustand',
-    'beamer_ipcontrol'  => 'Beamer: IP-Steuerung',
-    'xbox_status'       => 'Xbox: Zustand',
-    'xbox_konsolen'     => 'Konsolen suchen',
-);
-foreach ($ansehen as $wert => $text) { ?>
+<h2><?= hk_te('TEST.H_NACHSEHEN') ?></h2>
+<div class="sm-knopfreihe">
   <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
     <input data-role="none" type="hidden" name="activetab" value="tab-test">
-    <button data-role="none" type="submit" name="test" value="<?php echo hk_e($wert); ?>"><?php
-      echo hk_e($text); ?></button>
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="test" value="umgebung"><?= hk_te('TEST.K_UMGEBUNG') ?></button>
+  </form>
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="test" value="anmeldedaten"><?= hk_te('TEST.K_ANMELDEDATEN') ?></button>
+  </form>
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="test" value="krypto"><?= hk_te('TEST.K_KRYPTO') ?></button>
+  </form>
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="test" value="beamer_erreichbar"><?= hk_te('TEST.K_ERREICHBAR') ?></button>
+  </form>
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="test" value="beamer_status"><?= hk_te('TEST.K_STATUS') ?></button>
+  </form>
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="test" value="beamer_ipcontrol"><?= hk_te('TEST.K_IPCONTROL') ?></button>
+  </form>
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="test" value="xbox_status"><?= hk_te('TEST.K_XBOX_STATUS') ?></button>
+  </form>
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="test" value="xbox_konsolen"><?= hk_te('TEST.K_KONSOLEN') ?></button>
+  </form>
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="test" value="beamer_mac"><?= hk_te('TEST.K_MAC') ?></button>
+  </form>
+</div>
+
+<h2><?= hk_te('TEST.H_TECHNIK') ?></h2>
+<div class="sm-knopfreihe">
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="download" value="mqtt_in"><?= hk_te('ALLGEMEIN.K_VORLAGE_EINGAENGE') ?></button>
+  </form>
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="download" value="vo"><?= hk_te('ALLGEMEIN.K_VORLAGE_VO') ?></button>
+  </form>
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="test" value="xbox_roh"><?= hk_te('TEST.K_XBOX_ROH') ?></button>
+  </form>
+</div>
+
+<h2><?= hk_te('TEST.H_SCHALTEN') ?></h2>
+<p class="sm-hilfe"><?= hk_te('TEST.SCHALTEN_HINWEIS') ?></p>
+<div class="sm-knopfreihe">
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="beamer_aus"><?= hk_te('AKTION.BEAMER_AUS') ?></button>
+  </form>
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="beamer_wol"><?= hk_te('AKTION.BEAMER_WOL') ?></button>
+  </form>
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="xbox_an"><?= hk_te('AKTION.XBOX_AN') ?></button>
+  </form>
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="xbox_aus"><?= hk_te('AKTION.XBOX_AUS') ?></button>
+  </form>
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="beamer_bild_aus"><?= hk_te('AKTION.BEAMER_BILD_AUS') ?></button>
+  </form>
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="beamer_bild_an"><?= hk_te('AKTION.BEAMER_BILD_AN') ?></button>
+  </form>
+<?php if (hk_an($hk_cfg, 'szene', 'aktiv')) { ?>
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="kino_an"><?= hk_te('AKTION.KINO_AN') ?></button>
+  </form>
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="kino_aus"><?= hk_te('AKTION.KINO_AUS') ?></button>
   </form>
 <?php } ?>
 </div>
 
-<h2>Technik</h2>
-<div class="sm-knopfreihe sm-b-aktion">
-  <form method="post" action="index.php">
-    <input data-role="none" type="hidden" name="activetab" value="tab-test">
-    <button data-role="none" type="submit" name="test" value="dienst_neu"><?php echo hk_t('ALLGEMEIN.K_DIENST_NEU'); ?></button>
-  </form>
-</div>
-
-<h2>Schalten</h2>
-<p class="sm-small">Diese Kn&ouml;pfe wirken sofort auf die Ger&auml;te.</p>
-<div class="sm-knopfreihe sm-b-aktion">
-<?php
-$aktionen = array(
-    'beamer_aus' => 'Beamer ausschalten',
-    'beamer_wol' => 'Beamer per WoL einschalten',
-    'xbox_an'    => 'Xbox wecken',
-    'xbox_aus'   => 'Xbox ausschalten',
-);
-foreach ($aktionen as $wert => $text) { ?>
-  <form method="post" action="index.php">
-    <input data-role="none" type="hidden" name="activetab" value="tab-test">
-    <button data-role="none" type="submit" name="test" value="<?php echo hk_e($wert); ?>"><?php
-      echo hk_e($text); ?></button>
-  </form>
-<?php } ?>
-</div>
-
-<h2>Frist des Clientgeheimnisses</h2>
-<p><span class="sm-scheibe <?php
-   echo $hk_ablauf_art === 'ok' ? 'sm-gruen'
-      : ($hk_ablauf_art === 'leer' ? 'sm-grau' : 'sm-rot'); ?>"></span>
-<?php echo $hk_ablauf_text; ?></p>
-
-<h2>Letzter Stand des Dienstes</h2>
+<h2><?= hk_te('TEST.H_LETZTER_STAND') ?></h2>
 <?php if ($hk_z === null) { ?>
-<div class="sm-alert sm-info">Der Dienst hat noch keinen Zustand abgelegt.</div>
+<div class="sm-hinweis"><?= hk_te('TEST.KEIN_ZUSTAND') ?></div>
 <?php } else { ?>
 <table class="sm-tbl">
-<tr><th style="width:30%">Gr&ouml;&szlig;e</th><th>Wert</th></tr>
-<tr><td>Zeitpunkt</td><td><?php echo hk_e($hk_z['zeit_text'] ?? ''); ?></td></tr>
-<tr><td>Beamer verwendet</td><td><?php
-  echo !empty($hk_z['beamer']['aktiv']) ? 'ja' : 'nein'; ?></td></tr>
-<tr><td>Beamer erreichbar</td><td><?php
-  echo !empty($hk_z['beamer']['erreichbar']) ? 'ja' : 'nein'; ?></td></tr>
-<tr><td>Beamer Zustand</td><td><?php
-  echo hk_e($hk_z['beamer']['status'] ?? ''); ?></td></tr>
-<tr><td>Beamer Quelle</td><td><?php
-  echo hk_e($hk_z['beamer']['app'] ?? ''); ?></td></tr>
-<tr><td>Xbox verwendet</td><td><?php
-  echo !empty($hk_z['xbox']['aktiv']) ? 'ja' : 'nein'; ?></td></tr>
-<tr><td>Xbox Zustand</td><td><?php
-  echo hk_e($hk_z['xbox']['status'] ?? ''); ?></td></tr>
-<tr><td>Xbox angemeldet</td><td><?php
-  echo !empty($hk_z['xbox']['angemeldet']) ? 'ja' : 'nein'; ?></td></tr>
-<?php if (!empty($hk_z['xbox']['quelle'])) { ?>
-<tr><td>Xbox Quelle der Auskunft</td><td><?php
-  echo $hk_z['xbox']['quelle'] === 'liste'
-      ? 'Konsolenliste (Ersatzweg &mdash; die direkte Statusabfrage wird vom '
-        . 'Gateway abgewiesen)'
-      : 'direkte Statusabfrage'; ?></td></tr>
+<tr><th style="width:34%"><?= hk_te('MQTT.SP_GROESSE') ?></th><th><?= hk_te('MQTT.SP_WERT') ?></th></tr>
+<tr><td><?= hk_te('STAND.ZEITPUNKT') ?></td><td><?= hk_e(isset($hk_z['zeit_text']) ? $hk_z['zeit_text'] : '') ?></td></tr>
+<tr><td><?= hk_te('STAND.BEAMER_VERWENDET') ?></td><td><?= hk_te(!empty($hk_z['beamer']['aktiv']) ? 'ALLGEMEIN.JA' : 'ALLGEMEIN.NEIN') ?></td></tr>
+<tr><td><?= hk_te('STAND.BEAMER_ERREICHBAR') ?></td><td><?= hk_te(!empty($hk_z['beamer']['erreichbar']) ? 'ALLGEMEIN.JA' : 'ALLGEMEIN.NEIN') ?></td></tr>
+<tr><td><?= hk_te('STAND.BEAMER_ZUSTAND') ?></td><td><?= hk_e(isset($hk_z['beamer']['status']) ? $hk_z['beamer']['status'] : '') ?></td></tr>
+<tr><td><?= hk_te('STAND.BEAMER_GRUND') ?></td><td><?= hk_e(isset($hk_z['beamer']['grund_text']) ? $hk_z['beamer']['grund_text'] : '') ?></td></tr>
+<tr><td><?= hk_te('STAND.BEAMER_QUELLE') ?></td><td><?= hk_e(isset($hk_z['beamer']['app']) ? $hk_z['beamer']['app'] : '') ?></td></tr>
+<tr><td><?= hk_te('STAND.XBOX_VERWENDET') ?></td><td><?= hk_te(!empty($hk_z['xbox']['aktiv']) ? 'ALLGEMEIN.JA' : 'ALLGEMEIN.NEIN') ?></td></tr>
+<tr><td><?= hk_te('STAND.XBOX_ZUSTAND') ?></td><td><?= hk_e(isset($hk_z['xbox']['status']) ? $hk_z['xbox']['status'] : '') ?></td></tr>
+<tr><td><?= hk_te('STAND.XBOX_ANGEMELDET') ?></td><td><?= hk_te(!empty($hk_z['xbox']['angemeldet']) ? 'ALLGEMEIN.JA' : 'ALLGEMEIN.NEIN') ?></td></tr>
+<?php if (isset($hk_z['betrieb']) && is_array($hk_z['betrieb'])) { ?>
+<tr><td><?= hk_te('STAND.BETRIEB_BEAMER') ?></td><td><?php
+  echo hk_e((string) $hk_z['betrieb']['beamer_h']) . ' h &middot; '
+     . hk_e((string) $hk_z['betrieb']['beamer_heute']) . ' min'; ?></td></tr>
+<tr><td><?= hk_te('STAND.BETRIEB_XBOX') ?></td><td><?php
+  echo hk_e((string) $hk_z['betrieb']['xbox_h']) . ' h &middot; '
+     . hk_e((string) $hk_z['betrieb']['xbox_heute']) . ' min'; ?></td></tr>
 <?php } ?>
-<?php $f = ($hk_z['beamer']['fehler'] ?? '') ?: ($hk_z['xbox']['fehler'] ?? '');
-  if ($f !== '') { ?>
-<tr><td>Letzter Fehler</td><td class="sm-err-text"><?php echo hk_e($f); ?></td></tr>
+<?php if (!empty($hk_z['xbox']['quelle'])) { ?>
+<tr><td><?= hk_te('STAND.XBOX_QUELLE') ?></td><td><?php
+  echo $hk_z['xbox']['quelle'] === 'liste' ? hk_te('STAND.QUELLE_LISTE') : hk_te('STAND.QUELLE_DIREKT'); ?></td></tr>
+<?php } ?>
+<?php $hk_f = (isset($hk_z['beamer']['fehler']) ? $hk_z['beamer']['fehler'] : '');
+  if ($hk_f === '' && isset($hk_z['xbox']['fehler'])) { $hk_f = $hk_z['xbox']['fehler']; }
+  if ($hk_f !== '') { ?>
+<tr><td><?= hk_te('STAND.LETZTER_FEHLER') ?></td><td class="sm-aus"><?= hk_e($hk_f) ?></td></tr>
 <?php } ?>
 </table>
 <?php } ?>
 </div>
 
 <!-- ============================== Logdateien ============================== -->
-<div class="sm-pane<?php echo hk_aktiv('tab-log'); ?>" id="tab-log">
+<div class="sm-seite<?= $hk_tab === 'tab-log' ? ' sm-active' : '' ?>" id="tab-log">
 <div class="sm-legende">
-<span><i class="sm-punkt sm-b-lesen"></i> <?php echo hk_e(hk_t('LEGENDE.LESEN')); ?></span>
+<span><i class="sm-punkt sm-b-lesen"></i> <?= hk_te('LEGENDE.LESEN') ?></span>
 </div>
-<h2>Protokoll</h2>
-<p class="sm-small">Neueste Zeile oben. Datei:
-<span class="sm-mono"><?php echo hk_e($hk_p['log']); ?></span></p>
+<h2><?= hk_te('REITER.LOG') ?></h2>
+<?php
+/* Die Protokollverwaltung von LoxBerry zeigt ALLE Dateien dieses Plugins,
+   nicht nur heimkino.log - also auch cron.err des Waechters. */
+if (class_exists('LBWeb', false) && method_exists('LBWeb', 'loglist_html')) {
+    echo LBWeb::loglist_html();
+}
+?>
+<p class="sm-hilfe"><?= hk_te('LOG.NEUESTE_OBEN') ?>
+<span class="sm-mono"><?= hk_e($hk_p['log']) ?></span></p>
 <?php if (!$hk_zeilen) { ?>
-<div class="sm-alert sm-info">Die Protokolldatei ist leer oder nicht lesbar.</div>
+<div class="sm-hinweis"><?= hk_te('LOG.LEER') ?></div>
 <?php } else { ?>
 <div class="sm-log"><?php
-  foreach ($hk_zeilen as $zeile) { echo hk_e($zeile) . "\n"; }
+  foreach ($hk_zeilen as $hk_zl) { echo hk_e($hk_zl) . "\n"; }
 ?></div>
 <?php } ?>
-<div class="sm-knopfreihe sm-b-lesen" style="margin-top:12px;">
+<div class="sm-knopfreihe" style="margin-top:12px;">
   <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
     <input data-role="none" type="hidden" name="activetab" value="tab-log">
-    <button data-role="none" type="submit" name="nichts" value="1"><?php echo hk_t('ALLGEMEIN.K_NEU_LADEN'); ?></button>
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="nichts" value="1"><?= hk_te('ALLGEMEIN.K_NEU_LADEN') ?></button>
   </form>
 </div>
 </div>
@@ -1093,29 +1266,19 @@ foreach ($aktionen as $wert => $text) { ?>
 
 <script>
 (function () {
-  var start = <?php echo json_encode($hk_tab); ?>;
-  var reiter = document.querySelectorAll('.sm-tab');
-  var seiten = document.querySelectorAll('.sm-pane');
-  function zeige(ziel) {
-    for (var i = 0; i < reiter.length; i++) {
-      reiter[i].classList.toggle('sm-active', reiter[i].getAttribute('data-ziel') === ziel);
-    }
-    for (var j = 0; j < seiten.length; j++) {
-      seiten[j].classList.toggle('sm-active', seiten[j].id === ziel);
-    }
-    var felder = document.querySelectorAll('input[name="activetab"]');
-    for (var k = 0; k < felder.length; k++) { felder[k].value = ziel; }
-  }
-  for (var i = 0; i < reiter.length; i++) {
-    reiter[i].addEventListener('click', function (ereignis) {
-      // Ohne JavaScript folgt der Browser dem href, und der Server liefert
-      // den richtigen Reiter. Mit JavaScript geht es schneller ohne
-      // Neuladen - deshalb hier den Verweis abfangen.
-      if (ereignis && ereignis.preventDefault) { ereignis.preventDefault(); }
-      zeige(this.getAttribute('data-ziel'));
-    });
-  }
-  zeige(start);
+	var reiter = document.querySelectorAll('.sm-tab');
+	function zeige(id) {
+		reiter.forEach(function (r) { r.classList.toggle('sm-active', r.dataset.ziel === id); });
+		document.querySelectorAll('.sm-seite').forEach(function (s) { s.classList.toggle('sm-active', s.id === id); });
+		document.querySelectorAll('input[name="activetab"]').forEach(function (f) { f.value = id; });
+		if (history.replaceState) { history.replaceState(null, '', 'index.php?form=' + id.replace('tab-', '')); }
+	}
+	reiter.forEach(function (r) {
+		r.addEventListener('click', function (e) { e.preventDefault(); zeige(r.dataset.ziel); });
+	});
+	// Der Server hat sm-active bereits gesetzt; dieser Aufruf richtet nur die
+	// versteckten activetab-Felder aus und ist ansonsten wirkungslos.
+	zeige(<?= json_encode($hk_tab) ?>);
 })();
 </script>
 

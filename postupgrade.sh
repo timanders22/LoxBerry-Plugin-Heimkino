@@ -48,6 +48,20 @@ chmod 640 "$PCONFIG/heimkino.cfg" 2>/dev/null
 chmod 600 "$PCONFIG/xbox_auth.json" 2>/dev/null
 chown loxberry:loxberry "$PCONFIG"/* 2>/dev/null
 chmod 755 "$LBPBIN/$PDIR"/*.py 2>/dev/null
+chmod 755 "$LBPBIN/$PDIR/dienst.sh" 2>/dev/null
+chmod 644 "$LBPBIN/$PDIR/hk_vorgaben.json" "$LBPBIN/$PDIR/hk_themen.json" 2>/dev/null
+
+# Die PID-Datei liegt seit 1.2.12 unter data/plugins statt unter log/plugins.
+# Eine liegengebliebene alte Datei wuerde die Oberflaeche einen Dienst
+# anzeigen lassen, den es nicht mehr gibt.
+rm -f "$BASE/log/plugins/$PDIR/hk_service.pid" 2>/dev/null
+
+# Der Sollmerker sagt dem minuetlichen Waechter, dass der Dienst laufen soll.
+# Wer von 1.2.11 kommt, hat ihn noch nicht - ohne ihn bliebe der Waechter
+# nach dem Update fuer immer untaetig.
+mkdir -p "$BASE/data/plugins/$PDIR" 2>/dev/null
+touch "$BASE/data/plugins/$PDIR/soll_laufen" 2>/dev/null
+chown loxberry:loxberry "$BASE/data/plugins/$PDIR/soll_laufen" 2>/dev/null
 
 # Aufraeumen - an beiden Orten.
 rm -rf "$SICHER" 2>/dev/null

@@ -1,0 +1,18 @@
+#!/bin/sh
+# Heimkino - Waechter, minuetlich.
+# Startet den Dienst neu, wenn er laufen soll, aber nicht laeuft.
+#
+# REPLACELBPBINDIR wird bei der Installation durch den bin-Pfad des Plugins
+# ersetzt. Ausdruecklich KEINE Rechnung mit "..": LoxBerry legt die Datei
+# drei Ebenen unter der Wurzel ab, ein $SELF/../.. landet damit auf
+# <Wurzel>/system - und der Waechter suchte dort nach bin/plugins/..., wo
+# nichts liegt (am Geraet gemessen, 18.08.2026).
+#
+# Der Aufruf geht ausdruecklich ueber die Shell: geht bei einem misslungenen
+# Update das Ausfuehrungsrecht an dienst.sh verloren, schluege der
+# unmittelbare Aufruf lautlos fehl.
+#
+# Die regulaere Ausgabe bleibt still (sonst schreibt der Cron jede Minute),
+# die FEHLERausgabe landet in einer eigenen Datei neben dem Protokoll - ein
+# Waechter, der schweigend nichts tut, ist schlimmer als keiner.
+/bin/bash "REPLACELBPBINDIR/dienst.sh" waechter >/dev/null 2>>REPLACELBPLOGDIR/cron.err

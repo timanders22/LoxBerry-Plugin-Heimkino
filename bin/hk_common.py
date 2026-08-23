@@ -8,6 +8,7 @@ Geraetelogik; die steht in lg_beamer.py und xbox_cloud.py.
 """
 
 import configparser
+import errno
 import json
 import logging
 import os
@@ -37,6 +38,13 @@ def lb_wurzel_ermitteln():
 
 ORDNER = "heimkino"
 
+# Groesse, ab der die Protokolldatei gekappt wird, und was danach stehen
+# bleibt. log/plugins liegt auf einem LoxBerry im Arbeitsspeicher (tmpfs) -
+# eine Datei, die dort unbegrenzt waechst, frisst keinen Plattenplatz,
+# sondern RAM. Bis 1.2.11 gab es gar keine Kappung.
+LOG_HOECHSTGROESSE = 512 * 1024
+LOG_BEHALTEN = 256 * 1024
+
 
 # --------------------------------------------------------------------------
 # Pfade
@@ -56,9 +64,9 @@ def _lbhome():
         with open("/etc/environment", "r", encoding="utf-8", errors="replace") as datei:
             for zeile in datei:
                 if zeile.strip().startswith("LBHOMEDIR"):
-                    wert = zeile.split("=", 1)[1].strip().strip('"').strip("'")
-                    if os.path.isdir(wert):
-                        return wert
+                    wert_roh = zeile.split("=", 1)[1].strip().strip('"').strip("'")
+                    if os.path.isdir(wert_roh):
+                        return wert_roh
     except OSError:
         pass
     for kandidat in (lb_wurzel_ermitteln(), "/home/loxberry/loxberry"):
@@ -69,15 +77,34 @@ def _lbhome():
 
 def pfade():
     heim = _lbhome()
+    eigen = os.path.dirname(os.path.abspath(__file__))
     return {
         "home": heim,
+        "bin": eigen,
         "config": os.path.join(heim, "config", "plugins", ORDNER, "heimkino.cfg"),
         "auth": os.path.join(heim, "config", "plugins", ORDNER, "xbox_auth.json"),
+        # Der Code aus der Microsoft-Rueckleitung wird hier abgelegt, statt
+        # ihn ueber die Kommandozeile zu uebergeben - Argumente stehen in der
+        # Prozessliste und sind fuer jeden lokalen Benutzer lesbar.
+        "code": os.path.join(heim, "config", "plugins", ORDNER, "xbox_code.tmp"),
         "zustand": os.path.join(heim, "data", "plugins", ORDNER, "zustand.json"),
+        # Auftraege des Aktionsendpunkts: was zuletzt geschaltet wurde und
+        # welcher Zustand daraufhin erwartet wird. Der Dienst fasst nach -
+        # er ist die einzige Stelle, die den Beamer befragen darf.
+        "auftrag": os.path.join(heim, "data", "plugins", ORDNER, "auftrag.json"),
+        # Betriebszaehler. Neustartfest, deshalb unter data/ und nicht
+        # unter log/ - log/plugins ist eine Ramdisk.
+        "betrieb": os.path.join(heim, "data", "plugins", ORDNER, "betrieb.json"),
+        # Geraetesperre: Dienst UND Einzelbefehl nehmen sie, damit nicht zwei
+        # Prozesse gleichzeitig mit dem Beamer sprechen. Siehe hk_sperre.py.
+        "sperre": os.path.join(heim, "data", "plugins", ORDNER, "beamer.lock"),
+        "soll": os.path.join(heim, "data", "plugins", ORDNER, "soll_laufen"),
         "logdir": os.path.join(heim, "log", "plugins", ORDNER),
         "log": os.path.join(heim, "log", "plugins", ORDNER, "heimkino.log"),
-        "pid": os.path.join(heim, "log", "plugins", ORDNER, "hk_service.pid"),
+        "pid": os.path.join(heim, "data", "plugins", ORDNER, "hk_service.pid"),
         "general": os.path.join(heim, "config", "system", "general.json"),
+        "vorgaben": os.path.join(eigen, "hk_vorgaben.json"),
+        "themen": os.path.join(eigen, "hk_themen.json"),
     }
 
 
@@ -88,8 +115,41 @@ P = pfade()
 # Protokoll
 # --------------------------------------------------------------------------
 
+def log_kappen(pfad=None):
+    """Die Protokolldatei kappen, bevor sie den Arbeitsspeicher auffrisst.
+
+    Es wird nicht rotiert, sondern die zweite Haelfte behalten und der Rest
+    verworfen - ein zweiter Dateiname waere ein zweiter Ort, an dem jemand
+    suchen muss. Der Schnitt liegt auf einem Zeilenanfang.
+    """
+    pfad = pfad or P["log"]
+    try:
+        if os.path.getsize(pfad) <= LOG_HOECHSTGROESSE:
+            return False
+    except OSError:
+        return False
+    try:
+        with open(pfad, "rb") as datei:
+            datei.seek(-LOG_BEHALTEN, os.SEEK_END)
+            rest = datei.read()
+        schnitt = rest.find(b"\n")
+        if 0 <= schnitt < len(rest) - 1:
+            rest = rest[schnitt + 1:]
+        vorlaeufig = "%s.%d.kappen" % (pfad, os.getpid())
+        with open(vorlaeufig, "wb") as datei:
+            datei.write(b"# ... aeltere Zeilen wurden gekappt ...\n")
+            datei.write(rest)
+            datei.flush()
+            os.fsync(datei.fileno())
+        os.replace(vorlaeufig, pfad)
+        return True
+    except OSError:
+        return False
+
+
 def protokoll_einrichten(name="heimkino", stufe=logging.INFO):
     os.makedirs(P["logdir"], exist_ok=True)
+    log_kappen()
     log = logging.getLogger(name)
     if log.handlers:
         return log
@@ -115,48 +175,173 @@ def protokoll_einrichten(name="heimkino", stufe=logging.INFO):
 
 # --------------------------------------------------------------------------
 # Konfiguration
+#
+# Die Vorgaben stehen NICHT hier, sondern in bin/hk_vorgaben.json - derselben
+# Datei, die auch die Oberflaeche liest. Bis 1.2.11 gab es zwei getrennt
+# gepflegte Listen; die eine kannte geheimnis_ablauf, die andere nicht.
 # --------------------------------------------------------------------------
 
-VORGABEN = {
-    "heimkino": {
-        "enabled": "1",
-        "intervall": "60",
-        "themenpraefix": "heimkino",
-        "mqtt": "1",
-        "aktionstoken": "",
-    },
-    "beamer": {
-        "aktiv": "0",
-        "ip": "",
-        "mac": "",
-        "keycode": "",
-        "port": "9761",
-        "zeitgrenze": "5",
-    },
-    "xbox": {
-        "aktiv": "0",
-        "geraete_id": "",
-    },
-}
+def _vorgaben_datei():
+    try:
+        with open(P["vorgaben"], "r", encoding="utf-8") as datei:
+            inhalt = json.load(datei)
+    except (OSError, ValueError):
+        return None
+    abschnitte = inhalt.get("abschnitte") if isinstance(inhalt, dict) else None
+    if not isinstance(abschnitte, list):
+        return None
+    ergebnis = {}
+    for abschnitt in abschnitte:
+        if not isinstance(abschnitt, dict):
+            continue
+        name = str(abschnitt.get("name", "")).strip()
+        if not name:
+            continue
+        werte = {}
+        for schluessel in abschnitt.get("schluessel", []):
+            if isinstance(schluessel, dict) and schluessel.get("name"):
+                werte[str(schluessel["name"])] = str(schluessel.get("vorgabe", ""))
+        ergebnis[name] = werte
+    return ergebnis or None
 
 
-def config_lesen():
+def vorgaben():
+    """Vorgabewerte, aus der gemeinsamen Datei gelesen.
+
+    Faellt die Datei aus, gibt es keinen Rueckfall auf eine zweite Liste im
+    Quelltext - genau die waere die zweite Wahrheit, die hier abgeschafft
+    wurde. Stattdessen ein leeres Ergebnis; der Aufrufer merkt es und meldet
+    es, statt still mit erfundenen Vorgaben weiterzulaufen.
+    """
+    zwischen = getattr(vorgaben, "_zwischen", None)
+    if zwischen is None:
+        zwischen = _vorgaben_datei() or {}
+        vorgaben._zwischen = zwischen
+    return dict((a, dict(w)) for a, w in zwischen.items())
+
+
+def themen():
+    """MQTT-Themen aus der gemeinsamen Datei. Liste von Woerterbuechern."""
+    zwischen = getattr(themen, "_zwischen", None)
+    if zwischen is None:
+        try:
+            with open(P["themen"], "r", encoding="utf-8") as datei:
+                inhalt = json.load(datei)
+            zwischen = [t for t in inhalt.get("themen", []) if isinstance(t, dict)]
+        except (OSError, ValueError):
+            zwischen = []
+        themen._zwischen = zwischen
+    return list(zwischen)
+
+
+def config_lesen(log=None):
+    """Konfiguration lesen. Gibt (cfg, lage) zurueck.
+
+    lage: "ok" | "fehlt" | "kaputt" | "keine_vorgaben"
+
+    Bis 1.2.11 wurde ein Lesefehler mit "pass" verschluckt. Eine kaputte
+    Datei - ein doppelter Schluessel genuegt - liess den Dienst mit
+    aktiv=0 weiterlaufen und melden, beide Geraete seien abgeschaltet.
+    Ohne eine Zeile im Protokoll.
+    """
+    vg = vorgaben()
     cfg = configparser.ConfigParser()
     cfg.optionxform = str
-    for abschnitt, werte in VORGABEN.items():
+    for abschnitt, werte in vg.items():
         cfg[abschnitt] = dict(werte)
+    if not vg:
+        if log:
+            log.error("bin/hk_vorgaben.json fehlt oder ist unlesbar (%s). "
+                      "Ohne Vorgaben kann der Dienst nicht beurteilen, was "
+                      "eingestellt ist - Plugin neu installieren.", P["vorgaben"])
+        return cfg, "keine_vorgaben"
+    if not os.path.isfile(P["config"]):
+        if log:
+            log.warning("Konfiguration %s fehlt - es gelten die Vorgaben.",
+                        P["config"])
+        return cfg, "fehlt"
     try:
         cfg.read(P["config"], encoding="utf-8")
-    except (OSError, configparser.Error):
-        pass
+    except (OSError, configparser.Error) as fehler:
+        if log:
+            log.error("Konfiguration %s ist unlesbar (%s). Es gelten die "
+                      "Vorgaben - beide Geraete gelten damit als abgeschaltet, "
+                      "obwohl sie es vielleicht nicht sind.",
+                      P["config"], fehler)
+        return cfg, "kaputt"
     # Fehlende Abschnitte nachziehen, damit kein Zugriff scheitert.
-    for abschnitt, werte in VORGABEN.items():
+    for abschnitt, werte in vg.items():
         if not cfg.has_section(abschnitt):
             cfg.add_section(abschnitt)
         for schluessel, vorgabe in werte.items():
             if not cfg.has_option(abschnitt, schluessel):
                 cfg.set(abschnitt, schluessel, vorgabe)
-    return cfg
+    return cfg, "ok"
+
+
+def config_fehlende():
+    """Welche Schluessel fehlen in der Datei? Liste "abschnitt.schluessel"."""
+    gelesen = configparser.ConfigParser()
+    gelesen.optionxform = str
+    try:
+        gelesen.read(P["config"], encoding="utf-8")
+    except (OSError, configparser.Error):
+        return []
+    fehlen = []
+    for abschnitt, werte in vorgaben().items():
+        for schluessel in werte:
+            if not gelesen.has_option(abschnitt, schluessel):
+                fehlen.append("%s.%s" % (abschnitt, schluessel))
+    return fehlen
+
+
+def config_schreiben(cfg):
+    """Konfiguration unteilbar schreiben, Rechte 0640 VOR dem Inhalt.
+
+    os.open mit dem Rechtemuster legt die Datei gleich geschuetzt an. Ein
+    chmod NACH dem Schreiben laesst sie fuer die Dauer des Schreibens mit
+    den Vorgaben der umask dastehen - in dieser Datei steht der Keycode des
+    Beamers und das Aktionstoken.
+    """
+    ziel = P["config"]
+    os.makedirs(os.path.dirname(ziel), exist_ok=True)
+    text = ("; Heimkino\n"
+            "; Wird von der Plugin-Oberflaeche und vom Dienst geschrieben.\n"
+            "; ACHTUNG: enthaelt den Keycode des Beamers - nicht veroeffentlichen.\n\n")
+    for abschnitt, werte in vorgaben().items():
+        text += "[%s]\n" % abschnitt
+        for schluessel in werte:
+            text += "%s=%s\n" % (schluessel, wert(cfg, abschnitt, schluessel, ""))
+        text += "\n"
+    vorlaeufig = "%s.%d.neu" % (ziel, os.getpid())
+    try:
+        kennung = os.open(vorlaeufig, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+        with os.fdopen(kennung, "w", encoding="utf-8") as datei:
+            datei.write(text)
+            datei.flush()
+            os.fsync(datei.fileno())
+        os.replace(vorlaeufig, ziel)
+        return True
+    except OSError:
+        try:
+            os.unlink(vorlaeufig)
+        except OSError:
+            pass
+        return False
+
+
+def config_vervollstaendigen(cfg, log=None):
+    """Fehlende Schluessel EINMAL in die Datei schreiben.
+
+    Ergaenzen beim Lesen genuegt nicht: die Datei bleibt dann lueckenhaft,
+    und "fehlt" ist von "steht auf dem Vorgabewert" nicht zu unterscheiden.
+    Geschrieben wird nur, wenn wirklich etwas gefehlt hat - sonst aendert
+    sich die Datei bei jedem Lauf ohne Anlass.
+    """
+    fehlten = config_fehlende()
+    if fehlten and config_schreiben(cfg) and log:
+        log.info("Konfiguration ergaenzt: %s", ", ".join(fehlten))
+    return fehlten
 
 
 def wert(cfg, abschnitt, schluessel, vorgabe=""):
@@ -255,6 +440,105 @@ def zustand_lesen():
 
 
 # --------------------------------------------------------------------------
+# Kleine JSON-Ablagen: Auftraege und Betriebszaehler
+#
+# Beide werden mit demselben unteilbaren Schreibweg abgelegt wie die
+# Zustandsdatei - Zwischenname mit Prozessnummer, fsync, dann umbenennen.
+# --------------------------------------------------------------------------
+
+def json_lesen(pfad, vorgabe=None):
+    try:
+        with open(pfad, "r", encoding="utf-8") as datei:
+            inhalt = json.load(datei)
+    except (OSError, ValueError):
+        return vorgabe
+    return inhalt if isinstance(inhalt, dict) else vorgabe
+
+
+def json_schreiben(pfad, daten, rechte=0o640):
+    os.makedirs(os.path.dirname(pfad), exist_ok=True)
+    vorlaeufig = "%s.%d.neu" % (pfad, os.getpid())
+    try:
+        text = json.dumps(daten, ensure_ascii=False, indent=1)
+    except (TypeError, ValueError):
+        return False
+    try:
+        kennung = os.open(vorlaeufig, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, rechte)
+        with os.fdopen(kennung, "w", encoding="utf-8") as datei:
+            datei.write(text)
+            datei.flush()
+            os.fsync(datei.fileno())
+        os.replace(vorlaeufig, pfad)
+        return True
+    except OSError:
+        try:
+            os.unlink(vorlaeufig)
+        except OSError:
+            pass
+        return False
+
+
+def auftrag_stellen(aktion, ziel, frist, wert=""):
+    """Einen Auftrag fuer den Dienst hinterlegen.
+
+    Aufgerufen von hk_cmd.py, also vom Aktionsendpunkt. Der Endpunkt selbst
+    wartet NICHT auf die Wirkung: ein virtueller Ausgang in Loxone hat ein
+    Zeitlimit, und der Beamer nimmt ohnehin nur eine Verbindung zur Zeit an.
+    Nachgefasst wird deshalb im Dienst.
+    """
+    return json_schreiben(P["auftrag"], {
+        "aktion": aktion,
+        "wert": wert,
+        "ziel": ziel,              # erwarteter Zustand, z. B. "aus" oder "On"
+        "gestellt": time.time(),
+        "frist": float(frist),
+    })
+
+
+def auftrag_lesen():
+    return json_lesen(P["auftrag"])
+
+
+def auftrag_loeschen():
+    try:
+        os.unlink(P["auftrag"])
+        return True
+    except OSError:
+        return False
+
+
+def _heute():
+    return time.strftime("%Y-%m-%d", time.localtime())
+
+
+def betrieb_fortschreiben(laeuft, vergangen, geraet):
+    """Betriebszeit fortschreiben. Gibt (stunden, minuten_heute) zurueck.
+
+    AUSDRUECKLICH eine Schaetzung: gezaehlt wird die Zeit zwischen zwei
+    Abfragen, wenn das Geraet bei der zweiten lief. Bei einem Takt von 60 s
+    liegt der Fehler je Ein- und Ausschaltvorgang bei bis zu einer Minute.
+    Das Geraet selbst wird nicht gefragt - es liefert diese Zahl nicht.
+
+    Ein Sprung in der Systemzeit oder eine lange Pause wird nicht mitgezaehlt:
+    was laenger als das Dreifache eines langen Takts her ist, gilt als Luecke.
+    """
+    daten = json_lesen(P["betrieb"], {}) or {}
+    eintrag = daten.get(geraet)
+    if not isinstance(eintrag, dict):
+        eintrag = {"sekunden": 0.0, "tag": _heute(), "tag_sekunden": 0.0}
+    if eintrag.get("tag") != _heute():
+        eintrag["tag"] = _heute()
+        eintrag["tag_sekunden"] = 0.0
+    if laeuft and 0 < vergangen <= 3 * 3600:
+        eintrag["sekunden"] = float(eintrag.get("sekunden", 0.0)) + vergangen
+        eintrag["tag_sekunden"] = float(eintrag.get("tag_sekunden", 0.0)) + vergangen
+    daten[geraet] = eintrag
+    json_schreiben(P["betrieb"], daten)
+    return (round(eintrag["sekunden"] / 3600.0, 1),
+            int(eintrag["tag_sekunden"] / 60.0))
+
+
+# --------------------------------------------------------------------------
 # MQTT
 # --------------------------------------------------------------------------
 
@@ -288,6 +572,25 @@ def mqtt_zugangsdaten():
     }
 
 
+def praefix_saeubern(roh):
+    """Themenpraefix auf zulaessige Zeichen bringen.
+
+    Muss zeichengleich zu dem sein, was die Oberflaeche zulaesst - sonst
+    vergleicht der Dienst spaeter einen gesaeuberten mit einem rohen Wert
+    und baut die MQTT-Verbindung bei jeder Konfigurationsaenderung ohne Not
+    neu auf. Genau das war bis 1.2.11 der Fall: die Oberflaeche ENTFERNTE
+    unerlaubte Zeichen, der Dienst ERSETZTE sie durch einen Unterstrich.
+
+    Ein # oder + waere ein MQTT-Platzhalter und im Thema unzulaessig; der
+    Broker wiese die Nachricht ab.
+    """
+    sauber = "".join(z if (z.isalnum() or z in "_-/") else "_"
+                     for z in (roh or "").strip())
+    while "//" in sauber:
+        sauber = sauber.replace("//", "/")
+    return sauber.strip("/") or "heimkino"
+
+
 class Melder:
     """Duenne Huelle um paho-mqtt.
 
@@ -297,14 +600,7 @@ class Melder:
     """
 
     def __init__(self, praefix, log, aktiv=True):
-        # Das Thema wird gefiltert. Der Praefix kommt aus der Oberflaeche;
-        # ein # oder + darin waere ein MQTT-Platzhalter und nicht als
-        # Themenbestandteil zulaessig - der Broker wiese die Nachricht ab.
-        sauber = "".join(z if (z.isalnum() or z in "_-/") else "_"
-                         for z in (praefix or "").strip())
-        while "//" in sauber:
-            sauber = sauber.replace("//", "/")
-        self.praefix = sauber.strip("/") or "heimkino"
+        self.praefix = praefix_saeubern(praefix)
         self.log = log
         self.aktiv = aktiv
         self.client = None
@@ -336,6 +632,14 @@ class Melder:
                 self.client = mqtt.Client(client_id="loxberry-heimkino")
             if zugang["user"]:
                 self.client.username_pw_set(zugang["user"], zugang["pass"])
+            # Letzter Wille. Bis 1.2.11 wurde service/online nur beim
+            # GEORDNETEN Ende auf 0 gesetzt. Bei SIGKILL, Speichermangel oder
+            # Stromausfall blieb die zurueckbehaltene 1 dauerhaft stehen - in
+            # Loxone sah ein toter Dienst aus wie ein laufender, und
+            # virtuelle Eingaenge behalten ihren letzten Wert. Der Broker
+            # setzt sie jetzt selbst, sobald die Verbindung wegbricht.
+            self.client.will_set("%s/service/online" % self.praefix, "0",
+                                 qos=0, retain=True)
             self.client.on_connect = self._bei_verbindung
             self.client.reconnect_delay_set(min_delay=1, max_delay=60)
             # connect_async statt connect, und loop_start IMMER.
@@ -404,10 +708,22 @@ class Melder:
         inhalt = inhalt.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
         self._letzte[thema] = inhalt
         try:
-            self.client.publish("%s/%s" % (self.praefix, thema),
-                                inhalt, qos=0, retain=True)
+            auskunft = self.client.publish("%s/%s" % (self.praefix, thema),
+                                           inhalt, qos=0, retain=True)
         except (OSError, ValueError) as fehler:
             self.log.debug("MQTT-Versand fehlgeschlagen: %s", fehler)
+            return
+        # publish() wirft bei getrennter Verbindung KEINE Ausnahme, sondern
+        # liefert rc = MQTT_ERR_NO_CONN; bei QoS 0 ist die Nachricht damit
+        # verworfen. Bis 1.2.11 stand deshalb nie etwas im Protokoll, wenn
+        # nichts ankam - wer nachsah, warum, fand keine Spur. Die Meldung
+        # laeuft ueber die Bremse, sonst schreibt sie jeden Takt.
+        rc = getattr(auskunft, "rc", 0)
+        if rc:
+            einmal_melden(self._gemeldet, "mqtt_kein_versand",
+                          "MQTT: Nachrichten werden verworfen (Code %s) - "
+                          "die Verbindung zum Broker steht nicht." % rc,
+                          self.log, "warning")
 
     def sende_viele(self, paare):
         for thema, inhalt in paare.items():
@@ -441,23 +757,88 @@ def einmal_melden(speicher, schluessel, text, log, stufe="error", wieder_nach=36
     return True
 
 
-def erreichbar(host, port, zeitgrenze=2.0):
-    """Antwortet an host:port ueberhaupt etwas?"""
+# Warum eine Verbindung nicht zustande kam. Diese Woerter gehen als
+# beamer/grund an Loxone und stehen so in bin/hk_themen.json.
+GRUND_TEXT = {
+    "ok": "Das Geraet antwortet.",
+    "aus": "Das Geraet ist in den Einstellungen abgeschaltet.",
+    "keine_adresse": "Es ist keine Adresse des Beamers eingetragen.",
+    "abgewiesen": "Das Geraet ist im Netz erreichbar, aber auf diesem Port "
+                  "hoert nichts. Haeufigster Grund und voellig harmlos: der "
+                  "Beamer ist aus - die IP-Steuerung laeuft nur im "
+                  "eingeschalteten Zustand. Ist er an, steht die "
+                  "Netzwerk-IP-Steuerung am Geraet auf aus.",
+    "kein_weg": "Kein Weg zu dieser Adresse. Stimmt die IP noch? Ohne feste "
+                "Adresse in der Fritz!Box wandert sie irgendwann.",
+    "zeitueberschreitung": "Niemand antwortet innerhalb der Zeitgrenze. Das "
+                          "Geraet ist vom Netz, oder eine Firewall verwirft "
+                          "die Pakete stillschweigend.",
+    "name_unbekannt": "Der Rechnername laesst sich nicht aufloesen. Steht dort "
+                      "ein Name statt einer IP-Adresse?",
+    "besetzt": "Ein anderer Vorgang sprach gerade mit dem Geraet. Der "
+               "Durchgang wurde uebersprungen - das ist kein Ausfall, und "
+               "die zuletzt gemeldeten Werte bleiben stehen.",
+    "fehler": "Die Verbindung kam aus einem anderen Grund nicht zustande.",
+}
+
+
+def erreichbarkeit(host, port, zeitgrenze=2.0, sperre=None, warten=10.0):
+    """Antwortet an host:port etwas - und wenn nicht, WARUM nicht?
+
+    Gibt (erreichbar, grund, text) zurueck.
+
+    Bis 1.2.11 gab es hier nur True/False. Damit landeten eine falsche IP,
+    ein unaufloesbarer Name, eine schweigende Firewall und "das Geraet ist
+    aus" auf demselben Wert - und der Dienst meldete daraufhin
+    beamer/status = aus, beamer/an = 0 und einen LEEREN last_error. In
+    Loxone sah ein Defekt damit genau aus wie der Normalzustand. Das ist
+    die stille Falschaussage, die der Hausstandard als schwerste
+    Fehlerklasse fuehrt.
+
+    Die Unterscheidung selbst gab es sogar schon - in
+    lg_beamer._verbindungsfehler(). Sie wurde nur nie erreicht, weil dieser
+    Vorabtest sie abschnitt.
+    """
     if not host:
-        return False
+        return False, "keine_adresse", GRUND_TEXT["keine_adresse"]
+    # Auch dieser Griff geht an denselben Port und muss deshalb dieselbe
+    # Sperre nehmen. Sie ist im selben Prozess wiedereintrittsfaehig, der
+    # Dienst darf sie also schon halten.
+    from hk_sperre import Sperre, SperreBesetzt
     try:
-        with socket.create_connection((host, int(port)), timeout=zeitgrenze):
-            return True
-    except (OSError, ValueError):
-        return False
+        with Sperre(sperre, warten=warten), \
+                socket.create_connection((host, int(port)), timeout=zeitgrenze):
+            return True, "ok", GRUND_TEXT["ok"]
+    except SperreBesetzt:
+        return False, "besetzt", GRUND_TEXT["besetzt"]
+    except socket.gaierror:
+        return False, "name_unbekannt", GRUND_TEXT["name_unbekannt"]
+    except socket.timeout:
+        return False, "zeitueberschreitung", GRUND_TEXT["zeitueberschreitung"]
+    except ValueError:
+        return False, "keine_adresse", GRUND_TEXT["keine_adresse"]
+    except OSError as fehler:
+        nummer = getattr(fehler, "errno", None)
+        if nummer == errno.ECONNREFUSED:
+            return False, "abgewiesen", GRUND_TEXT["abgewiesen"]
+        if nummer in (errno.EHOSTUNREACH, errno.ENETUNREACH, errno.EHOSTDOWN):
+            return False, "kein_weg", GRUND_TEXT["kein_weg"]
+        if nummer == errno.ETIMEDOUT:
+            return False, "zeitueberschreitung", GRUND_TEXT["zeitueberschreitung"]
+        return False, "fehler", "%s (%s)" % (GRUND_TEXT["fehler"], fehler)
+
+
+def erreichbar(host, port, zeitgrenze=2.0):
+    """Nur die Ja-Nein-Frage. Wer den Grund braucht, nimmt erreichbarkeit()."""
+    return erreichbarkeit(host, port, zeitgrenze)[0]
 
 
 def wol_senden(mac, adresse="255.255.255.255", port=9):
     """Magic Packet verschicken.
 
-    Loxone kann Wake-on-LAN selbst (wol://), deshalb ist das hier nur fuer
-    den Reiter Test gedacht - damit man die MAC pruefen kann, ohne den
-    Miniserver anzufassen.
+    Loxone kann Wake-on-LAN selbst (wol://). Dieser Weg steht trotzdem als
+    Aktion bereit, damit sich die MAC pruefen laesst, ohne den Miniserver
+    anzufassen.
     """
     ziffern = "".join(zeichen for zeichen in mac if zeichen in "0123456789abcdefABCDEF")
     if len(ziffern) != 12:
@@ -473,6 +854,9 @@ def wol_senden(mac, adresse="255.255.255.255", port=9):
 # --------------------------------------------------------------------------
 # Nur ein Dienst gleichzeitig
 # --------------------------------------------------------------------------
+
+_SPERRE = None      # bleibt offen, solange der Prozess laeuft
+
 
 def _ist_unser_dienst(pid):
     """Gehoert diese Prozessnummer wirklich zu hk_service.py?
@@ -504,29 +888,68 @@ def _ist_unser_dienst(pid):
 def pid_belegen(log):
     """Prozessnummer hinterlegen - und pruefen, ob schon einer laeuft.
 
-    Ohne diese Sperre kann der Dienst zweimal laufen: das Startskript nutzt
-    nohup ohne jede Pruefung, und die Oberflaeche hat einen Startknopf. Zwei
-    Dienste befragen den Beamer im Wechsel - der nimmt aber nur EINE
-    Verbindung zur Zeit an, und die Fernbedienung der App bleibt dann
-    ausgesperrt.
+    Die Sperre haelt jetzt eine echte Dateisperre (flock). Bis 1.2.11 lagen
+    zwischen dem Lesen und dem Schreiben der PID-Datei mehrere Anweisungen
+    ohne jede Unteilbarkeit: starteten der Systemstart und der Startknopf
+    der Oberflaeche gleichzeitig, sahen BEIDE "keine PID da", schrieben
+    beide und liefen beide weiter. Der Beamer nimmt aber nur EINE Verbindung
+    zur Zeit an - zwei Dienste im Wechsel sperren die Fernbedienung der App
+    aus. Das ist genau der Fall, den der alte Kommentar zu verhindern
+    behauptete.
 
-    Erkannt wird ein Vorgaenger ueber /proc/<pid>/cmdline, nicht ueber
-    pgrep -f: pgrep traefe auch einen Editor, in dem hk_service.py geoeffnet
-    ist.
+    Faellt flock aus (kein fcntl, Dateisystem ohne Sperren), wird auf die
+    alte Pruefung ueber /proc zurueckgefallen - und das steht dann im
+    Protokoll, statt so auszusehen, als sei gesperrt worden.
 
     Rueckgabe: True, wenn dieser Prozess weitermachen darf.
     """
+    global _SPERRE
     pfad = P["pid"]
     os.makedirs(os.path.dirname(pfad), exist_ok=True)
+    try:
+        import fcntl
+    except ImportError:
+        fcntl = None
+
+    if fcntl is not None:
+        try:
+            _SPERRE = open(pfad, "a+", encoding="utf-8")
+            try:
+                fcntl.flock(_SPERRE.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                _SPERRE.seek(0)
+                alt = _SPERRE.read().strip()
+                _SPERRE.close()
+                _SPERRE = None
+                log.warning("Es laeuft bereits ein Dienst (PID %s) - beende mich.",
+                            alt or "unbekannt")
+                return False
+            _SPERRE.seek(0)
+            _SPERRE.truncate(0)
+            _SPERRE.write("%d\n" % os.getpid())
+            _SPERRE.flush()
+            return True
+        except OSError as fehler:
+            log.warning("PID-Datei %s nicht sperrbar (%s) - es gilt die "
+                        "schwaechere Pruefung ueber /proc.", pfad, fehler)
+            if _SPERRE is not None:
+                try:
+                    _SPERRE.close()
+                except OSError:
+                    pass
+                _SPERRE = None
+    else:
+        log.warning("fcntl steht nicht zur Verfuegung - es gilt die schwaechere "
+                    "Pruefung ueber /proc.")
+
     try:
         with open(pfad, "r", encoding="utf-8") as datei:
             alt = datei.read().strip()
     except OSError:
         alt = ""
-    if alt.isdigit() and int(alt) != os.getpid():
-        if _ist_unser_dienst(alt):
-            log.warning("Es laeuft bereits ein Dienst (PID %s) - beende mich.", alt)
-            return False
+    if alt.isdigit() and int(alt) != os.getpid() and _ist_unser_dienst(alt):
+        log.warning("Es laeuft bereits ein Dienst (PID %s) - beende mich.", alt)
+        return False
     try:
         with open(pfad, "w", encoding="utf-8") as datei:
             datei.write("%d\n" % os.getpid())
@@ -539,6 +962,13 @@ def pid_belegen(log):
 
 
 def pid_freigeben():
+    global _SPERRE
+    if _SPERRE is not None:
+        try:
+            _SPERRE.close()
+        except OSError:
+            pass
+        _SPERRE = None
     try:
         with open(P["pid"], "r", encoding="utf-8") as datei:
             if datei.read().strip() == str(os.getpid()):

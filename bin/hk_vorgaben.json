@@ -1,0 +1,54 @@
+{
+  "_hinweis": [
+    "Die Vorgabewerte der Konfiguration - EINE Quelle fuer beide Sprachen.",
+    "Bis 1.2.11 standen sie zweimal: als VORGABEN in bin/hk_common.py und als",
+    "hk_vorgaben() in webfrontend/htmlauth/hk_lib.php. Zwei getrennt gepflegte",
+    "Listen sind zwei Wahrheiten; bei Gardena bedeutete ein fehlender Schluessel",
+    "in der Oberflaeche 'an' und im Dienst 'aus'.",
+    "Der Reiter Test zaehlt beide Seiten gegen diese Datei.",
+    "Reihenfolge der Abschnitte ist die Schreibreihenfolge der .cfg."
+  ],
+  "abschnitte": [
+    {
+      "name": "heimkino",
+      "schluessel": [
+        { "name": "enabled",       "vorgabe": "1" },
+        { "name": "intervall",     "vorgabe": "60" },
+        { "name": "themenpraefix", "vorgabe": "heimkino" },
+        { "name": "mqtt",          "vorgabe": "1" },
+        { "name": "aktionstoken",  "vorgabe": "" },
+        { "name": "nachfassen",    "vorgabe": "1" }
+      ]
+    },
+    {
+      "name": "beamer",
+      "schluessel": [
+        { "name": "aktiv",       "vorgabe": "0" },
+        { "name": "ip",          "vorgabe": "" },
+        { "name": "mac",         "vorgabe": "" },
+        { "name": "keycode",     "vorgabe": "" },
+        { "name": "port",        "vorgabe": "9761" },
+        { "name": "zeitgrenze",  "vorgabe": "5" },
+        { "name": "zusatzwerte", "vorgabe": "0" }
+      ]
+    },
+    {
+      "name": "xbox",
+      "schluessel": [
+        { "name": "aktiv",            "vorgabe": "0" },
+        { "name": "geraete_id",       "vorgabe": "" },
+        { "name": "geheimnis_ablauf", "vorgabe": "" }
+      ]
+    },
+    {
+      "name": "szene",
+      "schluessel": [
+        { "name": "aktiv",         "vorgabe": "0" },
+        { "name": "eingang",       "vorgabe": "" },
+        { "name": "bildmodus",     "vorgabe": "" },
+        { "name": "warten_beamer", "vorgabe": "120" },
+        { "name": "warten_xbox",   "vorgabe": "90" }
+      ]
+    }
+  ]
+}

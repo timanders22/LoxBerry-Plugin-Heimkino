@@ -27,7 +27,16 @@ lb_wurzel_suchen() {
 BASE="${5:-$LBHOMEDIR}"
 [ -n "$BASE" ] && [ -d "$BASE" ] || BASE=$(lb_wurzel_suchen)
 PDIR="${3:-heimkino}"
-PIDDATEI="$BASE/log/plugins/$PDIR/hk_service.pid"
+PDATA="$BASE/data/plugins/$PDIR"
+PIDDATEI="$PDATA/hk_service.pid"
+# Bis 1.2.11 lag die PID-Datei unter log/plugins. Der alte Ort wird
+# mitgelesen, damit auch ein Dienst dieser Fassung sauber beendet wird.
+PIDDATEI_ALT="$BASE/log/plugins/$PDIR/hk_service.pid"
+
+# Den Sollmerker zuerst entfernen: solange er liegt, startet der minuetliche
+# Waechter den Dienst binnen einer Minute wieder - auch mitten in der
+# Deinstallation.
+rm -f "$PDATA/soll_laufen" 2>/dev/null
 
 # Beendet wird ueber die PID-Datei, NICHT ueber pkill -f.
 #
@@ -36,8 +45,9 @@ PIDDATEI="$BASE/log/plugins/$PDIR/hk_service.pid"
 # oder ein tail auf einen Pfad mit diesem Namen. Beim Beenden ist das kein
 # theoretisches Risiko: pkill schickt das Signal an ALLE Treffer.
 beendet=0
-if [ -f "$PIDDATEI" ]; then
-    PID=$(cat "$PIDDATEI" 2>/dev/null)
+for DATEI in "$PIDDATEI" "$PIDDATEI_ALT"; do
+    [ -f "$DATEI" ] || continue
+    PID=$(cat "$DATEI" 2>/dev/null)
     case "$PID" in
         ''|*[!0-9]*) PID="" ;;
     esac
@@ -60,12 +70,55 @@ if [ -f "$PIDDATEI" ]; then
         kill -9 "$PID" 2>/dev/null
         beendet=1
     fi
-    rm -f "$PIDDATEI"
-fi
+    rm -f "$DATEI"
+done
 
 if [ "$beendet" = "1" ]; then
     echo "<OK> Dienst beendet."
 else
     echo "<INFO> Kein laufender Dienst gefunden."
 fi
+
+# ---------------------------------------------------------------------------
+# Die Zweitschriften mit den Geheimnissen entfernen.
+#
+# Die Deinstallation von LoxBerry entfernt nur das VERZEICHNIS
+# config/plugins/<ordner>. preupgrade.sh legt aber zwei Dateien eine Ebene
+# DARUEBER ab:
+#
+#   config/plugins/<ordner>.backup.heimkino.cfg    Keycode, Aktionstoken
+#   config/plugins/<ordner>.backup.xbox_auth.json  Anwendungskennung,
+#                                                  Clientgeheimnis und die
+#                                                  Azure-Refresh-Token
+#
+# Bis 1.2.11 blieben beide nach der Deinstallation liegen - im Klartext.
+# Zweite Folge derselben Nachlaessigkeit: die Selbstheilung in
+# postinstall.sh holt sie von sich aus zurueck. Eine "saubere"
+# Neuinstallation brachte damit das alte Aktionstoken wieder mit, und der
+# Anwender hielt es fuer ein frisches.
+#
+# Ueberschreiben, dann loeschen. shred, wo es da ist; sonst wenigstens
+# leeren, damit der Inhalt nicht als Datei stehen bleibt.
+geheim_weg() {
+    [ -f "$1" ] || return 0
+    if command -v shred >/dev/null 2>&1; then
+        shred -u "$1" 2>/dev/null && return 0
+    fi
+    : > "$1" 2>/dev/null
+    rm -f "$1" 2>/dev/null
+}
+
+PCONFIG_ELTERN="$BASE/config/plugins"
+geheim_weg "$PCONFIG_ELTERN/$PDIR.backup.heimkino.cfg"
+geheim_weg "$PCONFIG_ELTERN/$PDIR.backup.xbox_auth.json"
+geheim_weg "$PCONFIG_ELTERN/$PDIR/xbox_auth.json"
+geheim_weg "$PCONFIG_ELTERN/$PDIR/xbox_code.tmp"
+
+# Die Sicherung aus einem abgebrochenen Update liegt ebenfalls ausserhalb
+# dessen, was die Deinstallation raeumt.
+geheim_weg "$PDATA/upgrade_sicherung/heimkino.cfg"
+geheim_weg "$PDATA/upgrade_sicherung/xbox_auth.json"
+rm -rf "$PDATA/upgrade_sicherung" 2>/dev/null
+
+echo "<OK> Zweitschriften mit Keycode, Aktionstoken und Microsoft-Anmeldung entfernt."
 exit 0

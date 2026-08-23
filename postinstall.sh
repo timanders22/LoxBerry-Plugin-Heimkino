@@ -14,6 +14,19 @@ touch $PLOG/$PSHNAME.log
 chown loxberry:loxberry $PLOG/$PSHNAME.log
 
 chmod 755 "$LBPBIN/$PDIR"/*.py 2>/dev/null
+# dienst.sh wird vom Daemon, von der Oberflaeche UND vom minuetlichen
+# Waechter aufgerufen. Ohne Ausfuehrungsrecht schluege der Waechter jede
+# Minute lautlos fehl.
+chmod 755 "$LBPBIN/$PDIR/dienst.sh" 2>/dev/null
+# Die beiden Datendateien sind nur zum Lesen da - sie tragen die Vorgaben
+# und die MQTT-Themen fuer BEIDE Sprachen, Python wie PHP.
+chmod 644 "$LBPBIN/$PDIR/hk_vorgaben.json" "$LBPBIN/$PDIR/hk_themen.json" 2>/dev/null
+
+# data/plugins/<ordner> traegt seit 1.2.12 die PID-Datei und den Sollmerker
+# des Waechters. Bis 1.2.11 lag die PID-Datei unter log/plugins - also auf
+# einer Ramdisk, die bei jedem Neustart leer ist.
+mkdir -p "$LBPDATA/$PDIR" 2>/dev/null
+chown loxberry:loxberry "$LBPDATA/$PDIR" 2>/dev/null
 
 # Die Konfiguration enthaelt nach dem Einrichten den Keycode des Beamers.
 chmod 640 "$PCONFIG/heimkino.cfg" 2>/dev/null

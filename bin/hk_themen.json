@@ -1,0 +1,264 @@
+{
+  "_hinweis": [
+    "Die MQTT-Themen - EINE Quelle. Der Dienst sendet daraus, die Oberflaeche",
+    "zeigt die Tabelle daraus, und die Loxone-Vorlage entsteht daraus.",
+    "Bis 1.2.11 standen sie zweimal: als Woerterbuch in hk_service.py und als",
+    "hk_themen() in hk_lib.php. Eine Anleitung, die Themen nennt, die nie",
+    "hinausgehen, ist schlimmer als keine.",
+    "",
+    "art:  digital = 0/1, analog = Zahl, text = Zeichenkette.",
+    "Nur digital und analog kommen in die Loxone-Vorlage. Das nachgebaute",
+    "XML-Format ist nur fuer Zahlenwerte belegt; ein Textthema gehoert dort",
+    "nicht hinein (Hausstandard 12.08.2026).",
+    "",
+    "min/max sind die Grenzen des virtuellen Eingangs. Sie werden NICHT",
+    "pauschal auf +-2147483647 gesetzt - Loxone zieht daraus die",
+    "Plausibilitaetspruefung. Ein Feld, das negativ werden kann, braucht ein",
+    "negatives min, sonst steht in der Visualisierung 0 statt der Wahrheit."
+  ],
+  "themen": [
+    {
+      "thema": "service/online",
+      "art": "digital",
+      "min": 0,
+      "max": 1,
+      "einheit": "",
+      "de": "1 = der Dienst läuft. Wird beim Verbindungsabbruch vom Broker selbst auf 0 gesetzt (Last Will).",
+      "en": "1 = the service is running. Set to 0 by the broker itself when the connection drops (last will)."
+    },
+    {
+      "thema": "service/zeitstempel",
+      "art": "analog",
+      "min": 0,
+      "max": 4102444800,
+      "einheit": "<v.1> s",
+      "de": "Unix-Zeit der letzten Abfrage. Für Loxone 1230768000 abziehen. Bleibt der Wert stehen, arbeitet der Dienst nicht mehr.",
+      "en": "Unix time of the last poll. Subtract 1230768000 for Loxone. If the value stops changing, the service has stopped working."
+    },
+    {
+      "thema": "last_error",
+      "art": "text",
+      "min": 0,
+      "max": 0,
+      "einheit": "",
+      "de": "letzte Fehlermeldung mit vorangestellter Quelle, sonst ein Bindestrich",
+      "en": "last error message with its source in front, otherwise a hyphen"
+    },
+    {
+      "thema": "beamer/aktiv",
+      "art": "digital",
+      "min": 0,
+      "max": 1,
+      "einheit": "",
+      "de": "1 = der Beamer ist in den Einstellungen eingeschaltet",
+      "en": "1 = the projector is switched on in the settings"
+    },
+    {
+      "thema": "beamer/erreichbar",
+      "art": "digital",
+      "min": 0,
+      "max": 1,
+      "einheit": "",
+      "de": "1 = der Beamer antwortet auf seinem Steuerport",
+      "en": "1 = the projector answers on its control port"
+    },
+    {
+      "thema": "beamer/grund",
+      "art": "text",
+      "min": 0,
+      "max": 0,
+      "einheit": "",
+      "de": "warum der Beamer nicht antwortet: ok, aus, abgewiesen, kein_weg, zeitueberschreitung, name_unbekannt, keine_adresse, besetzt",
+      "en": "why the projector does not answer: ok, aus, abgewiesen, kein_weg, zeitueberschreitung, name_unbekannt, keine_adresse, besetzt"
+    },
+    {
+      "thema": "beamer/status",
+      "art": "text",
+      "min": 0,
+      "max": 0,
+      "einheit": "",
+      "de": "an, aus oder unbekannt",
+      "en": "an (on), aus (off) or unbekannt (unknown)"
+    },
+    {
+      "thema": "beamer/an",
+      "art": "digital",
+      "min": 0,
+      "max": 1,
+      "einheit": "",
+      "de": "1 = der Beamer läuft",
+      "en": "1 = the projector is running"
+    },
+    {
+      "thema": "beamer/app",
+      "art": "text",
+      "min": 0,
+      "max": 0,
+      "einheit": "",
+      "de": "laufende Quelle, zum Beispiel hdmi1",
+      "en": "running source, for example hdmi1"
+    },
+    {
+      "thema": "beamer/lautstaerke",
+      "art": "analog",
+      "min": -1,
+      "max": 100,
+      "einheit": "<v.1>",
+      "de": "Lautstärke 0 bis 100; -1 = nicht gelesen. Nur wenn die Zusatzwerte eingeschaltet sind und das Gerät den Befehl kennt.",
+      "en": "volume 0 to 100; -1 = not read. Only when the extra values are enabled and the device knows the command."
+    },
+    {
+      "thema": "beamer/stumm",
+      "art": "analog",
+      "min": -1,
+      "max": 1,
+      "einheit": "",
+      "de": "1 = stumm, 0 = nicht stumm, -1 = nicht gelesen",
+      "en": "1 = muted, 0 = not muted, -1 = not read"
+    },
+    {
+      "thema": "beamer/betriebsstunden",
+      "art": "analog",
+      "min": 0,
+      "max": 100000,
+      "einheit": "<v.1> h",
+      "de": "geschätzte Betriebsstunden seit dem ersten Lauf dieser Fassung. Aus dem Abfragetakt hochgerechnet, keine Angabe des Geräts.",
+      "en": "estimated operating hours since this version first ran. Extrapolated from the polling interval, not a value from the device."
+    },
+    {
+      "thema": "beamer/laufzeit_heute",
+      "art": "analog",
+      "min": 0,
+      "max": 1440,
+      "einheit": "<v.1> min",
+      "de": "geschätzte Laufzeit des heutigen Tages in Minuten",
+      "en": "estimated running time today, in minutes"
+    },
+    {
+      "thema": "beamer/letzte_aktion",
+      "art": "text",
+      "min": 0,
+      "max": 0,
+      "einheit": "",
+      "de": "Ergebnis des letzten Schaltbefehls am Beamer, zum Beispiel beamer-aus gewirkt nach 14 s",
+      "en": "result of the last switching command to the projector, e.g. beamer-aus gewirkt nach 14 s"
+    },
+    {
+      "thema": "xbox/aktiv",
+      "art": "digital",
+      "min": 0,
+      "max": 1,
+      "einheit": "",
+      "de": "1 = die Xbox ist in den Einstellungen eingeschaltet",
+      "en": "1 = the Xbox is switched on in the settings"
+    },
+    {
+      "thema": "xbox/status",
+      "art": "text",
+      "min": 0,
+      "max": 0,
+      "einheit": "",
+      "de": "Zustandstext der Cloud, zum Beispiel On oder ConnectedStandby",
+      "en": "power state text from the cloud, for example On or ConnectedStandby"
+    },
+    {
+      "thema": "xbox/an",
+      "art": "digital",
+      "min": 0,
+      "max": 1,
+      "einheit": "",
+      "de": "1 = die Konsole läuft",
+      "en": "1 = the console is running"
+    },
+    {
+      "thema": "xbox/name",
+      "art": "text",
+      "min": 0,
+      "max": 0,
+      "einheit": "",
+      "de": "Name der Konsole, wie ihn das Microsoft-Konto führt",
+      "en": "name of the console as the Microsoft account holds it"
+    },
+    {
+      "thema": "xbox/angemeldet",
+      "art": "digital",
+      "min": 0,
+      "max": 1,
+      "einheit": "",
+      "de": "1 = die Anmeldung bei Microsoft trägt noch",
+      "en": "1 = the Microsoft sign-in is still valid"
+    },
+    {
+      "thema": "xbox/betriebsstunden",
+      "art": "analog",
+      "min": 0,
+      "max": 100000,
+      "einheit": "<v.1> h",
+      "de": "geschätzte Betriebsstunden der Konsole seit dem ersten Lauf dieser Fassung",
+      "en": "estimated operating hours of the console since this version first ran"
+    },
+    {
+      "thema": "xbox/laufzeit_heute",
+      "art": "analog",
+      "min": 0,
+      "max": 1440,
+      "einheit": "<v.1> min",
+      "de": "geschätzte Laufzeit der Konsole am heutigen Tag in Minuten",
+      "en": "estimated running time of the console today, in minutes"
+    },
+    {
+      "thema": "xbox/letzte_aktion",
+      "art": "text",
+      "min": 0,
+      "max": 0,
+      "einheit": "",
+      "de": "Ergebnis des letzten Schaltbefehls an der Konsole",
+      "en": "result of the last switching command to the console"
+    },
+    {
+      "thema": "xbox/geheimnis_ablauf",
+      "art": "text",
+      "min": 0,
+      "max": 0,
+      "einheit": "",
+      "de": "Ablaufdatum des Clientgeheimnisses, JJJJ-MM-TT",
+      "en": "expiry date of the client secret, YYYY-MM-DD"
+    },
+    {
+      "thema": "xbox/geheimnis_tage",
+      "art": "analog",
+      "min": -10000,
+      "max": 800,
+      "einheit": "<v.1> d",
+      "de": "Tage bis zum Ablauf des Clientgeheimnisses; negativ = abgelaufen",
+      "en": "days until the client secret expires; negative = already expired"
+    },
+    {
+      "thema": "szene/laeuft",
+      "art": "digital",
+      "min": 0,
+      "max": 1,
+      "einheit": "",
+      "de": "1 = eine Kino-Szene läuft gerade ab",
+      "en": "1 = a cinema scene is currently running"
+    },
+    {
+      "thema": "szene/schritt",
+      "art": "text",
+      "min": 0,
+      "max": 0,
+      "einheit": "",
+      "de": "der Schritt, bei dem die Szene gerade steht",
+      "en": "the step the scene is currently at"
+    },
+    {
+      "thema": "szene/ergebnis",
+      "art": "text",
+      "min": 0,
+      "max": 0,
+      "einheit": "",
+      "de": "Ergebnis der zuletzt gelaufenen Szene samt Dauer",
+      "en": "result of the scene that ran last, including its duration"
+    }
+  ]
+}
