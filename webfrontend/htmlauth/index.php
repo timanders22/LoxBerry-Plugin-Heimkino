@@ -443,6 +443,54 @@ $hk_frame = class_exists('LBWeb', false);
 if ($hk_frame) {
     LBWeb::lbheader('Heimkino', 'https://wiki.loxberry.de/', 'help.html');
 }
+
+/* ---------------- Einstellungen sichern ----------------
+ *
+ * Ausgegeben wird die VOLLE Konfiguration - samt Aktionstoken. Ohne ihn
+ * stuenden nach dem Zurueckspielen alle Felder richtig, und das Plugin
+ * kaeme trotzdem nicht an die Anlage; die Datei waere wertlos. Damit
+ * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['hk_sichern'])) {
+    $hk_js = json_encode(hk_cfg(),
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($hk_js !== false) {
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename="heimkino_einstellungen_'
+               . date('Ymd_His') . '.json"');
+        echo $hk_js;
+        exit;
+    }
+    $hk_fehler[] = hk_t('SET.SICH_SCHREIBFEHLER');
+}
+
+/* ---------------- Einstellungen zurueckspielen ----------------
+ *
+ * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei des
+ * Servers unterschieben. Dann die Groessengrenze - eine Sicherung dieses
+ * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht gelesen. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['hk_zurueck'])) {
+    if (!isset($_FILES['hk_sicherung']) || !is_array($_FILES['hk_sicherung'])
+        || !isset($_FILES['hk_sicherung']['tmp_name'])
+        || !@is_uploaded_file($_FILES['hk_sicherung']['tmp_name'])) {
+        $hk_fehler[] = hk_t('SET.SICH_KEINE_DATEI');
+    } elseif ((int) $_FILES['hk_sicherung']['size'] > 262144) {
+        $hk_fehler[] = hk_t('SET.SICH_ZU_GROSS');
+    } else {
+        list($hk_neu, $hk_mangel, $hk_n) = hk_sicherung_lesen(
+            (string) @file_get_contents($_FILES['hk_sicherung']['tmp_name']));
+        if ($hk_neu === null) {
+            /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
+             * nichts. */
+            $hk_fehler[] = hk_t('SET.SICH_ABGELEHNT') . ' '
+                            . implode(' ', $hk_mangel);
+        } elseif (hk_config_write($hk_neu)) {
+            $hk_meldungen[] = sprintf(hk_t('SET.SICH_UEBERNOMMEN'), $hk_n);
+        } else {
+            $hk_fehler[] = hk_t('SET.SICH_SCHREIBFEHLER');
+        }
+    }
+}
+
 ?>
 <style>
 /* Hausstandard: eigener Behaelter, kein Schattenwurf, Reiter im Fluss.
@@ -862,6 +910,27 @@ if ($hk_frame) {
   </form>
 </div>
 <?php } ?>
+
+<h2><?= hk_t('SET.H_SICHERUNG') ?></h2>
+<div class="sm-hinweis"><?= hk_t('SET.SICH_ERKLAERUNG') ?></div>
+<div class="sm-warnung"><?= hk_t('SET.SICH_WARNUNG') ?></div>
+<div class="sm-knopfreihe">
+  <!-- ZWEI GETRENNTE Formulare. Das Sichern schickt einen Download und ruft
+       exit auf; das Zurueckspielen braucht enctype="multipart/form-data".
+       Wer beides in ein Formular legt, bekommt entweder keinen Upload oder
+       einen Download, der das Speichern verschluckt. -->
+  <form action="index.php" method="post">
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="hk_sichern" value="1"><?= hk_t('SET.K_SICHERN') ?></button>
+  </form>
+  <form action="index.php" method="post" enctype="multipart/form-data">
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="file" name="hk_sicherung" accept=".json">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="hk_zurueck" value="1"><?= hk_t('SET.K_ZURUECK') ?></button>
+  </form>
+</div>
 </div>
 
 <!-- ================================= MQTT ================================= -->
