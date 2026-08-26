@@ -103,6 +103,23 @@ if (isset($_POST['activetab']) && is_string($_POST['activetab'])
     $hk_tab = 'tab-' . (string) $_GET['form'];
 }
 
+/* ==================================================================
+ * DIE HANDLER STEHEN VOR lbheader() - DAS IST BAUVORSCHRIFT
+ * ==================================================================
+ *
+ * Stand der Kopf davor, war er beim Aufruf von header() schon
+ * geschrieben - "Cannot modify header information", und der Knopf
+ * "Einstellungen sichern" lieferte eine Seite mit angehaengtem JSON
+ * statt einer Datei.
+ *
+ * Am PHP-CLI ist das unsichtbar: header() ist dort wirkungslos und
+ * headers_sent() immer falsch. Und wer OHNE gueltiges Formularmerkmal
+ * misst, wird vom Wachposten abgewiesen, bevor der Handler anlaeuft.
+ * Beides hat den Fehler lange verdeckt.
+ *
+ * Reihenfolge: Bibliothek, Konfiguration, Wachposten, Reiterwahl,
+ * ALLE Handler samt Downloads, dann erst lbheader(), dann HTML.
+ * ================================================================== */
 /* ============ Loxone-Vorlage herunterladen ============ */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['download'])) {
     list($hk_dname, $hk_dinhalt) = $_POST['download'] === 'vo'
@@ -440,9 +457,6 @@ require_once __DIR__ . '/hk_test.php';
 $hk_pruefzeilen = hk_test_zeilen($hk_cfg);
 
 $hk_frame = class_exists('LBWeb', false);
-if ($hk_frame) {
-    LBWeb::lbheader('Heimkino', 'https://wiki.loxberry.de/', 'help.html');
-}
 
 /* ---------------- Einstellungen sichern ----------------
  *
@@ -489,6 +503,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['hk_zurueck'])) {
             $hk_fehler[] = hk_t('SET.SICH_SCHREIBFEHLER');
         }
     }
+}
+
+
+if ($hk_frame) {
+    LBWeb::lbheader('Heimkino', 'https://wiki.loxberry.de/', 'help.html');
 }
 
 ?>
