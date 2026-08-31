@@ -1011,7 +1011,8 @@ if ($hk_gwf >= 2) { ?>
 <div class="sm-warnung"><?php echo hk_t('MQTT.ABO_PFLICHT'); ?></div>
 <?php } else { ?>
 <div class="sm-warnung"><?php echo hk_t('MQTT.ABO_PFLICHT'); ?></div>
-<div class="sm-hilfe"><?php echo hk_t('MQTT.ABO_V2'); ?></div>
+<div class="sm-hinweis"><?php echo hk_t('MQTT.ABO_V2'); ?></div>
+<div class="sm-hilfe"><?php echo hk_t('MQTT.ABO_UNBEKANNT'); ?></div>
 <?php } ?>
 <pre class="sm-pre"><?= hk_e($hk_praefix) ?>/#</pre>
 
@@ -1043,7 +1044,8 @@ if ($hk_gwf >= 2) { ?>
 <div class="sm-warnung"><?php echo hk_t('MQTT.ABO_PFLICHT'); ?></div>
 <?php } else { ?>
 <div class="sm-warnung"><?php echo hk_t('MQTT.ABO_PFLICHT'); ?></div>
-<div class="sm-hilfe"><?php echo hk_t('MQTT.ABO_V2'); ?></div>
+<div class="sm-hinweis"><?php echo hk_t('MQTT.ABO_V2'); ?></div>
+<div class="sm-hilfe"><?php echo hk_t('MQTT.ABO_UNBEKANNT'); ?></div>
 <?php } ?>
 <pre class="sm-pre"><?= hk_e($hk_praefix) ?>/#</pre>
 

@@ -194,7 +194,14 @@ darf nichts unverschlüsselt hinausgehen.
 nicht gelaufen. Von den neuen Befehlen ist belegt, dass sie zeichengleich mit
 der Vorlage verschlüsselt werden — nicht, dass ein Beamer jeden davon annimmt.
 
-## Änderungen in 1.2.12
+## Änderungen
+
+Die Freigabenotiz zu jeder Fassung steht bei den Releases:
+<https://github.com/timanders22/LoxBerry-Plugin-Heimkino/releases>
+
+Der folgende Abschnitt hieß bis 1.3.4 „Änderungen in 1.2.12“ — eine Fassungsnummer
+in einer Überschrift wird mit jedem Release falscher. Der Inhalt bleibt, weil
+er beschreibt, *warum* das Plugin so gebaut ist; er betrifft die Fassung 1.2.12.
 
 Eine Durchsicht Zeile für Zeile, alle Befunde behoben. Die wichtigsten:
 
