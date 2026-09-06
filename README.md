@@ -13,6 +13,24 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.6
+
+**Diese Fassung ändert am Verhalten des Plugins nichts.** Sie berichtigt eine
+Auslieferung: Das Archiv von 1.3.5 enthielt eine Datei, die dort nicht
+hingehört — `log/plugins/heimkino/heimkino.log`, drei Zeilen, entstanden auf
+dem Bau-Rechner, weil dort versehentlich der Dienst statt eines Selbsttests
+gestartet wurde. Sie ist wirkungslos (der Installateur legt `log/` ohnehin
+selbst an und schreibt beim ersten Lauf hinein), aber im Auslieferungsarchiv
+hat sie nichts zu suchen.
+
+Gefunden hat sie **das eigene Packwerkzeug**, nicht ein Blick in den Ordner:
+es übergeht `log/` beim Packen und zählt danach Archiv gegen Ordner — die
+Datei fehlte im Archiv, und der Lauf brach ab. Genau dafür ist die Zählung da.
+
+Der Tag `v1.3.5` bleibt unangetastet; ein veröffentlichter Tag wird nicht
+bewegt, weil andere Anlagen ihn schon geholt haben können. Wer 1.3.5 laufen
+hat, verpasst nichts außer dieser einen Datei.
+
 ## Neu in 1.3.5
 
 ### Der Dienst hat sein Protokoll verloren, und niemand konnte es sehen
