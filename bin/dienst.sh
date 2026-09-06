@@ -56,6 +56,18 @@ PCONFIG="$LBHOMEDIR/config/plugins/$PNAME"
 PID="$PDATA/hk_service.pid"
 SOLL="$PDATA/soll_laufen"
 LOGDATEI="$PLOG/heimkino.log"
+# Eigene Datei fuer alles, was NEBEN dem Protokoll anfaellt: Meldungen des
+# Starts und alles, was hk_service.py nach stderr schreibt, bevor sein
+# Protokoll steht (Syntaxfehler, fehlende Bibliothek, Abbruch im Importpfad).
+#
+# Bis 1.3.7 ging diese Ausgabe mit ">> $LOGDATEI" in DIESELBE Datei, die
+# hk_service.py mit einem WatchedFileHandler fuehrt. Das haelt einen zweiten,
+# anhaengenden Deskriptor auf diese Datei offen: verschwindet sie (Ramdisk
+# geleert, log_maint), faengt der Handler das ab - dieser Deskriptor nicht.
+# Am Geraet gemessen (06.09.2026): PID 893 hielt heimkino.log auf den
+# Deskriptoren 1, 2 UND 3 offen, alle drei auf der geloeschten Datei.
+# Regel: genau einer schreibt in eine Protokolldatei.
+STARTLOG="$PLOG/heimkino_start.log"
 SKRIPT="$SELF/hk_service.py"
 CFG="$PCONFIG/heimkino.cfg"
 
@@ -111,16 +123,17 @@ starten() {
         return 1
     fi
     touch "$SOLL"
-    # Die Ausgabe geht in die Logdatei. Das Python-Programm protokolliert
-    # deshalb NICHT zusaetzlich nach stdout - sonst stuende jede Zeile
-    # doppelt darin.
-    nohup python3 "$SKRIPT" >> "$LOGDATEI" 2>&1 &
+    # Die Ausgabe des Dienstes geht in die Startdatei, NICHT in das Protokoll:
+    # dort schreibt allein der Handler des Programms. Beim Start gekappt, damit
+    # sie nur die Ausgabe EINES Laufes sammelt und nicht unbegrenzt waechst.
+    : > "$STARTLOG"
+    nohup python3 "$SKRIPT" >> "$STARTLOG" 2>&1 &
     sleep 1
     if laeuft; then
         echo "gestartet (PID $(cat "$PID"))"
         return 0
     fi
-    echo "FEHLER: Start fehlgeschlagen - siehe $LOGDATEI"
+    echo "FEHLER: Start fehlgeschlagen - siehe $STARTLOG und $LOGDATEI"
     return 1
 }
 
@@ -168,7 +181,7 @@ case "$1" in
         # angehalten.
         if [ -f "$SOLL" ] && eingeschaltet && ! laeuft; then
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waechter: Dienst lief nicht, wird neu gestartet." >> "$LOGDATEI"
-            starten >> "$LOGDATEI" 2>&1
+            starten >> "$STARTLOG" 2>&1
         fi
         ;;
     *)

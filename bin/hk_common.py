@@ -671,13 +671,21 @@ class Melder:
             self.aktiv = False
             return
         try:
+            # Die Fassung wird abgetastet, nicht angenommen: paho-mqtt 2.x schreibt
+            # bei VERSION1 eine DeprecationWarning in JEDES Protokoll (am Geraet an
+            # 2.1.0 gemessen, 06.09.2026), paho 1.x kennt die Aufzaehlung gar nicht.
             try:
                 self.client = mqtt.Client(
-                    mqtt.CallbackAPIVersion.VERSION1,
+                    mqtt.CallbackAPIVersion.VERSION2,
                     client_id="loxberry-heimkino")
             except (AttributeError, TypeError):
-                # paho 1.x kennt CallbackAPIVersion nicht.
-                self.client = mqtt.Client(client_id="loxberry-heimkino")
+                try:
+                    self.client = mqtt.Client(
+                        mqtt.CallbackAPIVersion.VERSION1,
+                        client_id="loxberry-heimkino")
+                except (AttributeError, TypeError):
+                    # paho 1.x kennt CallbackAPIVersion nicht.
+                    self.client = mqtt.Client(client_id="loxberry-heimkino")
             if zugang["user"]:
                 self.client.username_pw_set(zugang["user"], zugang["pass"])
             # Letzter Wille. Bis 1.2.11 wurde service/online nur beim
