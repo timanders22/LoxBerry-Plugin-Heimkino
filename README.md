@@ -13,6 +13,119 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.5
+
+### Der Dienst hat sein Protokoll verloren, und niemand konnte es sehen
+
+**Am Gerät gemessen, 06.09.2026** (LoxBerry 4.0.0.15, Raspberry Pi): der
+Dienst lief seit sieben Stunden, schrieb seine Zustandsdatei weiter und
+meldete brav an MQTT — und im Protokollverzeichnis lag **keine
+`heimkino.log`**. Nur eine leere `cron.err`.
+
+Die Ursache liegt in zwei Bauteilen, die zusammenwirken:
+
+- `log/plugins` liegt auf einer **Ramdisk** (gemessen: `/dev/zram0 on
+  /opt/loxberry/log/plugins`). Wird sie geleert — durch ein Aufräumskript,
+  eine Rotation oder einen Neustart des Dienstes darunter —, ist die Datei
+  fort.
+- Der bis 1.3.4 benutzte `logging.FileHandler` öffnet die Datei **einmal beim
+  Start** und schreibt danach in denselben Inode weiter. Ist der gelöscht,
+  landet jede Zeile im Nichts. Es gibt keine Fehlermeldung; es gibt gar
+  nichts.
+
+Denselben Inode tauscht `log_kappen()` **selbst** weg (`os.replace`) — der
+Fehler war also auch ohne fremdes Aufräumen eingebaut und schlug spätestens
+beim ersten Kappen zu.
+
+Seit 1.3.5 baut das Plugin einen `logging.handlers.WatchedFileHandler`. Der
+sieht bei jeder Zeile nach, ob Gerätenummer und Inode noch dieselben sind,
+und öffnet sonst neu. Er steht in der Standardbibliothek und ist genau für
+diesen Fall gebaut.
+
+**Geeicht auf dem Gerät, in beide Richtungen** — auf dem
+Windows-Arbeitsplatz lässt sich das gar nicht messen, dort kann eine offene
+Datei nicht gelöscht werden (`WinError 32`), und genau deshalb ist es ein
+Linux-Fehler:
+
+```
+mit FileHandler         Datei nach dem Loeschen weg, zweite Zeile verloren
+                        -> genau der Zustand, der am Geraet vorlag
+mit WatchedFileHandler  Datei wieder da, zweite Zeile steht drin,
+                        auch nach einem Inodetausch geht es weiter
+```
+
+### Eine Zeile, damit es nie wieder unsichtbar bleibt
+
+Der Reiter *Test* fragt jetzt **„Schreibt der Dienst ins Protokoll?"** — über
+`hk_service.py --protokoll`, also über dieselbe Bibliothek, die schreibt, und
+nicht über eine zweite Meinung. Fehlende oder leere Datei bei laufendem
+Dienst ist ein Befund. Läuft der Dienst gar nicht, wird nicht geurteilt; dann
+steht der Befund schon eine Zeile höher.
+
+### Die drei Selbsttests sagen jetzt, wie viel sie geprüft haben
+
+`hk_sperre.py`, `lg_beamer.py` und `xbox_cloud.py` liefen schon immer durch und
+gaben Rückgabewert 0 — aber keiner schrieb die Hausform
+`N Faelle geprueft, M Fehlschlaege`. Das Freigabewerkzeug konnte an ihnen
+deshalb **nichts** auswerten und meldete „keine auswertbare Ausgabe": ein
+Selbsttest, der schweigt, und ein Selbsttest, der besteht, sahen von außen
+gleich aus.
+
+Jetzt schließt jeder mit dieser Zeile ab — **in beiden Ausgängen**, damit eine
+Zusammenfassung nicht besser aussieht als ihr schlechtester Punkt. Gezählt wird
+zur Laufzeit an der Stelle, an der ein Fall auch ausgegeben wird; im Quelltext
+steht keine Zahl. Gemessen: **9**, **33** und **24** Fälle, je 0 Fehlschläge.
+Beidseitig geeicht — mit je einem absichtlich verdrehten Fall bleibt die
+Fallzahl gleich, die Fehlerzahl geht auf 1 und der Rückgabewert auf 1.
+
+### Dieselbe Bauart in anderen Linien
+
+Über den Bestand gezählt: vor dem 06.09.2026 benutzten **fünf** Linien
+`logging.FileHandler` und keine einzige den `WatchedFileHandler`. Vier davon
+haben einen **Dauerdienst** — APC-UPS NG, BLE-Scanner NG, Heimkino, Ultraschall
+Entfernung —, und alle vier sind am selben Tag nachgezogen worden. Nachgezählt
+über alle Plugin-Ordner: genau diese vier benutzen jetzt den
+`WatchedFileHandler`.
+
+**Eine fünfte Stelle ist offen und soll hier benannt sein, statt zu fehlen:**
+Skoda Connect NG stand hier zunächst als nicht betroffen da, mit der
+Begründung, ein Cron starte das Programm bei jedem Lauf neu und öffne die Datei
+damit jedes Mal frisch. Nachgemessen trifft das nicht zu: der Cron ruft dort nur
+`waechter` und `wachzeichen`; der eigentliche Dienst läuft dauerhaft
+(`bin/dienst.sh`, `nohup … &`). In diesem Zweig steht ein `RotatingFileHandler`
+— der hält ebenfalls einen offenen Deskriptor und öffnet nur bei seiner
+**eigenen** Größenrotation neu, nicht wenn die Datei unter ihm verschwindet.
+Die Bauart ist dort also dieselbe, nur in anderem Gewand, und noch nicht
+behoben.
+
+### Was am Gerät sonst noch gemessen wurde
+
+Drei Punkte, die in dieser Datei bis 1.3.4 als *nicht gemessen*
+gekennzeichnet waren, sind es jetzt:
+
+| Punkt | Ergebnis |
+|---|---|
+| Gerätesperre mit `fcntl` (bisher nur der Windows-Weg über `msvcrt`) | `Unterbau: fcntl`; gegen einen zweiten Prozess: ohne Warten abgewiesen nach 0,00 s, nach kurzer Frist nach 1,00 s, nach langer genommen nach 2,01 s |
+| Rechte `0600` der Tokendatei (unter Windows nicht prüfbar) | in Ordnung, dazu „keine Zwischendatei liegengeblieben" und „die gültige Datei blieb unangetastet" |
+| Antwortet der Endpunkt am echten Gerät? — der Anlass der ganzen Reihe | Über Apache, in den getrennten Bäumen: `HTTP 403 SELFTEST;OK=0;ERR=TOKEN`. Wortlaut und Code stimmen |
+
+Dazu: `lg_beamer.py --selbsttest` (19 Werte) und `xbox_cloud.py --selbsttest`
+laufen auf dem Gerät (ARM64, Debian 13) durch. Von 27 Themen lagen 23
+zurückbehalten am Broker — die vier fehlenden sind genau die
+Ereignisthemen, die nur bei einem Ereignis hinausgehen. Kein verwaistes
+Thema.
+
+### Ein Befund an der Anlage, nicht am Plugin
+
+Der Beamer meldete `beamer/grund = zeitueberschreitung`. Das ist etwas
+anderes als `abgewiesen`: ein ausgeschaltetes Gerät mit *Schnellstart+* weist
+die Verbindung ab, eine Zeitüberschreitung heißt, dass dort gar nichts
+antwortet. Vom LoxBerry aus nachgemessen: der Beamer antwortet weder auf
+Ping noch auf ARP, Port 9761 ist zu. Die eingetragene Adresse stimmt — das
+Gerät ist schlicht nicht am Netz. Häufigste Ursache und in dieser Datei
+beschrieben: **Schnellstart+ ist aus**, dann trennt das Gerät im Standby die
+Netzwerkschnittstelle.
+
 ## Neu in 1.3.0
 
 Funktionen. 1.2.12 war eine reine Fehlerbehebung; was dort steht, gilt weiter
@@ -810,6 +923,12 @@ JavaScript stand jeder Bereich auf `display:none`: die Seite war leer.
 
 ### Offen
 
-Nichts aus dieser Liste — die Zweisprachigkeit, die hier bis 1.2.11 als offen
-stand, ist mit 1.2.12 erledigt. Was bleibt, steht oben unter *Nicht behoben*:
-die fehlende gemeinsame Sperre zwischen Dienst und Aktionsendpunkt.
+Die Zweisprachigkeit, die hier bis 1.2.11 stand, ist mit 1.2.12 erledigt; die
+gemeinsame Sperre zwischen Dienst und Aktionsendpunkt, die bis 1.2.12 hier
+stand, mit 1.3.0 — und sie ist seit 06.09.2026 am Gerät gemessen. Dieser
+Satz stand bis 1.3.4 falsch hier: er nannte die Sperre noch als offen.
+
+Offen bleibt: **die neuen Beamer-Befehle sind an keinem Gerät erprobt.**
+Belegt ist, dass sie zeichengleich mit der Vorlage verschlüsselt werden — der
+Beamer hier ist seit dem 01.09.2026 nicht am Netz, siehe oben unter *Ein
+Befund an der Anlage, nicht am Plugin*.

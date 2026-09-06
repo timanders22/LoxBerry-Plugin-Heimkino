@@ -212,9 +212,15 @@ def selbsttest():
     import tempfile
 
     fehler = 0
+    faelle = 0
 
     def sage(name, ok, zusatz=""):
-        nonlocal fehler
+        # 'faelle' wird zur LAUFZEIT hochgezaehlt, an genau der Stelle, an der
+        # ein Fall auch ausgegeben wird. Eine Zahl im Quelltext waere keine
+        # Messung, und ein Zweig, der uebersprungen wird, zaehlt dann richtig
+        # nicht mit.
+        nonlocal fehler, faelle
+        faelle += 1
         print("  %-52s %s %s" % (name, "ok" if ok else "FEHLER", zusatz))
         if not ok:
             fehler += 1
@@ -296,10 +302,15 @@ def selbsttest():
     except OSError:
         pass
 
+    # Hausform: eine Abschlusszeile, die das Werkzeug auswerten kann. Sie steht
+    # in BEIDEN Ausgaengen - eine Zusammenfassung darf nicht besser aussehen
+    # als ihr schlechtester Punkt, und sie darf auch nicht fehlen, wenn es
+    # schiefging.
+    print("\n%d Faelle geprueft, %d Fehlschlaege." % (faelle, fehler))
     if fehler:
-        print("\n%d Abweichung(en)." % fehler)
+        print("%d Abweichung(en)." % fehler)
         return 1
-    print("\nDie Sperre greift - gemessen gegen einen zweiten Prozess.")
+    print("Die Sperre greift - gemessen gegen einen zweiten Prozess.")
     return 0
 
 

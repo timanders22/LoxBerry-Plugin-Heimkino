@@ -543,7 +543,9 @@ def _abweisungen(geraet):
         ("Anwendung net flix", lambda: geraet.app_starten("net flix")),
     )
     fehler = 0
+    gezaehlt = 0
     for name, tun in faelle:
+        gezaehlt += 1
         try:
             tun()
         except BeamerFehler:
@@ -554,13 +556,19 @@ def _abweisungen(geraet):
             pass
         print("FEHLER nicht abgewiesen: %s" % name)
         fehler += 1
-    return fehler
+    # Zahl der Faelle UND der Fehlschlaege - der Aufrufer schreibt die
+    # Hausform und darf dafuer nicht selbst nachzaehlen muessen.
+    return gezaehlt, fehler
 
 
 def selbsttest():
     geraet = LgBeamer("127.0.0.1", "ABCD1234")
     iv = bytes.fromhex("000102030405060708090a0b0c0d0e0f")
     fehler = 0
+    # 'faelle' wird zur LAUFZEIT hochgezaehlt, je einmal vor dem Fall, den es
+    # zaehlt - eine Zahl im Quelltext waere keine Messung.
+    faelle = 0
+    faelle += 1
     if geraet._schluessel.hex() != _PRUEFWERTE["schluessel"]:
         print("FEHLER Schluesselableitung: %s statt %s"
               % (geraet._schluessel.hex(), _PRUEFWERTE["schluessel"]))
@@ -570,6 +578,7 @@ def selbsttest():
     for befehl, erwartet in _PRUEFWERTE.items():
         if befehl == "schluessel":
             continue
+        faelle += 1
         ist = geraet.kodieren(befehl, iv).hex()
         if ist != erwartet:
             print("FEHLER %r\n       ist      %s\n       erwartet %s"
@@ -580,6 +589,7 @@ def selbsttest():
     # Hin und zurueck: was verschluesselt wurde, muss wieder lesbar werden.
     # Eine echte Antwort endet auf Zeilenvorschub und muss lesbar sein.
     antwort = geraet.kodieren("OK" + ANTWORT_ENDE.join(["", ""]), iv)
+    faelle += 1
     if geraet.dekodieren(antwort) != "OK":
         print("FEHLER Rundlauf: 'OK' kam nicht zurück")
         fehler += 1
@@ -587,6 +597,7 @@ def selbsttest():
         print("ok     Rundlauf einer Antwort")
     # Mit falschem Schluessel muss es einen Fehler geben, kein leeres Ergebnis.
     fremd = LgBeamer("127.0.0.1", "ZZZZ9999")
+    faelle += 1
     try:
         fremd.dekodieren(antwort)
         print("FEHLER Falscher Keycode wurde nicht erkannt")
@@ -594,6 +605,7 @@ def selbsttest():
     except BeamerFehler:
         print("ok     Falscher Keycode wird erkannt")
     # Kleingeschriebener Keycode: abweisen, nicht umschreiben.
+    faelle += 1
     try:
         LgBeamer("127.0.0.1", "abcd1234")
         print("FEHLER Kleingeschriebener Keycode wurde angenommen")
@@ -602,6 +614,7 @@ def selbsttest():
         print("ok     Kleingeschriebener Keycode wird abgewiesen")
     # Ohne Keycode darf NICHT unverschluesselt gesendet werden.
     ohne = LgBeamer("127.0.0.1", "")
+    faelle += 1
     try:
         ohne.befehl("CURRENT_APP")
         print("FEHLER Ohne Keycode wurde unverschluesselt gesendet")
@@ -610,12 +623,16 @@ def selbsttest():
         print("ok     Ohne Keycode wird gemeldet statt unverschluesselt gesendet")
 
     print()
-    fehler += _abweisungen(geraet)
+    weitere, fehl2 = _abweisungen(geraet)
+    faelle += weitere
+    fehler += fehl2
 
+    # Hausform, in beiden Ausgaengen.
+    print("\n%d Faelle geprueft, %d Fehlschlaege." % (faelle, fehler))
     if fehler:
-        print("\n%d Abweichung(en) - der Nachbau stimmt NICHT mit der Vorlage ueberein." % fehler)
+        print("%d Abweichung(en) - der Nachbau stimmt NICHT mit der Vorlage ueberein." % fehler)
         return 1
-    print("\nAlle %d Werte stimmen mit der Originalfassung ueberein."
+    print("Alle %d Werte stimmen mit der Originalfassung ueberein."
           % (len(_PRUEFWERTE) - 1))
     return 0
 

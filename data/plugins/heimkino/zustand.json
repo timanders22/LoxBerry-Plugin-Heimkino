@@ -1,0 +1,34 @@
+{
+ "zeit": 1788725252.176262,
+ "zeit_text": "06.09.2026 22:07:32",
+ "config_lage": "fehlt",
+ "beamer": {
+  "aktiv": false,
+  "erreichbar": false,
+  "status": "unbekannt",
+  "app": "",
+  "grund": "aus",
+  "grund_text": "Das Geraet ist in den Einstellungen abgeschaltet.",
+  "fehler": "",
+  "lautstaerke": -1,
+  "stumm": -1
+ },
+ "xbox": {
+  "aktiv": false,
+  "status": "unbekannt",
+  "angemeldet": false,
+  "fehler": "",
+  "quelle": "",
+  "name": ""
+ },
+ "geheimnis_ablauf": "",
+ "geheimnis_tage": "",
+ "betrieb": {
+  "beamer_h": 0.0,
+  "beamer_heute": 0,
+  "xbox_h": 0.0,
+  "xbox_heute": 0
+ },
+ "auftrag_offen": false,
+ "takt": 60
+}

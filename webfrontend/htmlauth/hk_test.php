@@ -112,6 +112,17 @@ function hk_test_zeilen($cfg)
     $zeilen[] = array($zu, hk_t('PRUEF.FORMULARE'),
         hk_tf('PRUEF.FORMULARE_ZAHL', array('%1' => $tx)));
 
+    // --- Schreibt der Dienst ins Protokoll? Ueber einen Dienst, der gar
+    // nicht laeuft, wird nicht geurteilt - dann steht der Befund schon oben.
+    if (!$pid) {
+        $zeilen[] = array(2, hk_t('PRUEF.PROTOKOLL'), hk_t('PRUEF.HERZ_KEIN_DIENST'));
+    } else {
+        list($zu, $tx) = hk_protokoll_probe();
+        $zeilen[] = array($zu, hk_t('PRUEF.PROTOKOLL'),
+            $zu === 2 ? hk_t('PRUEF.NICHT_MESSBAR')
+            : ($zu === 1 ? $tx : hk_tf('PRUEF.PROTOKOLL_NEIN', array('%1' => $tx))));
+    }
+
     // --- Wirkt die Geraetesperre? Ohne sie koennen Dienst und
     // Einzelbefehl gleichzeitig mit dem Beamer sprechen, und das Geraet
     // nimmt nur eine Verbindung zur Zeit an.

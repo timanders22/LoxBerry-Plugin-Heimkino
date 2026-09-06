@@ -28,6 +28,7 @@ Aufrufe von aussen:
   hk_service.py               Dienst starten
   hk_service.py --vorgaben    Vorgabeliste als JSON (fuer die Selbstpruefung)
   hk_service.py --themen      gesendete Themen als JSON (fuer die Selbstpruefung)
+  hk_service.py --protokoll   Lage der Protokolldatei als JSON
 """
 
 import datetime
@@ -694,6 +695,14 @@ def hauptteil():
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--vorgaben":
         print(json.dumps(gemein.vorgaben(), ensure_ascii=False, indent=1))
+        sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] == "--protokoll":
+        # Fuer die Pruefzeile im Reiter Test. Gefragt wird die Bibliothek,
+        # nicht ein zweites Mal die Datei - sonst gaebe es zwei Wahrheiten
+        # darueber, was "in Ordnung" heisst.
+        zustand, text = gemein.log_lage()
+        print(json.dumps({"zustand": zustand, "text": text},
+                         ensure_ascii=False))
         sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "--themen":
         # Die WIRKLICH gesendeten Themen, nicht die Datei. Nur so beantwortet

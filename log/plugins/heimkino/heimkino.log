@@ -1,0 +1,3 @@
+2026-09-06 22:06:31 WARNING Konfiguration config/plugins/heimkino/heimkino.cfg fehlt - es gelten die Vorgaben.
+2026-09-06 22:06:32 WARNING Kein MQTT-Broker in general.json gefunden - melde nichts. Ist das MQTT-Gateway eingerichtet?
+2026-09-06 22:06:32 INFO    Heimkino gestartet, Takt 60 s, Themenpraefix heimkino

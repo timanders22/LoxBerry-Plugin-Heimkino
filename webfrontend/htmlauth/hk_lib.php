@@ -1200,6 +1200,28 @@ function hk_vollstaendig_probe()
 }
 
 /**
+ * Schreibt der Dienst wirklich in sein Protokoll?
+ *
+ * Am 06.09.2026 am Geraet gemessen: der Dienst lief sieben Stunden, schrieb
+ * seine Zustandsdatei weiter - und es gab keine Protokolldatei. Das
+ * Verzeichnis log/plugins liegt auf einer Ramdisk und war geleert worden;
+ * der bis dahin benutzte FileHandler oeffnet die Datei einmal beim Start und
+ * schreibt danach in einen geloeschten Inode. Sichtbar war davon nichts -
+ * genau deshalb steht die Frage jetzt als Zeile im Reiter Test.
+ *
+ * Gefragt wird der Dienst (--protokoll), nicht ein zweites Mal die Datei.
+ */
+function hk_protokoll_probe()
+{
+    list($code, $aus) = hk_cmd_python('hk_service.py', array('--protokoll'));
+    $j = $code === 0 ? json_decode($aus, true) : null;
+    if (!is_array($j) || !isset($j['zustand'])) {
+        return array(2, '');
+    }
+    return array((int) $j['zustand'], (string) $j['text']);
+}
+
+/**
  * Wirkt die Geraetesperre?
  *
  * Sie verhindert, dass Dienst und Einzelbefehl gleichzeitig mit dem Beamer

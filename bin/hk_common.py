@@ -11,6 +11,7 @@ import configparser
 import errno
 import json
 import logging
+import logging.handlers
 import os
 import socket
 import sys
@@ -115,6 +116,33 @@ P = pfade()
 # Protokoll
 # --------------------------------------------------------------------------
 
+def log_lage():
+    """Schreibt der Dienst wirklich ins Protokoll? Gibt (zustand, text).
+
+    zustand: 1 = ja, 0 = Befund, 2 = nicht beurteilbar.
+
+    Die Frage ist nicht theoretisch. Am 06.09.2026 lief der Dienst am Geraet
+    sieben Stunden und hatte kein Protokoll - die Datei war unter ihm
+    weggeraeumt worden, und niemand konnte es sehen. Eine Zeile im Reiter
+    Test macht daraus einen Befund statt einer Stille.
+    """
+    pfad = P["log"]
+    if not os.path.isfile(pfad):
+        return 0, "die Protokolldatei fehlt"
+    try:
+        groesse = os.path.getsize(pfad)
+        alter = time.time() - os.path.getmtime(pfad)
+    except OSError as fehler:
+        return 2, "nicht lesbar (%s)" % fehler
+    if groesse == 0:
+        return 0, "die Protokolldatei ist leer"
+    # Der Dienst schreibt nicht bei jedem Takt eine Zeile - nur bei
+    # Ereignissen. Deshalb eine grosszuegige Schwelle: erst wenn seit einem
+    # Tag nichts mehr kam, ist das ein Hinweis. Wer es genauer will, sieht
+    # sich die Datei an.
+    return 1, "%d Byte, zuletzt vor %d min geschrieben" % (groesse, alter / 60)
+
+
 def log_kappen(pfad=None):
     """Die Protokolldatei kappen, bevor sie den Arbeitsspeicher auffrisst.
 
@@ -162,8 +190,28 @@ def protokoll_einrichten(name="heimkino", stufe=logging.INFO):
     #   - hk_cmd.py antwortet dem Aktionsendpunkt auf stdout, und dort hat
     #     eine Protokollzeile nichts zu suchen.
     # Faellt das Schreiben aus, geht es nach stderr - sonst waere man blind.
+    #
+    # WatchedFileHandler, NICHT FileHandler.
+    #
+    # Am Geraet gemessen (06.09.2026, LoxBerry 4.0.0.15): der Dienst lief
+    # sieben Stunden, schrieb seine Zustandsdatei weiter - und es gab KEIN
+    # heimkino.log. Das Verzeichnis log/plugins liegt auf einer Ramdisk
+    # (gemessen: /dev/zram0 on /opt/loxberry/log/plugins), und es war um
+    # 21:13 geleert worden. Ein FileHandler oeffnet die Datei EINMAL beim
+    # Start; verschwindet sie danach, schreibt der Prozess bis zum naechsten
+    # Neustart in einen geloeschten Inode. Sichtbar wird davon nichts.
+    #
+    # Denselben Inode tauscht log_kappen() weiter unten selbst weg
+    # (os.replace) - der Fehler war also auch ohne fremdes Aufraeumen
+    # eingebaut.
+    #
+    # WatchedFileHandler sieht bei jeder Zeile nach, ob Geraetenummer und
+    # Inode noch dieselben sind, und oeffnet sonst neu. Er ist genau fuer
+    # diesen Fall gebaut (logrotate) und steht in der Standardbibliothek.
+    # Unter Windows greift die Pruefung nicht - dort laesst sich eine offene
+    # Datei ohnehin nicht umbenennen; auf dem LoxBerry (Linux) greift sie.
     try:
-        datei = logging.FileHandler(P["log"], encoding="utf-8")
+        datei = logging.handlers.WatchedFileHandler(P["log"], encoding="utf-8")
         datei.setFormatter(form)
         log.addHandler(datei)
     except OSError:

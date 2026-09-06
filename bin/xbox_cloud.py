@@ -681,9 +681,13 @@ class _Antwort:
 
 def selbsttest():
     fehler = 0
+    faelle = 0
 
     def pruefe(name, bedingung, zusatz=""):
-        nonlocal fehler
+        # 'faelle' wird zur LAUFZEIT hochgezaehlt, an der Stelle, an der ein
+        # Fall ausgegeben wird - keine Zahl im Quelltext.
+        nonlocal fehler, faelle
+        faelle += 1
         if bedingung:
             print("ok     %s" % name)
         else:
@@ -771,10 +775,12 @@ def selbsttest():
         pruefe("Sitzungskennung ueberlebt den Prozess",
                XboxCloud(pfad)._sitzung() == eins)
 
+    # Hausform, in beiden Ausgaengen.
+    print("\n%d Faelle geprueft, %d Fehlschlaege." % (faelle, fehler))
     if fehler:
-        print("\n%d Abweichung(en)." % fehler)
+        print("%d Abweichung(en)." % fehler)
         return 1
-    print("\nAlle Pruefungen bestanden (ohne Konto, ohne Netz).")
+    print("Alle Pruefungen bestanden (ohne Konto, ohne Netz).")
     return 0
 
 
