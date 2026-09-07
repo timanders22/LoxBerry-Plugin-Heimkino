@@ -1382,6 +1382,30 @@ function hk_version()
             }
         }
     }
+
+    /* 3. Weg, NEU 1.3.9: die plugin.cfg im Auspackordner.
+     *
+     * Am Pruefstand gemessen (07.09.2026): installiert nennt die Funktion
+     * ihre Fassung richtig - im Auspackordner gab sie eine leere
+     * Zeichenkette. Dort gibt es keine plugindatabase.json, und einen
+     * Dateikandidaten kannte sie nicht. Betroffen ist damit jeder Lauf im
+     * Arbeitsordner: Pruefstand, Sicherungsdatei, Freigabenotiz.
+     *
+     * Umgekehrt gilt weiter: auf einer Installation gibt es die plugin.cfg
+     * NICHT - plugininstall.pl liest sie aus dem Auspackordner und loescht
+     * sie danach. Deshalb steht dieser Weg an dritter Stelle, nicht an
+     * erster. */
+    if ($v === '') {
+        foreach (array(dirname(dirname(__DIR__)) . '/plugin.cfg',
+                       dirname(dirname(dirname(__DIR__))) . '/plugin.cfg') as $k) {
+            if (!is_readable($k)) { continue; }
+            $roh = (string) @file_get_contents($k);
+            if (preg_match('/^\s*VERSION\s*=\s*([^\r\n]+)/mi', $roh, $m)) {
+                $v = trim($m[1], " \t\"'");
+                break;
+            }
+        }
+    }
     return $v;
 }
 
