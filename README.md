@@ -13,6 +13,49 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.10
+
+### Die Prüfzeile „Schreibt der Dienst ins Protokoll?“ schlug falschen Alarm
+
+Seit 1.3.5 steht im Reiter *Test* diese Zeile. Fehlte die Protokolldatei oder
+war sie leer, meldete sie einen Befund: „der Dienst läuft, protokolliert aber
+nicht … Ein Neustart des Dienstes legt sie wieder an.“
+
+Das war falsch. `log/plugins` liegt auf einer Ramdisk, und LoxBerry leert sie
+regelmäßig. Der `WatchedFileHandler`, den der Dienst seit 1.3.5 benutzt, legt
+die Datei **bei der nächsten Protokollzeile** von selbst wieder an — nicht
+sofort. Heimkino schreibt nur bei Ereignissen (Start, Szene, Schaltbefehl,
+Verbindungswechsel), und bis dahin kann viel Zeit vergehen. In dieser Zeit
+sieht ein richtig arbeitender Dienst von außen genau so aus wie ein kaputter.
+
+Am Gerät gemessen, in beide Richtungen (17.09.2026): mit dem Code dieser
+Linie in einem Sandkasten verschwindet die Datei beim Löschen und kommt mit
+der nächsten Zeile zurück; ein blanker `FileHandler` im selben Ablauf bleibt
+auf der gelöschten Datei stehen. Und am laufenden Dienst selbst: das
+Verzeichnis wurde um 01:13 geleert, um 01:25 meldete der Dienst „MQTT
+verbunden“ — die Datei war wieder da, und der Deskriptor des Dienstes zeigte
+auf ihren Inode. Kein Neustart.
+
+Die Zeile sagt jetzt in diesem Fall, dass gerade keine Datei da ist und warum,
+und dass sie von selbst wiederkommt — als **nicht beurteilbar**, nicht als
+Befund. Denn gefragt wird aus einem eigenen Prozess, der nur die Datei sieht;
+mehr kann er ehrlich nicht sagen.
+
+### Drei Kommentare, die nicht mehr stimmten
+
+- `bin/hk_common.py`: das Startskript leite die Dienstausgabe „ohnehin in
+  dieselbe Datei“ — seit 1.3.7 geht sie nach `heimkino_start.log`.
+- `bin/hk_common.py`, `log_lage()`: eine „großzügige Schwelle von einem Tag“
+  wurde beschrieben, die es im Code nie gab.
+- `webfrontend/htmlauth/hk_lib.php`: „Gefragt wird der Dienst“ — gefragt
+  wurde immer ein eigener Prozess.
+
+### Zeilenenden
+
+`README.md` und `webfrontend/html/index.php` führten noch CRLF; wie alle
+Textdateien einer Linie führen sie jetzt LF. Am Aktionsendpunkt geprüft: die
+Antworten sind unverändert und enthalten kein CR.
+
 ## Neu in 1.3.6
 
 **Diese Fassung ändert am Verhalten des Plugins nichts.** Sie berichtigt eine

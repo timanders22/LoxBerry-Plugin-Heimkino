@@ -117,29 +117,34 @@ P = pfade()
 # --------------------------------------------------------------------------
 
 def log_lage():
-    """Schreibt der Dienst wirklich ins Protokoll? Gibt (zustand, text).
+    """Wie steht es um die Protokolldatei? Gibt (zustand, text).
 
-    zustand: 1 = ja, 0 = Befund, 2 = nicht beurteilbar.
+    zustand: 1 = Datei da und beschrieben, 2 = nicht beurteilbar.
+    text bei 2: "fehlt", "leer" oder der Lesefehler.
 
-    Die Frage ist nicht theoretisch. Am 06.09.2026 lief der Dienst am Geraet
-    sieben Stunden und hatte kein Protokoll - die Datei war unter ihm
-    weggeraeumt worden, und niemand konnte es sehen. Eine Zeile im Reiter
-    Test macht daraus einen Befund statt einer Stille.
+    Einen Befund (0) liefert diese Funktion seit 1.3.10 NICHT mehr. Bis 1.3.9
+    galt eine fehlende oder leere Datei als "der Dienst protokolliert nicht",
+    samt Rat zum Neustart. Das war ein falscher Alarm. Am Geraet geeicht
+    (17.09.2026, dieser Code im Sandkasten, Gegenrichtung ein blanker
+    FileHandler): der WatchedFileHandler legt die Datei erst bei der NAECHSTEN
+    Zeile wieder an. Zwischen dem Leeren der Ramdisk und dieser Zeile sieht
+    ein richtiger Dienst von aussen genau so aus wie ein kaputter - und
+    Heimkino schreibt nur bei Ereignissen, das kann Tage dauern.
+
+    Gefragt wird aus einem EIGENEN Prozess (hk_service.py --protokoll), nicht
+    vom laufenden Dienst; dieser Prozess sieht nur die Datei. Mehr als "da"
+    oder "nicht beurteilbar" kann er nicht ehrlich sagen.
     """
     pfad = P["log"]
     if not os.path.isfile(pfad):
-        return 0, "die Protokolldatei fehlt"
+        return 2, "fehlt"
     try:
         groesse = os.path.getsize(pfad)
         alter = time.time() - os.path.getmtime(pfad)
     except OSError as fehler:
         return 2, "nicht lesbar (%s)" % fehler
     if groesse == 0:
-        return 0, "die Protokolldatei ist leer"
-    # Der Dienst schreibt nicht bei jedem Takt eine Zeile - nur bei
-    # Ereignissen. Deshalb eine grosszuegige Schwelle: erst wenn seit einem
-    # Tag nichts mehr kam, ist das ein Hinweis. Wer es genauer will, sieht
-    # sich die Datei an.
+        return 2, "leer"
     return 1, "%d Byte, zuletzt vor %d min geschrieben" % (groesse, alter / 60)
 
 
@@ -185,8 +190,12 @@ def protokoll_einrichten(name="heimkino", stufe=logging.INFO):
     form = logging.Formatter("%(asctime)s %(levelname)-7s %(message)s",
                              "%Y-%m-%d %H:%M:%S")
     # Nur in die Datei, nicht nach stdout. Zwei Gruende:
-    #   - der Dienst wird vom Startskript ohnehin in dieselbe Datei geleitet,
-    #     ein zweiter Kanal wuerde jede Zeile doppelt schreiben;
+    #   - stdout und stderr des Dienstes leitet das Startskript seit 1.3.7 in
+    #     eine EIGENE Datei (heimkino_start.log), die bei jedem Start geleert
+    #     wird. Protokollzeilen haben dort nichts verloren. Umgekehrt darf das
+    #     Startskript nicht wieder hierher leiten: dann hielte die Schale einen
+    #     zweiten Deskriptor auf diese Datei, den kein Handler nachfassen kann
+    #     (bis 1.3.6 so, am Geraet gemessen);
     #   - hk_cmd.py antwortet dem Aktionsendpunkt auf stdout, und dort hat
     #     eine Protokollzeile nichts zu suchen.
     # Faellt das Schreiben aus, geht es nach stderr - sonst waere man blind.

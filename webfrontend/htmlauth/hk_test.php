@@ -118,9 +118,14 @@ function hk_test_zeilen($cfg)
         $zeilen[] = array(2, hk_t('PRUEF.PROTOKOLL'), hk_t('PRUEF.HERZ_KEIN_DIENST'));
     } else {
         list($zu, $tx) = hk_protokoll_probe();
+        // Eine fehlende oder leere Datei ist KEIN Befund: der Dienst legt sie
+        // bei seiner naechsten Meldung von selbst wieder an. Bis 1.3.9 stand
+        // hier "protokolliert nicht" samt Rat zum Neustart - ein falscher
+        // Alarm, am Geraet geeicht am 17.09.2026 (siehe log_lage()).
         $zeilen[] = array($zu, hk_t('PRUEF.PROTOKOLL'),
-            $zu === 2 ? hk_t('PRUEF.NICHT_MESSBAR')
-            : ($zu === 1 ? $tx : hk_tf('PRUEF.PROTOKOLL_NEIN', array('%1' => $tx))));
+            $zu === 1 ? $tx
+            : ($tx === 'fehlt' || $tx === 'leer' ? hk_t('PRUEF.PROTOKOLL_WARTET')
+            : hk_t('PRUEF.NICHT_MESSBAR')));
     }
 
     // --- Wirkt die Geraetesperre? Ohne sie koennen Dienst und

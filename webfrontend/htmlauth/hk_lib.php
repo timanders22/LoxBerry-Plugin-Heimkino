@@ -1209,7 +1209,11 @@ function hk_vollstaendig_probe()
  * schreibt danach in einen geloeschten Inode. Sichtbar war davon nichts -
  * genau deshalb steht die Frage jetzt als Zeile im Reiter Test.
  *
- * Gefragt wird der Dienst (--protokoll), nicht ein zweites Mal die Datei.
+ * Die Antwort kommt aus hk_service.py --protokoll - einem EIGENEN Prozess,
+ * nicht aus dem laufenden Dienst; er sieht nur die Datei. Eine fehlende Datei
+ * kann er deshalb nicht beurteilen: beim WatchedFileHandler entsteht sie erst
+ * mit der naechsten Meldung neu (am Geraet geeicht 17.09.2026). Bis 1.3.9
+ * stand hier "Gefragt wird der Dienst" - das war nie so.
  */
 function hk_protokoll_probe()
 {
