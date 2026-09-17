@@ -14,12 +14,24 @@
     "min/max sind die Grenzen des virtuellen Eingangs. Sie werden NICHT",
     "pauschal auf +-2147483647 gesetzt - Loxone zieht daraus die",
     "Plausibilitaetspruefung. Ein Feld, das negativ werden kann, braucht ein",
-    "negatives min, sonst steht in der Visualisierung 0 statt der Wahrheit."
+    "negatives min, sonst steht in der Visualisierung 0 statt der Wahrheit.",
+    "",
+    "retain (seit 1.3.11): Hausstandard Regeln/07 - Zustaende retained,",
+    "Messwerte mit Zeitbezug nicht, das Lebenszeichen nie. Bis 1.3.10 ging",
+    "JEDES Thema retained hinaus, auch service/zeitstempel: ein neu",
+    "verbundener Teilnehmer sah dann einen alten Zeitstempel und hielt den",
+    "Dienst fuer lebendig. Nicht retained: service/zeitstempel",
+    "(Lebenszeichen), beamer/laufzeit_heute und xbox/laufzeit_heute (Dauer",
+    "des Tages, altert), xbox/geheimnis_tage (zaehlt taeglich herunter).",
+    "Zaehlerstaende (betriebsstunden) und das absolute Ablaufdatum bleiben",
+    "retained. Ein Thema ohne Eintrag geht NICHT retained hinaus. Dienst",
+    "(hk_common.retain_themen) und Oberflaeche (hk_themen) lesen diese Spalte."
   ],
   "themen": [
     {
       "thema": "service/online",
       "art": "digital",
+      "retain": true,
       "min": 0,
       "max": 1,
       "einheit": "",
@@ -29,6 +41,7 @@
     {
       "thema": "service/zeitstempel",
       "art": "analog",
+      "retain": false,
       "min": 0,
       "max": 4102444800,
       "einheit": "<v.1> s",
@@ -38,6 +51,7 @@
     {
       "thema": "last_error",
       "art": "text",
+      "retain": true,
       "min": 0,
       "max": 0,
       "einheit": "",
@@ -47,6 +61,7 @@
     {
       "thema": "beamer/aktiv",
       "art": "digital",
+      "retain": true,
       "min": 0,
       "max": 1,
       "einheit": "",
@@ -56,6 +71,7 @@
     {
       "thema": "beamer/erreichbar",
       "art": "digital",
+      "retain": true,
       "min": 0,
       "max": 1,
       "einheit": "",
@@ -65,6 +81,7 @@
     {
       "thema": "beamer/grund",
       "art": "text",
+      "retain": true,
       "min": 0,
       "max": 0,
       "einheit": "",
@@ -74,6 +91,7 @@
     {
       "thema": "beamer/status",
       "art": "text",
+      "retain": true,
       "min": 0,
       "max": 0,
       "einheit": "",
@@ -83,6 +101,7 @@
     {
       "thema": "beamer/an",
       "art": "digital",
+      "retain": true,
       "min": 0,
       "max": 1,
       "einheit": "",
@@ -92,6 +111,7 @@
     {
       "thema": "beamer/app",
       "art": "text",
+      "retain": true,
       "min": 0,
       "max": 0,
       "einheit": "",
@@ -101,6 +121,7 @@
     {
       "thema": "beamer/lautstaerke",
       "art": "analog",
+      "retain": true,
       "min": -1,
       "max": 100,
       "einheit": "<v.1>",
@@ -110,6 +131,7 @@
     {
       "thema": "beamer/stumm",
       "art": "analog",
+      "retain": true,
       "min": -1,
       "max": 1,
       "einheit": "",
@@ -119,6 +141,7 @@
     {
       "thema": "beamer/betriebsstunden",
       "art": "analog",
+      "retain": true,
       "min": 0,
       "max": 100000,
       "einheit": "<v.1> h",
@@ -128,6 +151,7 @@
     {
       "thema": "beamer/laufzeit_heute",
       "art": "analog",
+      "retain": false,
       "min": 0,
       "max": 1440,
       "einheit": "<v.1> min",
@@ -137,6 +161,7 @@
     {
       "thema": "beamer/letzte_aktion",
       "art": "text",
+      "retain": true,
       "min": 0,
       "max": 0,
       "einheit": "",
@@ -146,6 +171,7 @@
     {
       "thema": "xbox/aktiv",
       "art": "digital",
+      "retain": true,
       "min": 0,
       "max": 1,
       "einheit": "",
@@ -155,6 +181,7 @@
     {
       "thema": "xbox/status",
       "art": "text",
+      "retain": true,
       "min": 0,
       "max": 0,
       "einheit": "",
@@ -164,6 +191,7 @@
     {
       "thema": "xbox/an",
       "art": "digital",
+      "retain": true,
       "min": 0,
       "max": 1,
       "einheit": "",
@@ -173,6 +201,7 @@
     {
       "thema": "xbox/name",
       "art": "text",
+      "retain": true,
       "min": 0,
       "max": 0,
       "einheit": "",
@@ -182,6 +211,7 @@
     {
       "thema": "xbox/angemeldet",
       "art": "digital",
+      "retain": true,
       "min": 0,
       "max": 1,
       "einheit": "",
@@ -191,6 +221,7 @@
     {
       "thema": "xbox/betriebsstunden",
       "art": "analog",
+      "retain": true,
       "min": 0,
       "max": 100000,
       "einheit": "<v.1> h",
@@ -200,6 +231,7 @@
     {
       "thema": "xbox/laufzeit_heute",
       "art": "analog",
+      "retain": false,
       "min": 0,
       "max": 1440,
       "einheit": "<v.1> min",
@@ -209,6 +241,7 @@
     {
       "thema": "xbox/letzte_aktion",
       "art": "text",
+      "retain": true,
       "min": 0,
       "max": 0,
       "einheit": "",
@@ -218,6 +251,7 @@
     {
       "thema": "xbox/geheimnis_ablauf",
       "art": "text",
+      "retain": true,
       "min": 0,
       "max": 0,
       "einheit": "",
@@ -227,6 +261,7 @@
     {
       "thema": "xbox/geheimnis_tage",
       "art": "analog",
+      "retain": false,
       "min": -10000,
       "max": 800,
       "einheit": "<v.1> d",
@@ -236,6 +271,7 @@
     {
       "thema": "szene/laeuft",
       "art": "digital",
+      "retain": true,
       "min": 0,
       "max": 1,
       "einheit": "",
@@ -245,6 +281,7 @@
     {
       "thema": "szene/schritt",
       "art": "text",
+      "retain": true,
       "min": 0,
       "max": 0,
       "einheit": "",
@@ -254,6 +291,7 @@
     {
       "thema": "szene/ergebnis",
       "art": "text",
+      "retain": true,
       "min": 0,
       "max": 0,
       "einheit": "",

@@ -1019,10 +1019,11 @@ if ($hk_gwf >= 2) { ?>
 <h2><?= hk_te('MQTT.H_THEMEN') ?></h2>
 <p class="sm-hilfe"><?php echo hk_t('MQTT.THEMEN_RETAINED'); ?></p>
 <table class="sm-tbl">
-<tr><th style="width:38%"><?= hk_te('MQTT.SP_THEMA') ?></th><th style="width:10%"><?= hk_te('MQTT.SP_ART') ?></th><th><?= hk_te('MQTT.SP_BEDEUTUNG') ?></th></tr>
+<tr><th style="width:36%"><?= hk_te('MQTT.SP_THEMA') ?></th><th style="width:9%"><?= hk_te('MQTT.SP_ART') ?></th><th style="width:9%"><?= hk_te('MQTT.SP_RETAIN') ?></th><th><?= hk_te('MQTT.SP_BEDEUTUNG') ?></th></tr>
 <?php foreach (hk_themen() as $hk_thema => $hk_e_thema) { ?>
 <tr><td class="sm-mono"><?= hk_e($hk_praefix . '/' . $hk_thema) ?></td>
     <td><?= hk_te('ART.' . strtoupper($hk_e_thema['art'])) ?></td>
+    <td><?= $hk_e_thema['retain'] ? hk_te('MQTT.RETAIN_JA') : '&ndash;' ?></td>
     <td><?= hk_e($hk_e_thema['text']) ?></td></tr>
 <?php } ?>
 </table>
@@ -1052,10 +1053,11 @@ if ($hk_gwf >= 2) { ?>
 <h2><?= hk_te('LOX.H_SCHRITT2') ?></h2>
 <p class="sm-hilfe"><?php echo hk_t('LOX.SCHRITT2'); ?></p>
 <table class="sm-tbl">
-<tr><th style="width:38%"><?= hk_te('MQTT.SP_THEMA') ?></th><th style="width:10%"><?= hk_te('MQTT.SP_ART') ?></th><th><?= hk_te('MQTT.SP_BEDEUTUNG') ?></th></tr>
+<tr><th style="width:36%"><?= hk_te('MQTT.SP_THEMA') ?></th><th style="width:9%"><?= hk_te('MQTT.SP_ART') ?></th><th style="width:9%"><?= hk_te('MQTT.SP_RETAIN') ?></th><th><?= hk_te('MQTT.SP_BEDEUTUNG') ?></th></tr>
 <?php foreach (hk_themen() as $hk_thema => $hk_e_thema) { ?>
 <tr><td class="sm-mono"><?= hk_e($hk_praefix . '/' . $hk_thema) ?></td>
     <td><?= hk_te('ART.' . strtoupper($hk_e_thema['art'])) ?></td>
+    <td><?= $hk_e_thema['retain'] ? hk_te('MQTT.RETAIN_JA') : '&ndash;' ?></td>
     <td><?= hk_e($hk_e_thema['text']) ?></td></tr>
 <?php } ?>
 </table>

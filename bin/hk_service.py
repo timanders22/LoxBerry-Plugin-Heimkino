@@ -4,7 +4,7 @@
 Heimkino - Dienst
 
 Fragt in festem Takt den Zustand beider Geraete ab, schreibt ihn in eine
-Zustandsdatei fuer die Oberflaeche und meldet ihn per MQTT retained an den
+Zustandsdatei fuer die Oberflaeche und meldet ihn per MQTT (retained je Thema) an den
 Miniserver.
 
 Seit 1.3.0 tut er zwei Dinge mehr, und beide aus demselben Grund: er ist die

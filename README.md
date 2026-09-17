@@ -13,6 +13,24 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.11
+
+- **Retain je Thema statt pauschal.** Bis 1.3.10 ging jedes Thema retained
+  hinaus, auch das Lebenszeichen `service/zeitstempel`. Ein Teilnehmer, der
+  sich nach einem Ausfall des Dienstes neu verband, bekam einen alten
+  Zeitstempel und sah einen toten Dienst als lebendig. Jetzt gilt der
+  Hausstandard: Zustände retained, Werte, die von selbst altern
+  (`beamer/laufzeit_heute`, `xbox/laufzeit_heute`, `xbox/geheimnis_tage`),
+  und das Lebenszeichen nicht. Die Entscheidung steht als Spalte `retain` in
+  `bin/hk_themen.json`, aus der Dienst und Oberfläche lesen; der Reiter MQTT
+  zeigt sie. Die bisher zurückbehaltenen Werte dieser vier Themen räumt der
+  Dienst bei jeder Verbindung zum Broker ab.
+- **Prüfstand-Reste aus dem Archiv entfernt.** 1.3.9 und 1.3.10 lieferten
+  `data/plugins/heimkino/hk_service.pid`, `zustand.json` und `betrieb.json`
+  vom 06.09.2026 mit aus - Reste eines Prüflaufs. Der Installer legte sie
+  unter `data/plugins/heimkino/plugins/heimkino/` ab; gelesen wurden sie dort
+  nie.
+
 ## Neu in 1.3.10
 
 ### Die Prüfzeile „Schreibt der Dienst ins Protokoll?“ schlug falschen Alarm
@@ -772,8 +790,11 @@ gekommen.
 
 ### Zustand lesen — MQTT
 
-Alle Themen liegen unter dem eingestellten Präfix (Vorgabe `heimkino`) und sind
-**retained**.
+Alle Themen liegen unter dem eingestellten Präfix (Vorgabe `heimkino`).
+**Zustände sind retained**; ohne Retain gehen seit 1.3.11 das Lebenszeichen
+`service/zeitstempel` sowie `beamer/laufzeit_heute`, `xbox/laufzeit_heute`
+und `xbox/geheimnis_tage` hinaus. Die Spalte *retained* im Reiter MQTT zeigt
+es je Thema.
 
 | Thema | Art | Bedeutung |
 |---|---|---|

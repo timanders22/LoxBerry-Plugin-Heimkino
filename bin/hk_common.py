@@ -291,6 +291,13 @@ def themen():
     return list(zwischen)
 
 
+def retain_themen():
+    """Die Themen, die retained hinausgehen - aus der Spalte "retain" der
+    Themenliste. Ein Thema ohne Eintrag gehoert NICHT dazu: was niemand
+    beschrieben hat, soll nicht auf Dauer im Broker stehen (Regeln/07)."""
+    return frozenset(str(t.get("thema")) for t in themen() if t.get("retain") is True)
+
+
 def config_lesen(log=None):
     """Konfiguration lesen. Gibt (cfg, lage) zurueck.
 
@@ -740,10 +747,24 @@ class Melder:
         # sich darauf verlaesst, dass sie schon einmal gesendet wurden,
         # bekommt sie nie wieder - bis sich der Wert von sich aus aendert.
         # Bei "beamer/an" kann das Tage dauern.
+        #
+        # Vorher die Themen OHNE retain abraeumen: bis 1.3.10 ging auch
+        # service/zeitstempel retained hinaus, und dieser alte Wert liegt
+        # noch im Broker. Eine leere Nutzlast mit retain loescht ihn; der
+        # frische Wert folgt gleich darauf, ohne retain.
+        behalten = retain_themen()
+        for eintrag in themen():
+            thema = str(eintrag.get("thema"))
+            if thema and thema not in behalten:
+                try:
+                    client.publish("%s/%s" % (self.praefix, thema), "",
+                                   qos=0, retain=True)
+                except (OSError, ValueError):
+                    pass
         for thema, inhalt in list(self._letzte.items()):
             try:
                 client.publish("%s/%s" % (self.praefix, thema), inhalt,
-                               qos=0, retain=True)
+                               qos=0, retain=(thema in behalten))
             except (OSError, ValueError):
                 pass
 
@@ -772,9 +793,13 @@ class Melder:
         # gehen weiter an Loxone, und dort wird zeilenweise ausgewertet.
         inhalt = inhalt.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
         self._letzte[thema] = inhalt
+        # Retain je Thema aus der Themenliste (seit 1.3.11; bis dahin
+        # pauschal). Der Inhalt ist hier nie leer - der Bindestrich oben -,
+        # eine leere Nutzlast geht also auch retained nicht hinaus.
         try:
             auskunft = self.client.publish("%s/%s" % (self.praefix, thema),
-                                           inhalt, qos=0, retain=True)
+                                           inhalt, qos=0,
+                                           retain=(thema in retain_themen()))
         except (OSError, ValueError) as fehler:
             self.log.debug("MQTT-Versand fehlgeschlagen: %s", fehler)
             return

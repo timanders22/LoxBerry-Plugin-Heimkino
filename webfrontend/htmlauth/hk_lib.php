@@ -660,6 +660,7 @@ function hk_themen()
                 'min'     => isset($e['min']) ? (int) $e['min'] : 0,
                 'max'     => isset($e['max']) ? (int) $e['max'] : 0,
                 'einheit' => isset($e['einheit']) ? (string) $e['einheit'] : '',
+                'retain'  => isset($e['retain']) && $e['retain'] === true,
                 'text'    => isset($e[$sprache]) ? (string) $e[$sprache]
                              : (isset($e['en']) ? (string) $e['en'] : ''),
             );
