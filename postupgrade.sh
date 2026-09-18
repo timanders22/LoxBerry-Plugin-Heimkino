@@ -23,6 +23,79 @@ MARKE="$BASE/data/plugins/$PDIR.upgrade_laeuft"
 # dazukommt (Regeln/06, Nachtrag 17.09.2026).
 trap 'rm -f "$MARKE" 2>/dev/null' EXIT
 
+# ---------- Was "Inhalt" heisst ----------
+#
+# Wortgleich zu preupgrade.sh und postinstall.sh. Bis 1.3.12 entschied hier
+# ein blosses "[ -f ]": eine ABGESCHNITTENE Sicherung wurde ueber die
+# Konfiguration kopiert, die postinstall.sh eine Zeile vorher aus der heilen
+# Zweitschrift geholt hatte. In WSL gemessen (18.09.2026,
+# Pruefung-Heimkino-1.3.13, Fall C8): der Anwenderstand war danach weg.
+#
+# Ist python3 nicht aufrufbar, gilt eine JSON-Datei als heil; dann verhaelt
+# sich das Skript wie bis 1.3.12.
+hk_inhalt() {   # $1 Datei, $2 Art (cfg|json)
+    [ -s "$1" ] || return 1
+    case "$2" in
+        cfg)
+            grep -q '^[[:space:]]*\[heimkino\][[:space:]]*$' "$1" 2>/dev/null || return 1
+            for hk_f in aktionstoken keycode ip mac geraete_id; do
+                hk_w=$(sed -n "s/^[[:space:]]*$hk_f[[:space:]]*=[[:space:]]*//p" "$1" 2>/dev/null | head -1)
+                hk_w=$(printf '%s' "$hk_w" | tr -d '[:space:]')
+                [ -n "$hk_w" ] && return 0
+            done
+            return 1
+            ;;
+        json)
+            command -v python3 >/dev/null 2>&1 || return 0
+            python3 -c 'import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(1)
+if not isinstance(d, dict):
+    sys.exit(1)
+for k in ("refresh_token", "client_id"):
+    if str(d.get(k, "")).strip():
+        sys.exit(0)
+sys.exit(1)' "$1" 2>/dev/null
+            hk_rc=$?
+            case $hk_rc in
+                0) return 0 ;;
+                1) return 1 ;;
+                *) return 0 ;;
+            esac
+            ;;
+    esac
+    return 1
+}
+
+# Aus der Sicherung zurueckstellen - nach Inhalt, nicht nach Vorhandensein.
+#
+#   Sicherung MIT Inhalt                 -> uebernehmen
+#   Sicherung OHNE Inhalt, Ziel OHNE     -> uebernehmen (etwas ist besser
+#                                           als nichts, es geht nichts
+#                                           verloren)
+#   Sicherung OHNE Inhalt, Ziel MIT      -> stehen lassen und sagen, warum
+sicher_zurueck() {   # $1 Dateiname, $2 Art (cfg|json), $3 Klartext fuer die Meldung
+    sz_quelle="$SICHER/$1"
+    sz_ziel="$PCONFIG/$1"
+    [ -f "$sz_quelle" ] || return 1
+    if hk_inhalt "$sz_quelle" "$2"; then
+        cp -a "$sz_quelle" "$sz_ziel"
+        echo "<OK> $3 uebernommen."
+        return 0
+    fi
+    if ! hk_inhalt "$sz_ziel" "$2"; then
+        cp -a "$sz_quelle" "$sz_ziel"
+        echo "<WARNING> Die gesicherte $1 ist unvollstaendig. Sie wurde trotzdem"
+        echo "<WARNING> uebernommen - eine andere Quelle gibt es nicht."
+        return 0
+    fi
+    echo "<WARNING> Die gesicherte $1 ist unvollstaendig. Die vorhandene"
+    echo "<WARNING> Konfiguration bleibt unveraendert."
+    return 0
+}
+
 mkdir -p "$PCONFIG" 2>/dev/null
 
 # Wer von 1.1.1 oder frueher kommt, hat die Sicherung noch in der Ramdisk -
@@ -37,9 +110,8 @@ if [ ! -f "$SICHER/xbox_auth.json" ] && [ -f /tmp/heimkino_xbox_auth.sicherung ]
     cp -a /tmp/heimkino_xbox_auth.sicherung "$SICHER/xbox_auth.json" 2>/dev/null
 fi
 
-if [ -f "$SICHER/heimkino.cfg" ]; then
-    cp -a "$SICHER/heimkino.cfg" "$PCONFIG/heimkino.cfg"
-    echo "<OK> Bestehende Einstellungen uebernommen."
+if sicher_zurueck heimkino.cfg cfg "Bestehende Einstellungen"; then
+    :
 else
     # Kein blinder Alarm: der Installer loescht beim Update AUCH
     # data/plugins/<ordner> und damit die Sicherung, die preupgrade.sh
@@ -56,10 +128,7 @@ else
     echo "<WARNING> Keycode des Beamers muessen neu eingetragen werden."
     fi
 fi
-if [ -f "$SICHER/xbox_auth.json" ]; then
-    cp -a "$SICHER/xbox_auth.json" "$PCONFIG/xbox_auth.json"
-    echo "<OK> Bestehende Xbox-Anmeldung uebernommen."
-fi
+sicher_zurueck xbox_auth.json json "Bestehende Xbox-Anmeldung" || true
 
 chmod 640 "$PCONFIG/heimkino.cfg" 2>/dev/null
 chmod 600 "$PCONFIG/xbox_auth.json" 2>/dev/null

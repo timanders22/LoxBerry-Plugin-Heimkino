@@ -47,9 +47,64 @@ if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
     exec su -s /bin/bash loxberry -c "$(printf '%q ' "$0" "$@")"
 fi
 
-SELF=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)          # <home>/bin/plugins/<ordner>
-PNAME=$(basename "$SELF")
-LBHOMEDIR=$(cd "$SELF/../../.." && pwd)
+SELF=$(cd "$(dirname "$(readlink -f "$0")")" && pwd -P)       # <home>/bin/plugins/<ordner>
+
+# Die Wurzel wird GELESEN, nicht geraten (Regeln/03, Stufe 1 ist
+# $LBHOMEDIR; Bestand-2026-09-18/klasse-H/Ergebnis.md, Bauart H1).
+#
+# Bis 1.3.12 stand hier "LBHOMEDIR=$(cd "$SELF/../../.." && pwd)" - das
+# UEBERSCHRIEB ein gesetztes $LBHOMEDIR mit einer Rechnung aus dem
+# Ablageort. In WSL gemessen (18.09.2026, Pruefung-Heimkino-1.3.13,
+# Fall H2): dasselbe dienst.sh aus einem ausgepackten Archiv meldete
+# "gestoppt" (rc 1), obwohl der Dienst der Anlage lief - es sah in
+# <archiv>/data/plugins/bin nach.
+#
+# Drei Stufen, in dieser Reihenfolge:
+#   1. $LBHOMEDIR aus der Umgebung, wenn es eine Wurzel bezeichnet,
+#   2. aufwaerts suchen, bis ein Verzeichnis config/plugins, data/plugins
+#      UND config/system/general.json traegt (der dritte Nachweis seit dem
+#      Raumklima-Vorfall, Regeln/06),
+#   3. drei Ebenen ueber dem Ablageort - das bisherige Verhalten.
+hk_wurzel_suchen() {
+    hk_v="$SELF"
+    hk_i=0
+    while [ -n "$hk_v" ] && [ "$hk_v" != "/" ] && [ "$hk_i" -lt 8 ]; do
+        if [ -d "$hk_v/config/plugins" ] && [ -d "$hk_v/data/plugins" ] \
+           && [ -f "$hk_v/config/system/general.json" ]; then
+            echo "$hk_v"
+            return 0
+        fi
+        hk_v=$(dirname "$hk_v")
+        hk_i=$((hk_i + 1))
+    done
+    return 1
+}
+if [ -n "${LBHOMEDIR:-}" ] && [ -d "$LBHOMEDIR/config/plugins" ] \
+   && [ -d "$LBHOMEDIR/data/plugins" ]; then
+    LBHOMEDIR=$(cd "$LBHOMEDIR" && pwd -P)
+else
+    LBHOMEDIR=$(hk_wurzel_suchen) || LBHOMEDIR=$(cd "$SELF/../../.." && pwd -P)
+fi
+
+# Der Ordnername kommt aus $LBPPLUGINDIR, sonst aus dem Ablageort. Am Geraet
+# steht $LBPPLUGINDIR in einer Cron-Schale nie (Regeln/03, 43 Linien) - dann
+# traegt der Ablageort, und das ist bei einer regulaeren Installation genau
+# richtig.
+PNAME="${LBPPLUGINDIR:-}"
+[ -n "$PNAME" ] || PNAME=$(basename "$SELF")
+
+# Laeuft dieses Skript wirklich AUS der Installation?
+#
+# Regeln/06 sieht fuer die Pruefung am Geraet ein Pruefarchiv unter
+# ~/pruefung/ vor - und das liegt genau drei Ebenen unter der Wurzel. Bis
+# 1.3.12 hiess der Ordner dann "bin", und schon ein "status" legte in der
+# LAUFENDEN Anlage data/plugins/bin und log/plugins/bin an (in WSL gemessen,
+# 18.09.2026, Faelle H3 und H5; dieselbe Klasse wie der Raumklima-Vorfall
+# vom 05.09.2026). Deshalb wird der Ablageort gegengeprueft, und was
+# schreibt, faellt geschlossen aus.
+INSTALLIERT=0
+[ "$SELF" = "$LBHOMEDIR/bin/plugins/$PNAME" ] && INSTALLIERT=1
+
 PDATA="$LBHOMEDIR/data/plugins/$PNAME"
 PLOG="$LBHOMEDIR/log/plugins/$PNAME"
 PCONFIG="$LBHOMEDIR/config/plugins/$PNAME"
@@ -77,7 +132,17 @@ STARTLOG="$PLOG/heimkino_start.log"
 SKRIPT="$SELF/hk_service.py"
 CFG="$PCONFIG/heimkino.cfg"
 
-mkdir -p "$PDATA" "$PLOG" 2>/dev/null
+# Angelegt wird erst beim START, nicht bei jedem Aufruf.
+#
+# Bis 1.3.12 stand hier "mkdir -p" auf oberster Ebene - auch "status" und
+# "stop" legten damit Ordner an. Zwei Folgen, beide in WSL gemessen
+# (18.09.2026, Faelle H3 und H4): ein Aufruf aus einem Pruefarchiv legte in
+# der laufenden Anlage einen fremden Ordner an, und in der Upgrade-Luecke
+# legte schon ein "status" data/plugins/<ordner> wieder an - "der Ordner ist
+# da" sagte dort nichts mehr ueber eine gelungene Ruecksicherung aus.
+ordner_anlegen() {
+    mkdir -p "$PDATA" "$PLOG" 2>/dev/null
+}
 
 # Ist das Plugin in den Einstellungen ueberhaupt eingeschaltet? Ein Waechter,
 # der gegen den Willen des Anwenders arbeitet, ist schlimmer als keiner.
@@ -169,6 +234,17 @@ starten() {
         echo "FEHLER: $SKRIPT fehlt. Plugin neu installieren."
         return 1
     fi
+    # Ein Schutz faellt geschlossen aus (CLAUDE.md 4): wer aus einem
+    # Pruefarchiv oder einem ausgepackten Archiv startet, wuerde in die
+    # laufende Anlage schreiben - unter einem Ordnernamen, den niemand
+    # gewollt hat.
+    if [ "$INSTALLIERT" != "1" ]; then
+        echo "FEHLER: dieses Skript liegt nicht unter"
+        echo "FEHLER: $LBHOMEDIR/bin/plugins/$PNAME - aus einem ausgepackten"
+        echo "FEHLER: Archiv wird nichts gestartet."
+        return 1
+    fi
+    ordner_anlegen
     touch "$SOLL"
     # Die Ausgabe des Dienstes geht in die Startdatei, NICHT in das Protokoll:
     # dort schreibt allein der Handler des Programms. Beim Start gekappt, damit

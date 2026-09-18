@@ -13,6 +13,73 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.13
+
+Fünf Stellen, an denen bei einer Aktualisierung, einer Deinstallation oder
+einer Prüfung von Hand Einstellungen verloren gehen oder etwas an der falschen
+Stelle angelegt wird. Alle fünf sind in WSL nachgestellt, gemessen und geeicht
+(`Pruefung-Heimkino-1.3.13`, 27 Fälle, neun Rückbauten). **Am Gerät ist
+nichts davon nachgemessen.**
+
+### Eine abgeschnittene Datei verdrängt die Zweitschrift nicht mehr
+
+`preupgrade.sh` legt neben dem Konfigurationsordner Zweitschriften von
+`heimkino.cfg` und `xbox_auth.json` ab; `postinstall.sh` holt sie zurück,
+wenn die Datei verloren ist. Beide Richtungen entschieden bisher nur nach der
+**Größe** (`[ -s ]`). Eine abgeschnittene Datei — Stromausfall, volle Karte —
+ist nicht leer. Gemessen:
+
+* beim **Sichern** ersetzte sie die heile Zweitschrift; danach trug keine der
+  beiden mehr Aktionstoken, Keycode oder das Erneuerungstoken der Xbox,
+* beim **Zurückspielen** galt sie als „vorhanden“, und die heile Zweitschrift
+  wurde nicht geholt,
+* `postupgrade.sh` kopierte eine abgeschnittene Sicherung über die
+  Konfiguration, die `postinstall.sh` kurz vorher geheilt hatte.
+
+Entschieden wird jetzt nach **Inhalt**: die Datei ist lesbar (die `.cfg`
+trägt ihren Abschnittskopf, das JSON lässt sich lesen) **und** sie trägt einen
+Wert, den nur der Anwender liefert. Ein Stand ohne Inhalt ersetzt nie eine
+Zweitschrift mit Inhalt; eine gültige Konfiguration wird nie überschrieben.
+Der verdrängte, beschädigte Stand wird nicht weggeworfen, sondern liegt als
+`<datei>.kaputt` (Rechte 0600) daneben.
+
+### Die Sicherung fällt nicht mehr, bevor die neue steht
+
+`preupgrade.sh` löschte die vorhandene Sicherung unter
+`data/plugins/heimkino.upgrade_sicherung`, **bevor** es die neue anlegte.
+Gemessen: nach einem abgebrochenen und einem zweiten Aktualisierungslauf waren
+von vier Dateien mit Einstellungen nur noch zwei übrig. Jetzt entsteht die
+neue Sicherung daneben, wird byteweise gegen das Original gehalten und erst
+dann an ihren Platz gebracht — nach 0 von 4 Dateien verloren.
+
+### `dienst.sh` liest die Wurzel, statt sie zu raten
+
+`bin/dienst.sh` rechnete die LoxBerry-Wurzel aus dem eigenen Ablageort und
+überschrieb dabei ein gesetztes `$LBHOMEDIR`; angelegt wurden die Ordner bei
+**jedem** Aufruf, auch bei `status`. Gemessen: ein `status` aus einem
+Prüfarchiv unter `~/pruefung/` legte in der laufenden Anlage
+`data/plugins/bin` und `log/plugins/bin` an, ein `start` von dort startete
+einen zweiten Dienst unter diesem Namen. Jetzt gilt zuerst `$LBHOMEDIR`, dann
+die Suche aufwärts, dann der Ablageort; angelegt wird nur beim Start, und
+gestartet wird nur aus der Installation selbst.
+
+### Die Deinstallation beendet auch einen Dienst ohne PID-Datei
+
+`uninstall/uninstall` beendete den Dienst nur über die PID-Datei. Die löscht
+der Installer bei jeder Aktualisierung mit; ein Dienst aus der Zeit davor
+überlebte die Deinstallation (gemessen: 1 Prozess danach). Gesucht wird jetzt
+argumentweise wie in `postupgrade.sh` seit 1.3.12. Ein Einmallauf mit
+zusätzlichem Argument (`hk_service.py --themen` aus dem Reiter Test) bleibt
+unberührt.
+
+### Was ausdrücklich nicht geändert wurde
+
+Der Letzte Wille auf `service/online` geht weiter mit `retain` hinaus
+(`bin/hk_common.py`). `service/online` ist in `hk_themen.json` ein
+**Zustand**, und eine zurückbehaltene `0` sagt dort das Richtige. Ob das so
+bleibt, entscheidet der Hausherr; dieselbe Frage liegt für WOLF-ISM-NG
+bereits vor.
+
 ## Neu in 1.3.12
 
 ### Während einer Aktualisierung startet der Dienst nicht mehr

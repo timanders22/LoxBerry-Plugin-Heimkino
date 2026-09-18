@@ -38,43 +38,99 @@ PIDDATEI_ALT="$BASE/log/plugins/$PDIR/hk_service.pid"
 # Deinstallation.
 rm -f "$PDATA/soll_laufen" 2>/dev/null
 
-# Beendet wird ueber die PID-Datei, NICHT ueber pkill -f.
+# Beendet wird ARGUMENTWEISE ueber /proc, NICHT ueber pkill -f und nicht
+# allein ueber die PID-Datei.
 #
-# pkill -f "hk_service.py" trifft jeden Prozess, in dessen Kommandozeile die
-# Zeichenkette vorkommt - auch einen Editor, der die Datei geoeffnet hat,
-# oder ein tail auf einen Pfad mit diesem Namen. Beim Beenden ist das kein
-# theoretisches Risiko: pkill schickt das Signal an ALLE Treffer.
-beendet=0
-for DATEI in "$PIDDATEI" "$PIDDATEI_ALT"; do
-    [ -f "$DATEI" ] || continue
-    PID=$(cat "$DATEI" 2>/dev/null)
-    case "$PID" in
-        ''|*[!0-9]*) PID="" ;;
-    esac
-    # Gegenprobe: gehoert die Prozessnummer wirklich zu unserem Dienst?
-    # Argumentweise vergleichen, nicht als Teilzeichenkette: die
-    # Kommandozeile eines fremden Prozesses kann den Namen zufaellig
-    # enthalten, und ein kill an den Falschen ist nicht rueckgaengig zu
-    # machen. tr wandelt die NUL-Trenner in Zeilen, dann trifft grep -x
-    # nur ein vollstaendiges Argument.
-    if [ -n "$PID" ] && tr '\0' '\n' < "/proc/$PID/cmdline" 2>/dev/null \
-         | sed 's#.*/##' | grep -qx "hk_service.py"; then
-        kill "$PID" 2>/dev/null
-        # Dem Dienst Zeit zum Aufraeumen lassen: er meldet beim Beenden noch
-        # service/online = 0 per MQTT, damit Loxone den Ausfall mitbekommt.
-        i=0
-        while [ $i -lt 20 ] && kill -0 "$PID" 2>/dev/null; do
-            sleep 0.25
-            i=$((i + 1))
-        done
-        kill -9 "$PID" 2>/dev/null
-        beendet=1
-    fi
-    rm -f "$DATEI"
-done
+# Zwei Fehler waeren moeglich, beide teuer:
+#
+#   pkill -f "hk_service.py" traefe jeden Prozess, in dessen Kommandozeile
+#   die Zeichenkette vorkommt - auch einen Editor mit der geoeffneten Datei
+#   oder ein tail auf einen Pfad mit diesem Namen. pkill schickt das Signal
+#   an ALLE Treffer.
+#
+#   Die PID-Datei allein reicht aber nicht. purge_installation loescht
+#   data/plugins/<ordner>/ bedingungslos (plugininstall.pl :886 -> :1629
+#   ff.), und ein Dienst aus der Zeit davor haelt seine Dateisperre danach
+#   auf einem geloeschten Inode: die PID-Datei ist weg, der Prozess laeuft.
+#   Bis 1.3.12 ueberlebte er die Deinstallation und sprach danach weiter
+#   mit dem Beamer und mit MQTT. In WSL gemessen (18.09.2026,
+#   Pruefung-Heimkino-1.3.13, Fall U1): 1 Prozess nach dem uninstall.
+#   Dieselbe Bauart schliesst postupgrade.sh seit 1.3.12.
+#
+# Ein Treffer hat GENAU zwei Argumente - einen python-Interpreter und
+# zeichengenau den eigenen Dienstpfad - und gehoert dem Dienstbenutzer. Ein
+# Editor auf der Datei, ein "tail" auf einen Pfad mit diesem Namen und der
+# Einmallauf "hk_service.py --themen" aus dem Reiter Test treffen damit
+# nicht (Fall U4).
+HK_SKRIPT="${LBPBIN:-$BASE/bin/plugins}/$PDIR/hk_service.py"
+HK_UID=$(id -u loxberry 2>/dev/null)
+case "$HK_UID" in ''|*[!0-9]*) HK_UID=$(id -u) ;; esac
 
-if [ "$beendet" = "1" ]; then
-    echo "<OK> Dienst beendet."
+hk_dienste_finden() {
+    for hk_d in /proc/[0-9]*; do
+        grep -qaF "hk_service.py" "$hk_d/cmdline" 2>/dev/null || continue
+        [ "$(stat -c %u "$hk_d" 2>/dev/null)" = "$HK_UID" ] || continue
+        hk_n=0
+        hk_treffer=0
+        while IFS= read -r hk_arg; do
+            hk_n=$((hk_n + 1))
+            if [ "$hk_n" = 1 ]; then
+                case "${hk_arg##*/}" in
+                    python|python3|python3.*) ;;
+                    *) break ;;
+                esac
+            elif [ "$hk_n" = 2 ]; then
+                case "$hk_arg" in
+                    /*) hk_voll="$hk_arg" ;;
+                    # Bei relativem Start steht in cmdline nur der Name; er
+                    # wird gegen das Arbeitsverzeichnis des Prozesses
+                    # aufgeloest, nicht gegen das eigene.
+                    *)  hk_voll=$(readlink -f "$(readlink -f "$hk_d/cwd" 2>/dev/null)/$hk_arg" 2>/dev/null) ;;
+                esac
+                [ "$hk_voll" = "$HK_SKRIPT" ] && hk_treffer=1
+            fi
+        done <<HK_ARGUMENTE
+$(tr '\0' '\n' < "$hk_d/cmdline" 2>/dev/null)
+HK_ARGUMENTE
+        if [ "$hk_treffer" = 1 ] && [ "$hk_n" = 2 ]; then
+            echo "${hk_d#/proc/}"
+        fi
+    done
+}
+
+beendet=0
+HK_UEBRIG=""
+for hk_p in $(hk_dienste_finden); do
+    beendet=$((beendet + 1))
+    # SIGTERM, nicht SIGKILL: der Dienst meldet beim Beenden noch
+    # service/online = 0 per MQTT, damit Loxone den Ausfall sieht.
+    kill "$hk_p" 2>/dev/null
+done
+if [ "$beendet" != 0 ]; then
+    hk_i=0
+    while [ $hk_i -lt 20 ] && [ -n "$(hk_dienste_finden)" ]; do
+        sleep 0.25
+        hk_i=$((hk_i + 1))
+    done
+    # Vor JEDEM Signal wird geprueft, auch vor kill -9: hk_dienste_finden
+    # liefert nur noch die eigenen, die wirklich noch laufen.
+    for hk_p in $(hk_dienste_finden); do
+        kill -9 "$hk_p" 2>/dev/null
+    done
+    sleep 1
+    # Die Wirkung nachsehen, nicht den Rueckgabewert von kill.
+    HK_UEBRIG=$(hk_dienste_finden | tr '\n' ' ')
+fi
+
+# Die PID-Dateien beider Orte fallen in jedem Fall - auch wenn sie auf
+# einen toten Prozess zeigen.
+rm -f "$PIDDATEI" "$PIDDATEI_ALT" 2>/dev/null
+
+if [ -n "$HK_UEBRIG" ]; then
+    echo "<WARNING> Ein Dienst laesst sich nicht beenden (PID $HK_UEBRIG)."
+    echo "<WARNING> Er spricht weiter mit dem Beamer und mit MQTT."
+elif [ "$beendet" != 0 ]; then
+    echo "<OK> $beendet Dienst(e) beendet."
 else
     echo "<INFO> Kein laufender Dienst gefunden."
 fi
