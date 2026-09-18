@@ -55,6 +55,12 @@ PLOG="$LBHOMEDIR/log/plugins/$PNAME"
 PCONFIG="$LBHOMEDIR/config/plugins/$PNAME"
 PID="$PDATA/hk_service.pid"
 SOLL="$PDATA/soll_laufen"
+# Die Marke "Aktualisierung laeuft": von preupgrade.sh als Erstes angelegt,
+# von postupgrade.sh als Letztes entfernt. Sie liegt NEBEN dem Datenordner,
+# weil purge_installation den Ordner selbst bedingungslos loescht
+# (plugininstall.pl :886 -> :1629 ff.) - eine Marke darin waere von genau dem
+# Schritt vernichtet, den sie ueberdauern soll.
+MARKE="$LBHOMEDIR/data/plugins/$PNAME.upgrade_laeuft"
 LOGDATEI="$PLOG/heimkino.log"
 # Eigene Datei fuer alles, was NEBEN dem Protokoll anfaellt: Meldungen des
 # Starts und alles, was hk_service.py nach stderr schreibt, bevor sein
@@ -105,9 +111,50 @@ laeuft() {
     return 0
 }
 
+# Laeuft gerade eine Aktualisierung dieses Plugins?
+#
+# Der Installer legt die Cron-Datei rund eine Minute VOR postinstall.sh neu an
+# (am Geraet 08.09.2026 gemessen: 03:31:32 gegen 03:32:24, Regeln/06). In
+# dieser Luecke ist data/plugins/<ordner>/ geloescht und die Konfiguration die
+# mitgelieferte Vorgabe. Der minuetliche Waechter kommt dort nicht zum Zuge -
+# sein Merker soll_laufen liegt im geloeschten Ordner -, wohl aber der
+# Systemstart ueber daemon/daemon und jeder Knopf der Oberflaeche. In WSL
+# gemessen (18.09.2026, Pruefung-Heimkino-1.3.12): je 1 Prozess, und er lief
+# mit dem Vorgabe-Themenpraefix "heimkino" statt mit dem des Anwenders.
+#
+# Nur eine Marke, die hoechstens eine Stunde alt ist, zaehlt. Aelter, aus der
+# Zukunft oder unlesbar: sie gilt nicht - eine abgebrochene Installation darf
+# den Dienst nicht fuer immer stilllegen.
+#
+# HK_START_TROTZ_MARKE=1 setzt ausschliesslich postupgrade.sh. Dort ist die
+# Marke die eigene, und der Start ist der letzte Schritt der Aktualisierung.
+marke_gilt() {
+    [ "${HK_START_TROTZ_MARKE:-0}" = "1" ] && return 1
+    [ -f "$MARKE" ] || return 1
+    SEIT=$(cat "$MARKE" 2>/dev/null)
+    case "$SEIT" in ''|*[!0-9]*) return 1 ;; esac
+    # Die Uhr wird gemessen, nicht angenommen: liefert "date" nichts - unter
+    # Last kann ein fork scheitern -, dann rechnete die Schale mit einer leeren
+    # Zeichenkette, das Alter wuerde negativ, die Bedingung fiele durch, und
+    # der Dienst startete mitten in der Aktualisierung. Ein Schutz faellt
+    # geschlossen aus (CLAUDE.md 4): ohne lesbare Uhr gilt die Marke.
+    JETZT=$(date +%s 2>/dev/null)
+    case "$JETZT" in ''|*[!0-9]*) JETZT="" ;; esac
+    [ -z "$JETZT" ] && return 0
+    ALTER=$(( JETZT - SEIT ))
+    [ "$ALTER" -ge 0 ] && [ "$ALTER" -lt 3600 ]
+}
+
 starten() {
     if laeuft; then
         echo "laeuft bereits (PID $(cat "$PID"))"
+        return 0
+    fi
+    # VOR dem Sollmerker und vor jeder anderen Datei im Datenordner: was in
+    # der Luecke gestartet wuerde, liest die Vorgabe-Konfiguration und
+    # schreibt in einen Ordner, den der Installer gerade abgeraeumt hat.
+    if marke_gilt; then
+        echo "Eine Aktualisierung dieses Plugins laeuft - der Dienst wird danach gestartet."
         return 0
     fi
     if ! eingeschaltet; then

@@ -45,6 +45,20 @@ function hk_test_zeilen($cfg)
         $pid ? hk_tf('PRUEF.DIENST_JA', array('%1' => (string) $pid))
              : hk_t('PRUEF.DIENST_NEIN'));
 
+    // --- Laeuft gerade eine Aktualisierung? Die Marke aus preupgrade.sh
+    // sperrt jeden Startweg, solange sie gilt; postupgrade.sh entfernt sie
+    // als Letztes. Zu jeder Regel gehoert das Werkzeug, das sie findet
+    // (CLAUDE.md 6) - ohne diese Zeile waere ein abgewiesener Start nur im
+    // Protokoll zu sehen. Eine liegengebliebene, nicht mehr gueltige Marke
+    // ist ein Befund: sie stammt aus einer abgebrochenen Installation.
+    list($hk_mz, $hk_malter) = hk_marke_lage();
+    $zeilen[] = array($hk_mz === 0 ? 1 : ($hk_mz === 1 ? 2 : 0),
+        hk_t('PRUEF.MARKE'),
+        $hk_mz === 0 ? hk_t('PRUEF.MARKE_KEINE')
+        : ($hk_mz === 1
+           ? hk_tf('PRUEF.MARKE_GILT', array('%1' => (string) (int) $hk_malter))
+           : hk_t('PRUEF.MARKE_ALT')));
+
     // --- Arbeitet er noch? Ein Prozess kann dastehen und nichts tun.
     // Ueber einen Dienst, der gar nicht laeuft, wird kein Herzschlag
     // beurteilt - sonst steht dort zweimal derselbe Befund.

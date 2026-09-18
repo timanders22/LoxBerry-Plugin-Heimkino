@@ -13,6 +13,84 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.12
+
+### Während einer Aktualisierung startet der Dienst nicht mehr
+
+Zwischen dem Augenblick, in dem der LoxBerry-Installer die neue Cron-Datei
+anlegt, und `postinstall.sh` liegt rund eine Minute — am Gerät gemessen
+(08.09.2026): Cron-Datei 03:31:32, `postinstall` 03:32:24. In dieser Lücke hat
+`purge_installation` `config/plugins/heimkino/` und `data/plugins/heimkino/`
+schon gelöscht, und die Konfiguration ist wieder die mitgelieferte Vorgabe.
+
+In WSL nachgestellt (18.09.2026, Prüfstand `Pruefung-Heimkino-1.3.12`, echte
+Hakenskripte, Dienst als Attrappe, Prozesse argumentweise über `/proc`
+gezählt):
+
+| Startweg in der Lücke | 1.3.11 | 1.3.12 |
+|---|---|---|
+| minütlicher Wächter (`cron/cron.01min`) | 0 Prozesse | 0 Prozesse |
+| Systemstart (`daemon/daemon`) | **1 Prozess** | 0 Prozesse |
+| Knopf der Oberfläche (`dienst.sh start`) | **1 Prozess** | 0 Prozesse |
+
+Der Wächter kam schon vorher nicht zum Zuge — sein Merker `soll_laufen` liegt
+in dem Ordner, den der Installer gerade gelöscht hat. Die beiden anderen Wege
+starteten sehr wohl, und der Dienst lief dann mit dem Vorgabe-Themenpräfix
+`heimkino` statt mit dem des Anwenders: das Präfix liest er nur beim Start, und
+`postupgrade.sh` legt anschließend zwar die richtige Konfiguration zurück,
+nicht aber die schon aufgebaute MQTT-Sitzung.
+
+Deshalb legt `preupgrade.sh` jetzt als **Erstes**
+`data/plugins/heimkino.upgrade_laeuft` mit der Unixzeit an — **neben** dem
+Datenordner, weil `purge_installation` den Ordner selbst bedingungslos löscht.
+`bin/dienst.sh` startet nichts, solange diese Marke jünger als 3600 s ist;
+älter, aus der Zukunft oder unlesbar gilt sie nicht, damit eine abgebrochene
+Installation den Dienst nicht für immer stilllegt. **Ohne lesbare Uhr fällt die
+Prüfung geschlossen aus:** liefert `date` nichts, gilt die Marke (gemessen,
+Fall E4: vorher 1 Prozess, jetzt 0). `uninstall` räumt sie weg.
+
+**Die Oberfläche wird bei liegender Marke nicht gesperrt.** Gemessen wurde, was
+ein Seitenaufruf in der Lücke anrichtet: er würfelt ein Aktionstoken und
+schreibt es in die Vorgabedatei — aber `postupgrade.sh` holt Einstellungen und
+Xbox-Anmeldung ohne Inhaltsprüfung aus der Sicherung zurück. Aktionstoken,
+Themenpräfix und Azure-Erneuerungstoken standen hinterher unverändert da. Eine
+Sperre ohne gemessenen Schaden nähme dem Anwender nur die Seite.
+
+Im Reiter *Test* steht dafür eine neue Zeile: „Läuft gerade eine Aktualisierung
+dieses Plugins?" Sie nennt das Alter der Marke und meldet eine
+liegengebliebene, nicht mehr gültige Marke als Befund.
+
+### Nach einer Aktualisierung laufen nicht mehr zwei Dienste
+
+`preupgrade.sh` hält den Dienst nicht an, und `purge_installation` löscht
+`data/plugins/heimkino/` samt PID-Datei. Ein Dienst, der die Aktualisierung
+überlebt hat, war danach **unsichtbar**: `dienst.sh status` meldete „gestoppt",
+weil es über die PID-Datei sucht, und der nächste Wächterlauf startete einen
+zweiten. Gemessen (Fall D): 2 Prozesse. Der Beamer nimmt nur eine Verbindung
+zur Zeit an — zwei Dienste im Wechsel sperren die Fernbedienung der App aus.
+
+`postupgrade.sh` sucht jetzt vor dem Ende **argumentweise über `/proc`** nach
+eigenen Diensten: ein Treffer hat genau zwei Argumente — einen
+python-Interpreter und zeichengenau den eigenen Dienstpfad — und gehört dem
+Dienstbenutzer. Kein `pgrep -f`: das träfe auch einen Editor mit geöffneter
+`hk_service.py` oder den Einmallauf `hk_service.py --themen` aus dem Reiter
+Test. Die gefundenen Dienste bekommen SIGTERM (damit sie noch
+`service/online = 0` melden), erst danach SIGKILL, und die Wirkung wird
+nachgesehen. Anschließend startet `postupgrade.sh` den Dienst selbst — **bevor**
+es die Marke fallen lässt, damit kein Wächterlauf in die Lücke zwischen „Marke
+weg" und „Dienst da" gerät. Die Marke entfernt ein `trap … EXIT`, damit sie
+auch nach einem Abbruch nicht liegen bleibt.
+
+Gemessen mit einem Wächter im Dauerlauf (alle 0,02 s, während die
+Hakenskripte arbeiten): 1.3.11 endete mit **2** Diensten, 1.3.12 mit **einem**.
+
+### Was dabei ausdrücklich nicht geändert wurde
+
+`daemon/daemon` prüft weder `enabled=0` noch einen laufenden Dienst — es ruft
+`bin/dienst.sh start`, und dort stehen beide Prüfungen. Gemessen (Fälle A2 bis
+A4): bei laufendem Dienst bleibt es bei 1 Prozess, bei `enabled=0` bei 0. Eine
+zweite Prüfung an dieser Stelle wäre eine zweite Wahrheit.
+
 ## Neu in 1.3.11
 
 - **Retain je Thema statt pauschal.** Bis 1.3.10 ging jedes Thema retained

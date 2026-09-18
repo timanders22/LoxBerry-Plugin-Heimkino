@@ -9,6 +9,38 @@ BASE="${5:-$LBHOMEDIR}"
 PCONFIG="$LBPCONFIG/$PDIR"
 [ -d "$PCONFIG" ] || PCONFIG="$BASE/config/plugins/$PDIR"
 
+# ---------- Die Marke "Aktualisierung laeuft" ZUERST ----------
+#
+# Zwischen dem Augenblick, in dem der Installer die neue Cron-Datei anlegt,
+# und postinstall.sh liegt rund eine Minute (am Geraet 08.09.2026 gemessen:
+# 03:31:32 gegen 03:32:24, Regeln/06). In dieser Luecke ist
+# data/plugins/<ordner>/ geloescht und config/plugins/<ordner>/heimkino.cfg
+# wieder die mitgelieferte Vorgabe.
+#
+# Der minuetliche Waechter startet in der Luecke NICHTS - sein Merker
+# soll_laufen liegt im geloeschten Ordner (in WSL gemessen, 18.09.2026:
+# 0 Prozesse). Zwei andere Wege starten sehr wohl: ein Systemstart mitten in
+# der Aktualisierung (daemon/daemon) und jeder Knopf der Oberflaeche, je
+# 1 Prozess - und der Dienst lief dann mit dem Vorgabe-Themenpraefix
+# "heimkino" statt mit dem des Anwenders, denn das Praefix liest er nur beim
+# Start. Deshalb hier als ERSTES eine Marke mit der Unixzeit: bin/dienst.sh
+# startet nicht, solange sie juenger als 3600 s ist.
+#
+# Sie liegt NEBEN dem Datenordner. Der Punkt im Namen ist der ganze
+# Unterschied: "rm -rf .../<x>/" trifft den Nachbarn "<x>.upgrade_laeuft"
+# nicht.
+mkdir -p "$BASE/data/plugins" 2>/dev/null
+date +%s > "$BASE/data/plugins/$PDIR.upgrade_laeuft" 2>/dev/null
+# Die Wirkung pruefen, nicht den Rueckgabewert: eine leere Datei waere keine
+# Marke - dienst.sh laesst eine unlesbare nicht gelten.
+if [ -s "$BASE/data/plugins/$PDIR.upgrade_laeuft" ]; then
+    echo "<OK> Dienststart bis zum Ende der Aktualisierung gesperrt."
+else
+    echo "<WARNING> Die Marke $BASE/data/plugins/$PDIR.upgrade_laeuft liess sich"
+    echo "<WARNING> nicht anlegen. Ein Systemstart waehrend der Aktualisierung"
+    echo "<WARNING> koennte den Dienst mit der Vorgabe-Konfiguration anwerfen."
+fi
+
 # Die Sicherung liegt BEWUSST NICHT unter /tmp.
 #
 # /tmp ist auf dem LoxBerry eine Ramdisk. Zwischen preupgrade und postupgrade

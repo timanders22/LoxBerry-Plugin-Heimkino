@@ -480,6 +480,40 @@ function hk_dienst($was)
     return hk_dienst_pid();
 }
 
+/**
+ * Liegt eine Marke "Aktualisierung laeuft"?
+ *
+ * preupgrade.sh legt data/plugins/<ordner>.upgrade_laeuft mit der Unixzeit
+ * an, postupgrade.sh entfernt sie als Letztes. Solange sie gilt, startet
+ * bin/dienst.sh nichts (marke_gilt dort).
+ *
+ * Gelesen wird hier nur. Die Oberflaeche SPERRT bei liegender Marke nicht:
+ * ob gesperrt wird, ist nach Regeln/06 eine Messung, keine Regel. Gemessen
+ * (WSL, 18.09.2026, Pruefung-Heimkino-1.3.12, Fall C): ein Seitenaufruf in
+ * der Luecke wuerfelt zwar ein Aktionstoken und schreibt es in die
+ * Vorgabedatei, aber postupgrade.sh holt Einstellungen und Xbox-Anmeldung
+ * ohne Inhaltspruefung aus der Sicherung zurueck - Aktionstoken,
+ * Themenpraefix und Erneuerungstoken standen hinterher unveraendert da.
+ * Eine Sperre ohne gemessenen Schaden nimmt dem Anwender nur die Seite.
+ *
+ * Rueckgabe: array(zustand, alter in Sekunden oder null).
+ * zustand: 0 = keine Marke, 1 = sie liegt und gilt, 2 = sie liegt, gilt aber
+ * nicht (unlesbar, aus der Zukunft oder aelter als eine Stunde).
+ */
+function hk_marke_lage()
+{
+    $datei = hk_paths()['daten'] . '.upgrade_laeuft';
+    if (!is_file($datei)) {
+        return array(0, null);
+    }
+    $roh = trim((string) @file_get_contents($datei));
+    if (!preg_match('/^[0-9]+$/', $roh)) {
+        return array(2, null);
+    }
+    $alter = time() - (int) $roh;
+    return array(($alter >= 0 && $alter < 3600) ? 1 : 2, $alter);
+}
+
 function hk_zustand()
 {
     $datei = hk_paths()['zustand'];

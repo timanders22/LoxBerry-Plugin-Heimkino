@@ -120,5 +120,18 @@ geheim_weg "$PDATA.upgrade_sicherung/heimkino.cfg"
 geheim_weg "$PDATA.upgrade_sicherung/xbox_auth.json"
 rm -rf "$PDATA.upgrade_sicherung" 2>/dev/null
 
+# Dasselbe gilt fuer die Marke "Aktualisierung laeuft", die preupgrade.sh
+# neben den Datenordner legt. Bliebe sie liegen, wiese eine anschliessende
+# Neuinstallation den Dienststart bis zu einer Stunde lang ab - und im
+# Protokoll stuende nur "Eine Aktualisierung dieses Plugins laeuft".
+if [ -f "$PDATA.upgrade_laeuft" ]; then
+    rm -f "$PDATA.upgrade_laeuft" 2>/dev/null
+    if [ -f "$PDATA.upgrade_laeuft" ]; then
+        echo "<WARNING> Die Marke $PDATA.upgrade_laeuft liess sich nicht entfernen."
+    else
+        echo "<OK> Marke der Aktualisierung entfernt."
+    fi
+fi
+
 echo "<OK> Zweitschriften mit Keycode, Aktionstoken und Microsoft-Anmeldung entfernt."
 exit 0
