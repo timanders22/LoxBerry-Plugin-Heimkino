@@ -13,6 +13,96 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.14
+
+Aufräumen beim Broker, ehrlichere Zustände, und kein Griff mehr in die
+falsche Anlage. Alles ist in WSL nachgestellt und gemessen, mit echtem
+paho-mqtt 1.6.1 gegen einen eigenen Broker, der das Retain-Bit jedes
+empfangenen Pakets aufschreibt (`Pruefung-Heimkino-1.3.14`, 65 Fälle, vorher
+50 rot, nachher 0; jede Korrektur einzeln zurückgebaut macht ihren Fall wieder
+rot). **Am Gerät ist nichts davon nachgemessen**, und paho 2.x (am Gerät
+2.1.0) ist nicht gelaufen.
+
+### Die Deinstallation räumt den Broker ab
+
+Bisher blieben nach dem Entfernen des Plugins `service/online` und alle
+behaltenen Zustände für immer im Broker stehen. Jetzt ruft `uninstall`
+nach dem Anhalten `hk_service.py --mqtt-leeren` auf: es löscht jedes
+behaltene Thema dieser Linie unter dem eingestellten Präfix und **liest
+nach**. Fremde Themen unter demselben Präfix bleiben stehen. Weist der
+Broker die Anmeldung ab (CONNACK ungleich 0) oder verweigert er das Lesen
+(SUBACK 0x80), steht das als `<WARNING>` da – nie „nichts behalten". Der
+Aufruf läuft unter `timeout -k 5 60`; ein hängender Aufruf hält die
+Deinstallation nach 65 s nicht länger auf und wird gemeldet.
+
+Beim **Wechsel des Themenpräfixes** räumt der Dienst das alte Präfix
+genauso ab. Bisher blieb dort auch `service/online=1` stehen: ein sauberes
+Trennen löst den Letzten Willen nicht aus.
+
+Der Letzte Wille selbst war schon richtig gebaut: `online=1` beim
+Verbinden, auch nach einer Neuverbindung, und `online=0` als Letzter Wille
+auf demselben Thema, beide retained (gemessen, Fälle R1, R2, W0–W2).
+
+### Was der Dienst über sich selbst sagt, geht nicht mehr retained hinaus
+
+`last_error`, `beamer/erreichbar`, `beamer/grund`, `xbox/angemeldet`,
+`beamer/letzte_aktion`, `xbox/letzte_aktion` und `szene/*` sind jetzt
+flüchtig. Stirbt der Dienst, blieben sonst ein alter Fehler, ein
+„erreichbar" oder `szene/laeuft=1` stehen. Die Altwerte aus früheren
+Fassungen räumt der Dienst bei **jeder** Verbindung mit einer leeren
+retain-Nutzlast ab, unmittelbar vor dem gültigen Wert.
+
+**Grenze:** dieses Abräumen hat keinen Merker und liest nicht nach. Es
+geht über paho direkt an den Broker, nicht über den UDP-Eingang des
+Gateways, und wiederholt sich bei jeder Verbindung.
+
+Konnte der Dienst ein Gerät nicht befragen, geht der Ersatzwert
+(`beamer/status=unbekannt`, `an=0`, `app=-`, `lautstaerke`/`stumm=-1`,
+`xbox/status=unbekannt`, `an=0`, `name=-`) **ohne** Retain hinaus. Loxone
+sieht ihn wie bisher, der Broker behält aber den zuletzt gemessenen
+Gerätestand. „aus" nach einer abgewiesenen Verbindung bleibt retained, denn
+das sagt der Beamer selbst. Die vier Eingänge der Projektdatei
+(`beamer/an`, `beamer/erreichbar`, `xbox/an`, `service/online`) bekommen
+ihre Werte unverändert in jedem Takt.
+
+### Kein Griff mehr in die falsche Anlage
+
+* Die Wurzel wird überall nur noch an `config/plugins`, `data/plugins`
+  **und** `config/system/general.json` erkannt. Der feste Systempfad und
+  der Rückfall „drei Ebenen über dem Ablageort" sind weg. Ohne Wurzel wird
+  gewarnt statt vollzogen: in `dienst.sh`, `uninstall`, `hk_cmd.py`,
+  `hk_service.py` und der Oberfläche. Nichts entsteht mehr im
+  Arbeitsverzeichnis oder ab `/`.
+* Eine Kopie oder ein ausgepacktes Archiv unter einer echten Wurzel
+  arbeitet nicht mehr auf der Anlage. Das gilt für `start`, `stop`,
+  `restart`, den Wächter, `hk_cmd.py`, `hk_service.py` und die Pfade der
+  Oberfläche. Die Anlage gilt nur, wenn die Datei dort installiert liegt
+  oder `LBHOMEDIR` **und** `LBPPLUGINDIR` gesetzt sind.
+* Der Dienst wird argumentweise erkannt: genau zwei Argumente, ein
+  Python-Interpreter und zeichengenau das eigene `hk_service.py`, derselbe
+  Benutzer. Dasselbe gilt in `dienst.sh`, in `hk_common.py` und in der
+  Oberfläche. `stop` hält jetzt auch einen Dienst ohne PID-Datei an. Ein
+  unbekannter Schalter startet keinen Dienst mehr.
+
+### Aufträge ohne laufenden Dienst
+
+`kino-an`/`kino-aus` werden ohne laufenden Dienst abgewiesen, statt einen
+Auftrag abzulegen, der beim nächsten Start – womöglich Stunden später – die
+Szene abspielt. Ein Auftrag, der beim Dienststart älter als 60 s ist, wird
+verworfen und protokolliert – das gilt auch für den Nachfass-Auftrag eines
+Einzelbefehls, der ohne Dienst liegen blieb.
+
+### Aktualisierung
+
+* Die Marke „Aktualisierung läuft" gilt mit 300 s Vorlauf. Ohne lesbare
+  Uhr sperrt sie auch, wenn sie unlesbar ist.
+* `postupgrade.sh` prüft das Zurückspielen an der Wirkung (byteweise). Die
+  Sicherung wird nur gelöscht, wenn es gelang; sonst bleibt sie liegen,
+  und das steht als `<WARNING>` da. „Die Einstellungen sind vorhanden"
+  entscheidet der Inhalt, nicht die Größe.
+* `postinstall.sh` zeigt die Erstanleitung („IP, MAC und Keycode
+  eintragen") nur noch, wenn nichts eingerichtet ist.
+
 ## Neu in 1.3.13
 
 Fünf Stellen, an denen bei einer Aktualisierung, einer Deinstallation oder
@@ -249,7 +339,7 @@ meldete brav an MQTT — und im Protokollverzeichnis lag **keine
 Die Ursache liegt in zwei Bauteilen, die zusammenwirken:
 
 - `log/plugins` liegt auf einer **Ramdisk** (gemessen: `/dev/zram0 on
-  /opt/loxberry/log/plugins`). Wird sie geleert — durch ein Aufräumskript,
+  <LoxBerry-Wurzel>/log/plugins`). Wird sie geleert — durch ein Aufräumskript,
   eine Rotation oder einen Neustart des Dienstes darunter —, ist die Datei
   fort.
 - Der bis 1.3.4 benutzte `logging.FileHandler` öffnet die Datei **einmal beim

@@ -32,12 +32,19 @@ header('Cache-Control: no-store');
  * Belegt am 15.08.2026: beide Loxone-Ausgaenge (Beamer aus, Xbox wecken)
  * liefen seit jeher in genau diesen 500er.
  */
+/* Seit 1.3.14 genau EIN Kandidat, je nach Lage (Bauart ZendureSolarFlow
+ * 0.9.26): installiert (<...>/html/plugins/<ordner>) der Nachbarbaum,
+ * sonst das ausgepackte Archiv. Bis 1.3.13 wurden drei der Reihe nach
+ * probiert; aus einem Archiv dicht unter "/" war der erste
+ * //htmlauth/plugins/html/hk_lib.php ab der Laufwerkswurzel, und was dort
+ * laege, liefe als Bibliothek (Muster 2 der Nachlese; gelesen). */
 $hk_lib_gefunden = false;
-foreach (array(
-    dirname(dirname(dirname(__DIR__))) . '/htmlauth/plugins/' . basename(__DIR__) . '/hk_lib.php',
-    dirname(dirname(__DIR__)) . '/htmlauth/plugins/' . basename(__DIR__) . '/hk_lib.php',
-    dirname(__DIR__) . '/htmlauth/hk_lib.php',
-) as $hk_kandidat) {
+if (basename(dirname(__DIR__)) === 'plugins') {
+    $hk_kandidaten = array(dirname(dirname(dirname(__DIR__))) . '/htmlauth/plugins/' . basename(__DIR__) . '/hk_lib.php');
+} else {
+    $hk_kandidaten = array(dirname(__DIR__) . '/htmlauth/hk_lib.php');
+}
+foreach ($hk_kandidaten as $hk_kandidat) {
     if (is_file($hk_kandidat)) {
         require_once $hk_kandidat;
         $hk_lib_gefunden = true;

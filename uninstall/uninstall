@@ -7,12 +7,17 @@
 # je nachdem, wohin LoxBerry diese Datei bei der Installation legt, sind es
 # drei oder vier Ebenen. Deshalb wird aufwaerts gesucht, bis ein
 # Verzeichnis gefunden ist, das nachweislich eine LoxBerry-Wurzel ist:
-# es traegt config/plugins UND data/plugins.
+# es traegt config/plugins, data/plugins UND config/system/general.json.
+# Die dritte Bedingung seit 1.3.14 (Regeln/06, Raumklima-Vorfall): ohne sie
+# hielt die Suche einen fremden Baum fuer die Wurzel und loeschte dort die
+# Marke und die Zweitschrift (in WSL gemessen, Pruefung-Heimkino-1.3.14,
+# Fall U6; Muster 1 der Nachlese).
 lb_wurzel_suchen() {
     v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd)
     i=0
     while [ -n "$v" ] && [ "$v" != "/" ] && [ $i -lt 8 ]; do
-        if [ -d "$v/config/plugins" ] && [ -d "$v/data/plugins" ]; then
+        if [ -d "$v/config/plugins" ] && [ -d "$v/data/plugins" ] \
+           && [ -f "$v/config/system/general.json" ]; then
             echo "$v"; return 0
         fi
         v=$(dirname "$v"); i=$((i + 1))
@@ -24,8 +29,19 @@ lb_wurzel_suchen() {
 # Systempakete bleiben stehen: python3-cryptography und python3-requests
 # werden von anderen Dingen mitbenutzt, ein blindes Entfernen waere
 # schaedlich.
-BASE="${5:-$LBHOMEDIR}"
-[ -n "$BASE" ] && [ -d "$BASE" ] || BASE=$(lb_wurzel_suchen)
+BASE="${5:-${LBHOMEDIR:-}}"
+if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ] || [ ! -d "$BASE/data/plugins" ]; then
+    BASE=$(lb_wurzel_suchen) || BASE=""
+fi
+# Ohne brauchbare Wurzel wird gewarnt statt vollzogen: jeder Pfad unten
+# begaenne sonst an der Laufwerkswurzel (Regeln/06).
+if [ -z "$BASE" ]; then
+    echo "<WARNING> Keine LoxBerry-Wurzel gefunden (weder Argument 5 noch \$LBHOMEDIR,"
+    echo "<WARNING> und oberhalb dieses Skripts traegt kein Verzeichnis config/plugins,"
+    echo "<WARNING> data/plugins und config/system/general.json). Es wurde nichts"
+    echo "<WARNING> beendet und nichts geloescht."
+    exit 0
+fi
 PDIR="${3:-heimkino}"
 PDATA="$BASE/data/plugins/$PDIR"
 PIDDATEI="$PDATA/hk_service.pid"
@@ -133,6 +149,51 @@ elif [ "$beendet" != 0 ]; then
     echo "<OK> $beendet Dienst(e) beendet."
 else
     echo "<INFO> Kein laufender Dienst gefunden."
+fi
+
+# ---------------------------------------------------------------------------
+# BEHALTENE MQTT-THEMEN ABRAEUMEN (seit 1.3.14)
+#
+# Entschieden am 18.09.2026 (Regeln/07, Abschnitt 3): der Letzte Wille
+# service/online darf retained sein - aber nur, wenn die Deinstallation das
+# Thema abraeumt. Bis 1.3.13 stand hier kein MQTT-Aufruf; nach dem Entfernen
+# blieben service/online und alle behaltenen Zustaende fuer immer im Broker
+# (in WSL gemessen, Pruefung-Heimkino-1.3.14, Faelle U1/U2).
+#
+# NACH dem Anhalten - sonst schriebe der Dienst gleich wieder hinein; sein
+# letztes "online=0" wird hier mit abgeraeumt. Der Dienst loescht direkt am
+# Broker (paho) und LIEST NACH; die Meldung sagt, was wirklich geschah, und
+# ein Broker, der nicht zu fragen ist (CONNACK ungleich 0, SUBACK 0x80),
+# heisst nie "nichts belegt". bin/plugins/<ordner> und die Konfiguration mit
+# dem Praefix sind hier noch da: der Installer loescht sie erst nach diesem
+# Skript (Regeln/06).
+#
+# 'timeout -k 5 60': ohne -k schickt timeout nach 60 s nur SIGTERM, und ein
+# Programm, das es nicht annimmt, hielte die Deinstallation an (Befund
+# Sprachsteuerung 0.11.10, ueber acht Stunden; Vorbild Weissware 0.9.34).
+# Gemessen mit einem SIGTERM-festen Platzhalter (Fall U5): nach 65 s ist
+# Schluss, und der Abbruch steht als WARNING da. Als loxberry, nicht als
+# root; stdin geschlossen, damit nichts auf eine Eingabe wartet.
+HK_Q=$(printf '%s' "$HK_SKRIPT" | sed "s/'/'\\\\''/g")
+HK_B=$(printf '%s' "$BASE" | sed "s/'/'\\\\''/g")
+HK_O=$(printf '%s' "$PDIR" | sed "s/'/'\\\\''/g")
+HK_MQ_RC=0
+if [ -f "$HK_SKRIPT" ] && command -v python3 >/dev/null 2>&1; then
+    if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
+        su -s /bin/sh loxberry -c "env PYTHONDONTWRITEBYTECODE=1 LBHOMEDIR='$HK_B' LBPPLUGINDIR='$HK_O' timeout -k 5 60 python3 '$HK_Q' --mqtt-leeren" \
+            < /dev/null 2>&1 || HK_MQ_RC=$?
+    else
+        env PYTHONDONTWRITEBYTECODE=1 LBHOMEDIR="$BASE" LBPPLUGINDIR="$PDIR" \
+            timeout -k 5 60 python3 "$HK_SKRIPT" --mqtt-leeren < /dev/null 2>&1 || HK_MQ_RC=$?
+    fi
+    case "$HK_MQ_RC" in
+        0|1|2) ;;
+        124) echo "<WARNING> MQTT: das Leeren der behaltenen Themen wurde nach 60 s abgebrochen - unter dem Praefix kann noch etwas im Broker stehen. Von Hand: mosquitto_pub -r -n -t <praefix>/<thema>" ;;
+        137) echo "<WARNING> MQTT: das Leeren der behaltenen Themen reagierte nach 60 s nicht auf SIGTERM und wurde hart beendet (SIGKILL) - unter dem Praefix kann noch etwas im Broker stehen. Von Hand: mosquitto_pub -r -n -t <praefix>/<thema>" ;;
+        *)   echo "<WARNING> MQTT: das Leeren der behaltenen Themen endete unerwartet (Rueckgabe $HK_MQ_RC) - unter dem Praefix kann noch etwas im Broker stehen." ;;
+    esac
+else
+    echo "<INFO> MQTT: $HK_SKRIPT oder python3 fehlt - behaltene Themen wurden nicht geleert. Von Hand: mosquitto_pub -r -n -t <praefix>/<thema>"
 fi
 
 # ---------------------------------------------------------------------------

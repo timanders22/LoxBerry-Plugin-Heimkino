@@ -17,11 +17,15 @@
 /* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
  *
  * Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
- * config/plugins UND webfrontend enthaelt. Das trifft die uebliche
- * Installation genauso wie eine an einem anderen Ort - und es trifft auch
- * den Fall, dass das Plugin noch als entpacktes Archiv daliegt (dann findet
- * es nichts und gibt einen Leerstring zurueck, was der Aufrufer ohnehin
- * abfangen muss).
+ * config/plugins, data/plugins UND config/system/general.json enthaelt. Das
+ * trifft die uebliche Installation genauso wie eine an einem anderen Ort -
+ * und es trifft auch den Fall, dass das Plugin noch als entpacktes Archiv
+ * daliegt (dann findet es nichts und gibt einen Leerstring zurueck, was der
+ * Aufrufer ohnehin abfangen muss).
+ *
+ * general.json ist die entscheidende Bedingung seit 1.3.14 (Regeln/06,
+ * Raumklima-Vorfall): config/plugins und webfrontend hinterlaesst auch ein
+ * Pruefstand auf einem Arbeitsrechner.
  *
  * Der Name traegt kein Plugin-Kuerzel und ist deshalb abgesichert: zwei
  * Bibliotheken landen nie im selben Prozess, aber die Pruefung kostet nichts.
@@ -31,7 +35,8 @@ if (!function_exists('lb_wurzel_ermitteln')) {
     {
         $d = __DIR__;
         for ($i = 0; $i < 8; $i++) {
-            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+            if (is_dir($d . '/config/plugins') && is_dir($d . '/data/plugins')
+                && is_file($d . '/config/system/general.json')) {
                 return $d;
             }
             $eltern = dirname($d);
@@ -48,46 +53,77 @@ function hk_paths()
     if ($p !== null) {
         return $p;
     }
-    $home = getenv('LBHOMEDIR');
-    if (!$home || !is_dir($home)) {
-        foreach (array(lb_wurzel_ermitteln(), '/home/loxberry/loxberry') as $k) {
-            if (is_dir($k)) { $home = $k; break; }
+    /* Wurzel: erst die Umgebung (config/plugins UND data/plugins darunter),
+     * dann die Suche - und DANACH NICHTS MEHR. Bis 1.3.13 stand hier als
+     * weitere Stufe ein fest verdrahteter Systempfad (das Heimatverzeichnis
+     * des Benutzers loxberry); ohne Wurzel wurden die Pfade ab "/"
+     * zusammengesetzt (/config/plugins/heimkino/... - Muster 1 und 2 der
+     * Nachlese, in WSL gemessen, Pruefung-Heimkino-1.3.14, Fall O3). */
+    $ordner = 'heimkino';
+    $home = rtrim((string) getenv('LBHOMEDIR'), '/');
+    if ($home === '' || !is_dir($home . '/config/plugins') || !is_dir($home . '/data/plugins')) {
+        $home = lb_wurzel_ermitteln();
+    }
+    /* Archivmodus (seit 1.3.14). Die Anlage gilt nur, wenn diese Bibliothek
+     * dort installiert liegt (<Wurzel>/webfrontend/htmlauth/plugins/heimkino,
+     * physisch verglichen) oder der Aufrufer Wurzel UND Ordner ausdruecklich
+     * nennt ($LBHOMEDIR und $LBPPLUGINDIR - so arbeiten die Pruefwerkzeuge
+     * mit ihrer Attrappe). Bis 1.3.13 nahm ein Archiv oder eine Kopie unter
+     * einer echten Wurzel mit $LBHOMEDIR allein Konfiguration, Token und
+     * Dienst der Anlage (Fall O1; Muster 3, Bauart Spotpreis-Tibber 0.9.19). */
+    $archiv = '';
+    if ($home !== '') {
+        $soll = @realpath($home . '/webfrontend/htmlauth/plugins/' . $ordner);
+        $ist = @realpath(__DIR__);
+        $installiert = ($soll !== false && $ist !== false && $soll === $ist);
+        $lbp = basename(rtrim((string) getenv('LBPPLUGINDIR'), '/'));
+        $umgebung = (string) getenv('LBHOMEDIR');
+        $ausdruecklich = ($lbp !== '' && !in_array($lbp, array('.', '/', 'bin', 'html', 'plugins'), true)
+            && $umgebung !== '' && @realpath($umgebung) !== false
+            && @realpath($umgebung) === @realpath($home));
+        if (!$installiert && !$ausdruecklich) {
+            $archiv = $home;
+            $home = '';
         }
     }
-    if (!$home) { $home = lb_wurzel_ermitteln(); }
-    $ordner = 'heimkino';
-    $bin = $home . '/bin/plugins/' . $ordner;
+    /* Ohne Anlage liegt alles NEBEN dem Plugin (Unterordner ohne_loxberry
+     * des ausgepackten Archivs), nie an der Laufwerkswurzel. Die Knoepfe
+     * rufen dann bin/dienst.sh und bin/hk_cmd.py des Archivs; beide weisen
+     * ab (seit 1.3.14). */
+    $basis = ($home !== '') ? $home : dirname(dirname(__DIR__)) . '/ohne_loxberry';
+    $bin = ($home !== '') ? $home . '/bin/plugins/' . $ordner : '';
     // Im ausgepackten Archiv liegt bin/ neben webfrontend/ - dann greift der
     // Pfad oben nicht. Ohne diesen Zweig faende die Selbstpruefung die
     // gemeinsamen Datendateien im Pruefstand nie.
-    if (!is_dir($bin) && is_dir(dirname(dirname(__DIR__)) . '/bin')) {
+    if (($bin === '' || !is_dir($bin)) && is_dir(dirname(dirname(__DIR__)) . '/bin')) {
         $bin = dirname(dirname(__DIR__)) . '/bin';
     }
     $p = array(
         'home'     => $home,
+        'archiv'   => $archiv,
         'plugin'   => $ordner,
-        'config'   => $home . '/config/plugins/' . $ordner . '/heimkino.cfg',
-        'auth'     => $home . '/config/plugins/' . $ordner . '/xbox_auth.json',
+        'config'   => $basis . '/config/plugins/' . $ordner . '/heimkino.cfg',
+        'auth'     => $basis . '/config/plugins/' . $ordner . '/xbox_auth.json',
         // Der Autorisierungscode aus der Microsoft-Rueckleitung. Er wird hier
         // mit Rechten 0600 abgelegt und von hk_cmd.py gelesen und geloescht -
         // NICHT ueber die Kommandozeile uebergeben. Argumente stehen in
         // /proc/<pid>/cmdline und sind fuer jeden lokalen Benutzer lesbar;
         // zusammen mit dem Clientgeheimnis laesst sich aus dem Code ein
         // Erneuerungstoken loesen. Bis 1.2.11 ging er als Argument hinaus.
-        'code'     => $home . '/config/plugins/' . $ordner . '/xbox_code.tmp',
-        'zustand'  => $home . '/data/plugins/' . $ordner . '/zustand.json',
-        'daten'    => $home . '/data/plugins/' . $ordner,
+        'code'     => $basis . '/config/plugins/' . $ordner . '/xbox_code.tmp',
+        'zustand'  => $basis . '/data/plugins/' . $ordner . '/zustand.json',
+        'daten'    => $basis . '/data/plugins/' . $ordner,
         // Seit 1.2.12 unter data/, nicht mehr unter log/: log/plugins ist
         // eine Ramdisk, und der Dienst haelt auf dieser Datei eine echte
         // Dateisperre (flock).
-        'piddatei' => $home . '/data/plugins/' . $ordner . '/hk_service.pid',
-        'soll'     => $home . '/data/plugins/' . $ordner . '/soll_laufen',
-        'probe'    => $home . '/data/plugins/' . $ordner . '/endpunkt_probe.json',
-        'log'      => $home . '/log/plugins/' . $ordner . '/heimkino.log',
+        'piddatei' => $basis . '/data/plugins/' . $ordner . '/hk_service.pid',
+        'soll'     => $basis . '/data/plugins/' . $ordner . '/soll_laufen',
+        'probe'    => $basis . '/data/plugins/' . $ordner . '/endpunkt_probe.json',
+        'log'      => $basis . '/log/plugins/' . $ordner . '/heimkino.log',
         'bin'      => $bin,
         'vorgaben' => $bin . '/hk_vorgaben.json',
         'themen'   => $bin . '/hk_themen.json',
-        'general'  => $home . '/config/system/general.json',
+        'general'  => $basis . '/config/system/general.json',
     );
     return $p;
 }
@@ -120,12 +156,15 @@ function hk_t($schluessel)
 {
     static $texte = null;
     if ($texte === null) {
-        $ordner = hk_paths()['home'] . '/templates/plugins/'
-                . hk_paths()['plugin'] . '/lang';
+        // Ohne Anlage NICHT ab "/" suchen (seit 1.3.14; bis 1.3.13 wurde
+        // dann /templates/plugins/heimkino/lang gefragt - Muster 2).
+        $ordner = (hk_paths()['home'] !== '')
+                ? hk_paths()['home'] . '/templates/plugins/' . hk_paths()['plugin'] . '/lang'
+                : '';
         // Im ausgepackten Archiv liegen die Sprachdateien noch an ihrem
         // Platz im Paket. Ohne diesen Zweig zeigt der Pruefstand nur
         // Schluesselnamen und man haelt jede Beschriftung fuer kaputt.
-        if (!is_file($ordner . '/language_en.ini')
+        if (($ordner === '' || !is_file($ordner . '/language_en.ini'))
             && is_file(dirname(dirname(__DIR__)) . '/templates/lang/language_en.ini')) {
             $ordner = dirname(dirname(__DIR__)) . '/templates/lang';
         }
@@ -446,16 +485,34 @@ function hk_dienst_pid()
     // Zeichenkette. Beim Erproben trat der Fall tatsaechlich auf: die
     // Kommandozeile eines fremden Prozesses enthielt "hk_service.py", weil
     // dieser Pfad irgendwo als Text darin vorkam.
+    //
+    // Seit 1.3.14 argumentweise nach Regeln/06: GENAU zwei Argumente, das
+    // erste ein python-Interpreter, das zweite zeichengenau hk_service.py
+    // DIESER Installation (relativ gegen das Arbeitsverzeichnis des
+    // Prozesses). Bis 1.3.13 genuegte "eines der ersten drei Argumente heisst
+    // hk_service.py" - ein Koeder "python3 <anderer Ordner>/hk_service.py
+    // --halten" galt als Dienst (in WSL gemessen, Pruefung-Heimkino-1.3.14,
+    // Fall O4; Muster 4 der Nachlese).
+    if (!is_readable('/proc/' . $pid . '/cmdline')) {
+        return 0;
+    }
     $cmd = @file_get_contents('/proc/' . $pid . '/cmdline');
     if ($cmd === false) {
         return 0;
     }
-    $treffer = false;
-    $teile = array_slice(array_values(array_filter(explode("\0", $cmd), 'strlen')), 0, 3);
-    foreach ($teile as $teil) {
-        if (basename($teil) === 'hk_service.py') { $treffer = true; break; }
+    $teile = array_values(array_filter(explode("\0", $cmd), 'strlen'));
+    if (count($teile) !== 2 || !preg_match('/^python(3[0-9.]*)?$/', basename($teile[0]))) {
+        return 0;
     }
-    return $treffer ? $pid : 0;
+    $pfad = $teile[1];
+    if (substr($pfad, 0, 1) !== '/') {
+        $cwd = @readlink('/proc/' . $pid . '/cwd');
+        if ($cwd === false) { return 0; }
+        $pfad = $cwd . '/' . $pfad;
+    }
+    $soll = @realpath(hk_paths()['bin'] . '/hk_service.py');
+    $ist = @realpath($pfad);
+    return ($soll !== false && $ist !== false && $soll === $ist) ? $pid : 0;
 }
 
 /**
@@ -498,7 +555,7 @@ function hk_dienst($was)
  *
  * Rueckgabe: array(zustand, alter in Sekunden oder null).
  * zustand: 0 = keine Marke, 1 = sie liegt und gilt, 2 = sie liegt, gilt aber
- * nicht (unlesbar, aus der Zukunft oder aelter als eine Stunde).
+ * nicht (unlesbar, mehr als 300 s aus der Zukunft oder aelter als eine Stunde).
  */
 function hk_marke_lage()
 {
@@ -511,7 +568,11 @@ function hk_marke_lage()
         return array(2, null);
     }
     $alter = time() - (int) $roh;
-    return array(($alter >= 0 && $alter < 3600) ? 1 : 2, $alter);
+    // 300 s Vorlauf wie bin/dienst.sh marke_gilt (seit 1.3.14, Muster 8):
+    // eine Marke wenige Minuten "aus der Zukunft" zeugt von einer
+    // nachgestellten Uhr. Bis 1.3.13 hiess sie hier "gilt nicht", waehrend
+    // der Startweg sie sperren soll (Fall O5).
+    return array(($alter >= -300 && $alter < 3600) ? 1 : 2, $alter);
 }
 
 function hk_zustand()
@@ -1399,7 +1460,7 @@ function hk_version()
 
     // 2. Weg: die Plugindatenbank unmittelbar lesen. Greift auch dann, wenn
     // das SDK nicht eingebunden ist.
-    if ($v === '') {
+    if ($v === '' && hk_paths()['home'] !== '') {
         $db = hk_paths()['home'] . '/data/system/plugindatabase.json';
         if (is_readable($db)) {
             $j = json_decode((string) file_get_contents($db), true);

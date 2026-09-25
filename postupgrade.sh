@@ -76,19 +76,42 @@ sys.exit(1)' "$1" 2>/dev/null
 #                                           als nichts, es geht nichts
 #                                           verloren)
 #   Sicherung OHNE Inhalt, Ziel MIT      -> stehen lassen und sagen, warum
+#
+# Die Wirkung wird geprueft, nicht der Rueckgabewert allein (seit 1.3.14):
+# nach dem Kopieren muss das Ziel byteweise der Sicherung gleichen. Bis
+# 1.3.13 stand "uebernommen" auch hinter einem gescheiterten cp, und die
+# Sicherung wurde danach bedingungslos geloescht - Keycode, Aktionstoken und
+# Xbox-Anmeldung waren weg (in WSL gemessen, Pruefung-Heimkino-1.3.14, Fall
+# H1; Muster 9 der Nachlese). SZ_FEHLER haelt fest, ob die Sicherung
+# gebraucht wird; dann bleibt sie liegen.
+SZ_FEHLER=0
+sz_kopieren() {   # $1 Quelle, $2 Ziel
+    cp -a "$1" "$2" 2>/dev/null && cmp -s "$1" "$2"
+}
 sicher_zurueck() {   # $1 Dateiname, $2 Art (cfg|json), $3 Klartext fuer die Meldung
     sz_quelle="$SICHER/$1"
     sz_ziel="$PCONFIG/$1"
     [ -f "$sz_quelle" ] || return 1
     if hk_inhalt "$sz_quelle" "$2"; then
-        cp -a "$sz_quelle" "$sz_ziel"
-        echo "<OK> $3 uebernommen."
+        if sz_kopieren "$sz_quelle" "$sz_ziel"; then
+            echo "<OK> $3 uebernommen."
+        else
+            SZ_FEHLER=1
+            echo "<WARNING> $3 liessen sich NICHT zurueckspielen. Die Sicherung"
+            echo "<WARNING> bleibt unter $SICHER liegen und kann von Hand"
+            echo "<WARNING> nach $PCONFIG kopiert werden."
+        fi
         return 0
     fi
     if ! hk_inhalt "$sz_ziel" "$2"; then
-        cp -a "$sz_quelle" "$sz_ziel"
-        echo "<WARNING> Die gesicherte $1 ist unvollstaendig. Sie wurde trotzdem"
-        echo "<WARNING> uebernommen - eine andere Quelle gibt es nicht."
+        if sz_kopieren "$sz_quelle" "$sz_ziel"; then
+            echo "<WARNING> Die gesicherte $1 ist unvollstaendig. Sie wurde trotzdem"
+            echo "<WARNING> uebernommen - eine andere Quelle gibt es nicht."
+        else
+            SZ_FEHLER=1
+            echo "<WARNING> Die gesicherte $1 ist unvollstaendig und liess sich nicht"
+            echo "<WARNING> zurueckspielen. Sie bleibt unter $SICHER liegen."
+        fi
         return 0
     fi
     echo "<WARNING> Die gesicherte $1 ist unvollstaendig. Die vorhandene"
@@ -120,8 +143,11 @@ else
     # postinstall.sh, das VOR postupgrade laeuft. Also erst nachsehen,
     # wie es wirklich steht; eine Warnung bei heiler Konfiguration
     # erschreckt ohne Grund und entwertet die echte.
+    # Nach INHALT, nicht nach Groesse (seit 1.3.14): eine abgeschnittene
+    # Datei ist nicht leer, traegt aber nichts - bis 1.3.13 hiess sie hier
+    # "vorhanden" (in WSL gemessen, Pruefung-Heimkino-1.3.14, Fall H2).
     NETZ_PRUEF="${5:-$LBHOMEDIR}/config/plugins/${3:-heimkino}/heimkino.cfg"
-    if [ -s "$NETZ_PRUEF" ]; then
+    if hk_inhalt "$NETZ_PRUEF" cfg; then
         echo "<OK> Die Einstellungen sind vorhanden (aus der Zweitschrift)."
     else
     echo "<WARNING> Keine gesicherten Einstellungen gefunden - IP, MAC und"
@@ -149,9 +175,15 @@ mkdir -p "$BASE/data/plugins/$PDIR" 2>/dev/null
 touch "$BASE/data/plugins/$PDIR/soll_laufen" 2>/dev/null
 chown loxberry:loxberry "$BASE/data/plugins/$PDIR/soll_laufen" 2>/dev/null
 
-# Aufraeumen - an beiden Orten.
-rm -rf "$SICHER" 2>/dev/null
-rm -f /tmp/heimkino.cfg.sicherung /tmp/heimkino_xbox_auth.sicherung 2>/dev/null
+# Aufraeumen - an beiden Orten, aber nur, wenn das Zurueckspielen gelang
+# (seit 1.3.14, siehe sicher_zurueck). Sonst ist die Sicherung die einzige
+# Quelle und bleibt liegen; uninstall raeumt sie spaeter weg.
+if [ "$SZ_FEHLER" = "0" ]; then
+    rm -rf "$SICHER" 2>/dev/null
+    rm -f /tmp/heimkino.cfg.sicherung /tmp/heimkino_xbox_auth.sicherung 2>/dev/null
+else
+    echo "<WARNING> Die Sicherung unter $SICHER wurde NICHT geloescht."
+fi
 
 # ==========================================================================
 # Einen Dienst aus der Zeit VOR der Aktualisierung beenden

@@ -61,9 +61,6 @@ else
     echo "<OK> Nachkontrolle: alle drei Python-Module vorhanden."
 fi
 
-echo "<INFO> Naechster Schritt: Reiter Einstellungen - IP, MAC und Keycode des"
-echo "<INFO> Beamers eintragen. Den Keycode erzeugt der Beamer selbst im"
-echo "<INFO> versteckten Menue unter Netzwerk-IP-Steuerung."
 
 
 # ==== NETZ-EINSTELLUNGEN-UPDATE (automatisch eingefuegt, nicht doppeln) ====
@@ -181,5 +178,36 @@ netz_zurueck "heimkino.cfg" cfg 0640 \
 # xbox_auth.json liefert das Archiv nie mit - es gibt also keine Vorgabe,
 # mit der man vergleichen koennte. Der leere vierte Wert sagt das aus.
 netz_zurueck "xbox_auth.json" json 0600 ""
+
+# ---------- Erstanleitung nur, wenn noch nichts eingerichtet ist ----------
+#
+# postinstall.sh laeuft bei der Erstinstallation UND bei jedem Upgrade
+# (plugininstall.pl uebergibt kein Kennzeichen). Bis 1.3.13 stand die
+# Anleitung "IP, MAC und Keycode eintragen" unbedingt da - nach einem
+# gelungenen Upgrade sieht das aus, als seien die Einstellungen verloren
+# (in WSL gemessen, Pruefung-Heimkino-1.3.14, Fall H3; gemeinsamer Auftrag
+# vom 24.09.2026). Entschieden wird am INHALT nach dem Zurueckspielen:
+# eingerichtet ist, wer eine Beamer-Adresse, einen Keycode oder eine
+# Xbox-Geraetekennung eingetragen hat. Das Aktionstoken zaehlt NICHT - es
+# entsteht beim ersten Oeffnen der Oberflaeche von selbst.
+hk_eingerichtet() {   # $1 Datei
+    [ -s "$1" ] || return 1
+    for hk_f in ip keycode mac geraete_id; do
+        hk_w=$(sed -n "s/^[[:space:]]*$hk_f[[:space:]]*=[[:space:]]*//p" "$1" 2>/dev/null | head -1)
+        hk_w=$(printf '%s' "$hk_w" | tr -d '[:space:]')
+        [ -n "$hk_w" ] && return 0
+    done
+    return 1
+}
+if hk_eingerichtet "$NETZ_CFG/heimkino.cfg"; then
+    echo "<OK> Einstellungen vorhanden - die Aktualisierung hat sie uebernommen."
+elif hk_eingerichtet "$NETZ_BASE/data/plugins/$NETZ_PDIR.upgrade_sicherung/heimkino.cfg"; then
+    echo "<INFO> Die Einstellungen liegen in der Sicherung dieser Aktualisierung;"
+    echo "<INFO> postupgrade.sh spielt sie gleich zurueck."
+else
+    echo "<INFO> Naechster Schritt: Reiter Einstellungen - IP, MAC und Keycode des"
+    echo "<INFO> Beamers eintragen. Den Keycode erzeugt der Beamer selbst im"
+    echo "<INFO> versteckten Menue unter Netzwerk-IP-Steuerung."
+fi
 
 exit 0

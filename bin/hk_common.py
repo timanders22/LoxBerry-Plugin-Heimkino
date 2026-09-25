@@ -22,13 +22,19 @@ def lb_wurzel_ermitteln():
     """Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
 
     Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
-    config/plugins UND webfrontend enthaelt. Trifft die uebliche
-    Installation genauso wie eine an einem anderen Ort.
+    config/plugins, data/plugins UND config/system/general.json enthaelt.
+    Trifft die uebliche Installation genauso wie eine an einem anderen Ort.
+
+    general.json ist die entscheidende Bedingung (Regeln/06, Raumklima-
+    Vorfall 05.09.2026): config/plugins und webfrontend hinterlaesst auch
+    ein Pruefstand auf einem Arbeitsrechner. Bis 1.3.13 genuegten diese
+    beiden.
     """
     d = os.path.dirname(os.path.abspath(__file__))
     for _ in range(8):
         if os.path.isdir(os.path.join(d, "config", "plugins")) \
-                and os.path.isdir(os.path.join(d, "webfrontend")):
+                and os.path.isdir(os.path.join(d, "data", "plugins")) \
+                and os.path.isfile(os.path.join(d, "config", "system", "general.json")):
             return d
         eltern = os.path.dirname(d)
         if eltern == d:
@@ -54,62 +60,132 @@ LOG_BEHALTEN = 256 * 1024
 def _lbhome():
     """Wurzel der LoxBerry-Installation ermitteln.
 
-    Reihenfolge: Umgebungsvariable, /etc/environment, uebliche Orte. Ohne
-    diese Kette laeuft nichts von der Kommandozeile aus, weil systemd die
-    Variable nicht an jede Shell weitergibt.
+    Reihenfolge: Umgebungsvariable, /etc/environment, Suche vom Ablageort
+    aufwaerts - und DANACH NICHTS MEHR. Rueckgabe "" heisst "keine Wurzel".
+
+    Eine Wurzel aus der Umgebung gilt, wenn config/plugins UND data/plugins
+    darunter liegen (general.json wird dort nicht verlangt, damit die
+    Attrappen der Pruefwerkzeuge weiter tragen - Bauart Spotpreis-Tibber
+    0.9.19). Bis 1.3.13 stand hier als letzte Stufe ein fest verdrahteter
+    Systempfad (das Heimatverzeichnis des Benutzers loxberry): er macht die
+    Suche wirkungslos und trifft auf einem anders installierten LoxBerry die
+    falsche Anlage (Muster 1 der Nachlese 24.09.2026).
     """
+    def _brauchbar(pfad):
+        return bool(pfad) and os.path.isdir(os.path.join(pfad, "config", "plugins")) \
+            and os.path.isdir(os.path.join(pfad, "data", "plugins"))
+
     heim = os.environ.get("LBHOMEDIR")
-    if heim and os.path.isdir(heim):
-        return heim
+    if _brauchbar(heim):
+        return heim.rstrip("/") or heim
     try:
         with open("/etc/environment", "r", encoding="utf-8", errors="replace") as datei:
             for zeile in datei:
                 if zeile.strip().startswith("LBHOMEDIR"):
                     wert_roh = zeile.split("=", 1)[1].strip().strip('"').strip("'")
-                    if os.path.isdir(wert_roh):
-                        return wert_roh
+                    if _brauchbar(wert_roh):
+                        return wert_roh.rstrip("/") or wert_roh
     except OSError:
         pass
-    for kandidat in (lb_wurzel_ermitteln(), "/home/loxberry/loxberry"):
-        if os.path.isdir(kandidat):
-            return kandidat
     return lb_wurzel_ermitteln()
 
 
-def pfade():
+def _anlage_oder_archiv():
+    """(heim, archiv): heim ist die Wurzel, auf der gearbeitet werden darf,
+    sonst ""; archiv ist die gefundene Wurzel, wenn diese Datei NICHT darin
+    installiert liegt (fuer die Meldung), sonst "".
+
+    Die Anlage gilt nur, wenn diese Datei physisch unter
+    <Wurzel>/bin/plugins/heimkino liegt oder der Aufrufer Wurzel UND Ordner
+    ausdruecklich nennt ($LBHOMEDIR und $LBPPLUGINDIR - so arbeiten die
+    Pruefwerkzeuge mit ihrer Attrappe). Sonst ist das ein ausgepacktes Archiv
+    oder eine Kopie, und hk_cmd.py/hk_service.py steigen aus
+    (wurzel_oder_abbruch). Bis 1.3.13 nahm eine Kopie unterhalb einer echten
+    Wurzel - mit $LBHOMEDIR allein, wie es am Geraet in /etc/environment
+    steht - Konfiguration, Auftraege und PID-Datei der Anlage (Muster 3,
+    Bauart Spotpreis-Tibber 0.9.19).
+    """
     heim = _lbhome()
+    if not heim:
+        return "", ""
+    eigen = os.path.realpath(os.path.dirname(os.path.abspath(__file__)))
+    soll = os.path.realpath(os.path.join(heim, "bin", "plugins", ORDNER))
+    lbp = os.path.basename(os.environ.get("LBPPLUGINDIR", "").rstrip("/"))
+    umgebung = os.environ.get("LBHOMEDIR", "")
+    ausdruecklich = (lbp not in ("", ".", "/", "bin", "html", "plugins")
+                     and bool(umgebung)
+                     and os.path.realpath(umgebung) == os.path.realpath(heim))
+    if soll == eigen or ausdruecklich:
+        return heim, ""
+    return "", heim
+
+
+def pfade():
+    heim, archiv = _anlage_oder_archiv()
     eigen = os.path.dirname(os.path.abspath(__file__))
+    # Ohne Wurzel (oder aus einem Archiv) liegt alles NEBEN dem Plugin, nie
+    # an der Laufwerkswurzel und nie im Arbeitsverzeichnis. Bis 1.3.13 wurden
+    # die Pfade hier mit leerem heim zusammengesetzt und lauteten
+    # "config/plugins/..." - relativ zum Arbeitsverzeichnis des Aufrufers
+    # (Muster 2). Die Programme, die schreiben, steigen vorher aus.
+    basis = heim or os.path.join(os.path.dirname(eigen), "ohne_loxberry")
     return {
         "home": heim,
+        "archiv": archiv,
         "bin": eigen,
-        "config": os.path.join(heim, "config", "plugins", ORDNER, "heimkino.cfg"),
-        "auth": os.path.join(heim, "config", "plugins", ORDNER, "xbox_auth.json"),
+        "config": os.path.join(basis, "config", "plugins", ORDNER, "heimkino.cfg"),
+        "auth": os.path.join(basis, "config", "plugins", ORDNER, "xbox_auth.json"),
         # Der Code aus der Microsoft-Rueckleitung wird hier abgelegt, statt
         # ihn ueber die Kommandozeile zu uebergeben - Argumente stehen in der
         # Prozessliste und sind fuer jeden lokalen Benutzer lesbar.
-        "code": os.path.join(heim, "config", "plugins", ORDNER, "xbox_code.tmp"),
-        "zustand": os.path.join(heim, "data", "plugins", ORDNER, "zustand.json"),
+        "code": os.path.join(basis, "config", "plugins", ORDNER, "xbox_code.tmp"),
+        "zustand": os.path.join(basis, "data", "plugins", ORDNER, "zustand.json"),
         # Auftraege des Aktionsendpunkts: was zuletzt geschaltet wurde und
         # welcher Zustand daraufhin erwartet wird. Der Dienst fasst nach -
         # er ist die einzige Stelle, die den Beamer befragen darf.
-        "auftrag": os.path.join(heim, "data", "plugins", ORDNER, "auftrag.json"),
+        "auftrag": os.path.join(basis, "data", "plugins", ORDNER, "auftrag.json"),
         # Betriebszaehler. Neustartfest, deshalb unter data/ und nicht
         # unter log/ - log/plugins ist eine Ramdisk.
-        "betrieb": os.path.join(heim, "data", "plugins", ORDNER, "betrieb.json"),
+        "betrieb": os.path.join(basis, "data", "plugins", ORDNER, "betrieb.json"),
         # Geraetesperre: Dienst UND Einzelbefehl nehmen sie, damit nicht zwei
         # Prozesse gleichzeitig mit dem Beamer sprechen. Siehe hk_sperre.py.
-        "sperre": os.path.join(heim, "data", "plugins", ORDNER, "beamer.lock"),
-        "soll": os.path.join(heim, "data", "plugins", ORDNER, "soll_laufen"),
-        "logdir": os.path.join(heim, "log", "plugins", ORDNER),
-        "log": os.path.join(heim, "log", "plugins", ORDNER, "heimkino.log"),
-        "pid": os.path.join(heim, "data", "plugins", ORDNER, "hk_service.pid"),
-        "general": os.path.join(heim, "config", "system", "general.json"),
+        "sperre": os.path.join(basis, "data", "plugins", ORDNER, "beamer.lock"),
+        "soll": os.path.join(basis, "data", "plugins", ORDNER, "soll_laufen"),
+        "logdir": os.path.join(basis, "log", "plugins", ORDNER),
+        "log": os.path.join(basis, "log", "plugins", ORDNER, "heimkino.log"),
+        "pid": os.path.join(basis, "data", "plugins", ORDNER, "hk_service.pid"),
+        "general": os.path.join(basis, "config", "system", "general.json"),
         "vorgaben": os.path.join(eigen, "hk_vorgaben.json"),
         "themen": os.path.join(eigen, "hk_themen.json"),
     }
 
 
 P = pfade()
+
+
+def wurzel_oder_abbruch(programm):
+    """Fuer alles, was schreibt oder schaltet: ohne Anlage nichts tun.
+
+    Gibt True zurueck, wenn eine Wurzel gilt. Sonst steht eine Meldung auf
+    stderr, und der Aufrufer endet mit 1 - bevor er ein Protokoll, einen
+    Auftrag oder eine PID-Datei anlegt.
+    """
+    if P["home"]:
+        return True
+    if P["archiv"]:
+        sys.stderr.write(
+            "%s: Diese Datei liegt nicht in der Installation unter %s\n"
+            "(ausgepacktes Archiv oder Kopie). Damit nichts in die Anlage kommt,\n"
+            "wurde nichts geschaltet und nichts geschrieben. Abhilfe: das Programm\n"
+            "aus %s/bin/plugins/%s aufrufen oder LBHOMEDIR und LBPPLUGINDIR\n"
+            "ausdruecklich setzen.\n" % (programm, P["archiv"], P["archiv"], ORDNER))
+    else:
+        sys.stderr.write(
+            "%s: Es wurde kein LoxBerry-Wurzelverzeichnis gefunden. $LBHOMEDIR ist\n"
+            "nicht brauchbar, und oberhalb dieser Datei traegt kein Verzeichnis\n"
+            "config/plugins, data/plugins und config/system/general.json.\n"
+            "Es wurde nichts geschaltet und nichts geschrieben.\n" % programm)
+    return False
 
 
 # --------------------------------------------------------------------------
@@ -205,7 +281,7 @@ def protokoll_einrichten(name="heimkino", stufe=logging.INFO):
     # Am Geraet gemessen (06.09.2026, LoxBerry 4.0.0.15): der Dienst lief
     # sieben Stunden, schrieb seine Zustandsdatei weiter - und es gab KEIN
     # heimkino.log. Das Verzeichnis log/plugins liegt auf einer Ramdisk
-    # (gemessen: /dev/zram0 on /opt/loxberry/log/plugins), und es war um
+    # (gemessen: /dev/zram0 on <LoxBerry-Wurzel>/log/plugins), und es war um
     # 21:13 geleert worden. Ein FileHandler oeffnet die Datei EINMAL beim
     # Start; verschwindet sie danach, schreibt der Prozess bis zum naechsten
     # Neustart in einen geloeschten Inode. Sichtbar wird davon nichts.
@@ -446,7 +522,10 @@ def version():
     Gibt "" zurueck, wenn sich die Version nicht ermitteln laesst. Dann steht
     im Protokoll keine Nummer - besser als eine falsche.
     """
-    datei = os.path.join(_lbhome(), "data", "system", "plugindatabase.json")
+    # Ohne Wurzel gibt es keine Plugindatenbank - nicht ab "/" suchen.
+    if not P["home"]:
+        return ""
+    datei = os.path.join(P["home"], "data", "system", "plugindatabase.json")
     try:
         with open(datei, "r", encoding="utf-8") as f:
             inhalt = json.load(f)
@@ -670,6 +749,7 @@ class Melder:
         self.client = None
         self._gemeldet = {}
         self._letzte = {}          # fuer das erneute Melden nach Wiederkehr
+        self._fluechtig = set()    # Themen, deren letzter Wert ein Platzhalter war
         if aktiv:
             self._verbinden()
 
@@ -749,9 +829,17 @@ class Melder:
         # Bei "beamer/an" kann das Tage dauern.
         #
         # Vorher die Themen OHNE retain abraeumen: bis 1.3.10 ging auch
-        # service/zeitstempel retained hinaus, und dieser alte Wert liegt
-        # noch im Broker. Eine leere Nutzlast mit retain loescht ihn; der
+        # service/zeitstempel retained hinaus, bis 1.3.13 dazu last_error,
+        # beamer/erreichbar, beamer/grund, xbox/angemeldet, die
+        # letzte_aktion-Themen und szene/* (Aussagen des Dienstes ueber sich
+        # selbst, Regeln/07 Entscheidung 19.09.2026). Diese alten Werte liegen
+        # noch im Broker. Eine leere Nutzlast mit retain loescht sie; der
         # frische Wert folgt gleich darauf, ohne retain.
+        #
+        # Bewusst OHNE Merker und bei JEDER Verbindung: der Weg ist paho
+        # direkt am Broker (TCP), nicht der verlustbehaftete UDP-Eingang des
+        # Gateways (Regeln/07 Z. 215), und ein Merker muesste erst durch
+        # Nachlesen belegt werden. Grenze steht in der README.
         behalten = retain_themen()
         for eintrag in themen():
             thema = str(eintrag.get("thema"))
@@ -761,14 +849,17 @@ class Melder:
                                    qos=0, retain=True)
                 except (OSError, ValueError):
                     pass
+        # Ein Platzhalter aus eigenem Fehlschlag (sende(..., behalten=False),
+        # vermerkt in _fluechtig) darf auch beim Wiederholen den behaltenen
+        # Geraetestand nicht ueberschreiben (seit 1.3.14, Fall W3).
         for thema, inhalt in list(self._letzte.items()):
             try:
                 client.publish("%s/%s" % (self.praefix, thema), inhalt,
-                               qos=0, retain=(thema in behalten))
+                               qos=0, retain=(thema in behalten and thema not in self._fluechtig))
             except (OSError, ValueError):
                 pass
 
-    def sende(self, thema, inhalt):
+    def sende(self, thema, inhalt, behalten=None):
         if not self.aktiv or self.client is None:
             return
         if isinstance(inhalt, bool):
@@ -796,10 +887,23 @@ class Melder:
         # Retain je Thema aus der Themenliste (seit 1.3.11; bis dahin
         # pauschal). Der Inhalt ist hier nie leer - der Bindestrich oben -,
         # eine leere Nutzlast geht also auch retained nicht hinaus.
+        #
+        # behalten=False (seit 1.3.14) stuft EINEN Wert auf fluechtig herab:
+        # ein Platzhalter, den der Dienst aus eigenem Fehlschlag setzt
+        # (beamer/status "unbekannt", an 0, lautstaerke -1 ...), geht an die
+        # Abonnenten wie bisher, ueberschreibt aber den letzten Geraetestand
+        # im Broker nicht (Muster 12 der Nachlese, Bauart KODI-NG 1.2.10).
+        # Hochstufen kann der Aufrufer nichts: was die Tabelle nicht
+        # retained nennt, bleibt fluechtig.
+        mit_retain = (thema in retain_themen()) and behalten is not False
+        if behalten is False:
+            self._fluechtig.add(thema)
+        else:
+            self._fluechtig.discard(thema)
         try:
             auskunft = self.client.publish("%s/%s" % (self.praefix, thema),
                                            inhalt, qos=0,
-                                           retain=(thema in retain_themen()))
+                                           retain=mit_retain)
         except (OSError, ValueError) as fehler:
             self.log.debug("MQTT-Versand fehlgeschlagen: %s", fehler)
             return
@@ -815,9 +919,11 @@ class Melder:
                           "die Verbindung zum Broker steht nicht." % rc,
                           self.log, "warning")
 
-    def sende_viele(self, paare):
+    def sende_viele(self, paare, fluechtig=()):
+        """fluechtig: Themen, deren Wert in DIESEM Durchgang ein Platzhalter
+        ist - sie gehen ohne Retain hinaus (siehe sende)."""
         for thema, inhalt in paare.items():
-            self.sende(thema, inhalt)
+            self.sende(thema, inhalt, False if thema in fluechtig else None)
 
     def schliessen(self):
         if self.client is not None:
@@ -826,6 +932,178 @@ class Melder:
                 self.client.disconnect()
             except (OSError, ValueError):
                 pass
+
+
+# --------------------------------------------------------------------------
+# Behaltene Themen am Broker loeschen - UND NACHLESEN (seit 1.3.14)
+#
+# Zwei Aufrufer: uninstall/uninstall ("hk_service.py --mqtt-leeren") und der
+# Dienst beim Wechsel des Themenpraefixes (das alte Praefix). Entschieden am
+# 18.09.2026 (Regeln/07, Abschnitt 3): der Letzte Wille service/online darf
+# retained sein, wenn die Deinstallation das Thema abraeumt - sonst bliebe
+# die 0 eines entfernten Plugins fuer immer stehen. Bis 1.3.13 enthielt
+# uninstall keinen MQTT-Aufruf, und ein Praefixwechsel liess das alte Praefix
+# samt service/online=1 stehen (ein sauberes Trennen loest keinen Letzten
+# Willen aus).
+#
+# Geloescht wird nur, was WIRKLICH behalten im Broker liegt und dieser Linie
+# gehoert (Name aus bin/hk_themen.json) - ein fremdes Thema unter demselben
+# Praefix bleibt stehen. Danach wird NACHGELESEN: ein neues Abonnement
+# bekommt alles, was noch behalten ist. Beide Abonnements gelten erst mit
+# ihrem SUBACK; 0x80 heisst "nicht zu fragen", ebenso ein CONNACK ungleich 0
+# - nie "nichts belegt" (Muster 11). Bauart: APC-UPS 1.2.13
+# mqtt_behaltene_leeren(), Ultraschall 1.2.8 broker_leeren().
+#
+# Rueckgabe {"rc", "geleert", "rest", "grund"}: rc 0 = nichts (mehr)
+# behalten, 1 = nach dem Loeschen stand noch etwas, 2 = nicht zu fragen.
+# --------------------------------------------------------------------------
+
+CONNACK_TEXT = {
+    1: "Protokollfassung nicht angenommen",
+    2: "Kennung abgelehnt",
+    3: "Broker nicht verfuegbar",
+    4: "Benutzer oder Kennwort falsch",
+    5: "nicht berechtigt",
+}
+
+
+def broker_leeren(praefix, namen, warten=2.0):
+    erg = {"rc": 2, "geleert": [], "rest": [], "grund": ""}
+    praefix = str(praefix or "").strip("/")
+    if not praefix or "#" in praefix or "+" in praefix:
+        erg["grund"] = "das Themenpraefix '%s' taugt nicht fuer ein Abonnement" % praefix
+        return erg
+    soll = set("%s/%s" % (praefix, n) for n in namen if n)
+    if not soll:
+        erg["rc"] = 0
+        return erg
+    try:
+        import paho.mqtt.client as mqtt
+    except ImportError:
+        erg["grund"] = "das Paket paho-mqtt fehlt"
+        return erg
+    import threading
+    zugang = mqtt_zugangsdaten()
+    if not zugang:
+        erg["grund"] = "kein MQTT-Broker in general.json"
+        return erg
+    wo = "%s:%s" % (zugang["host"], zugang["port"])
+    gesehen = set()
+    angemeldet = threading.Event()
+    code = {"wert": None}
+    subacks = {}
+
+    def bei_verbindung(_k, _d, _f, *rest):
+        # paho 1.x und VERSION1: rc als Zahl; VERSION2: ReasonCode mit .value
+        try:
+            code["wert"] = int(getattr(rest[0], "value", rest[0]) or 0) if rest else 0
+        except (TypeError, ValueError):
+            code["wert"] = 0
+        angemeldet.set()
+
+    def bei_nachricht(_k, _d, n):
+        # Nur BEHALTENES mit Inhalt: ein live gesendeter Wert ist keine
+        # Altlast, und ein leeres Thema ist schon geloescht.
+        if n.retain and n.payload and n.topic in soll:
+            gesehen.add(n.topic)
+
+    def bei_abo(_k, _d, mid, codes, *_rest):
+        werte = []
+        try:
+            for c in (codes or ()):
+                werte.append(int(getattr(c, "value", c)))
+        except (TypeError, ValueError):
+            werte = [0x80]
+        subacks[mid] = werte or [0x80]
+
+    def abonnieren():
+        """praefix/# abonnieren und den SUBACK abwarten. "" = bestaetigt."""
+        auskunft = k.subscribe(praefix + "/#")
+        try:
+            rc_sub, mid = int(auskunft[0]), auskunft[1]
+        except (TypeError, ValueError, IndexError):
+            return "das Abonnement liess sich nicht absenden (%r)" % (auskunft,)
+        if rc_sub != 0:
+            return "das Abonnement liess sich nicht absenden (rc %d)" % rc_sub
+        ende = time.time() + 10
+        while mid not in subacks and time.time() < ende:
+            time.sleep(0.05)
+        if mid not in subacks:
+            return "der Broker %s hat das Abonnement nicht bestaetigt (kein SUBACK)" % wo
+        schlecht = [w for w in subacks[mid] if w >= 0x80]
+        if schlecht:
+            return ("der Broker %s verweigert das Lesen von '%s/#' (SUBACK 0x%02X)"
+                    % (wo, praefix, schlecht[0]))
+        return ""
+
+    name = "loxberry-heimkino-leeren-%d" % os.getpid()
+    k = None
+    for art in ("VERSION2", "VERSION1"):
+        api = getattr(getattr(mqtt, "CallbackAPIVersion", None), art, None)
+        if api is None:
+            continue
+        try:
+            k = mqtt.Client(api, client_id=name)
+            break
+        except (AttributeError, TypeError, ValueError):
+            k = None
+    if k is None:
+        k = mqtt.Client(client_id=name)     # paho-mqtt 1.x
+    k.on_connect = bei_verbindung
+    k.on_message = bei_nachricht
+    k.on_subscribe = bei_abo
+    if zugang["user"]:
+        k.username_pw_set(zugang["user"], zugang["pass"] or None)
+    try:
+        k.connect(zugang["host"], zugang["port"], 30)
+    except Exception as fehler:  # noqa: BLE001
+        erg["grund"] = "der Broker %s ist nicht erreichbar (%s: %s)" % (
+            wo, type(fehler).__name__, fehler)
+        return erg
+    k.loop_start()
+    try:
+        if not angemeldet.wait(10):
+            erg["grund"] = "der Broker %s hat auf die Verbindung nicht geantwortet" % wo
+            return erg
+        if code["wert"]:
+            erg["grund"] = "der Broker %s hat die Anmeldung abgewiesen (CONNACK %d: %s)" % (
+                wo, code["wert"], CONNACK_TEXT.get(code["wert"], "unbekannter Grund"))
+            return erg
+        grund = abonnieren()
+        if grund:
+            erg["grund"] = grund
+            return erg
+        time.sleep(warten)
+        k.unsubscribe(praefix + "/#")
+        zu_leeren = sorted(gesehen)
+        for thema in zu_leeren:
+            info = k.publish(thema, b"", qos=1, retain=True)
+            try:
+                info.wait_for_publish(5)
+            except TypeError:           # paho 1.x vor 1.6 kennt kein timeout
+                info.wait_for_publish()
+        erg["geleert"] = zu_leeren
+        # NACHLESEN: ein neues Abonnement bekommt alles, was noch behalten ist.
+        gesehen.clear()
+        grund = abonnieren()
+        if grund:
+            erg["grund"] = "Nachlesen nicht moeglich - " + grund
+            return erg
+        time.sleep(warten)
+        erg["rest"] = sorted(gesehen)
+        erg["rc"] = 1 if erg["rest"] else 0
+    except Exception as fehler:  # noqa: BLE001
+        erg["rc"] = 2
+        erg["grund"] = "das Loeschen am Broker %s scheiterte (%s: %s)" % (
+            wo, type(fehler).__name__, fehler)
+    finally:
+        # ERST abmelden, DANN den Netzstrang anhalten.
+        try:
+            k.disconnect()
+        except Exception:  # noqa: BLE001
+            pass
+        k.loop_stop()
+    return erg
 
 
 # --------------------------------------------------------------------------
@@ -967,12 +1245,44 @@ def _ist_unser_dienst(pid):
     except OSError:
         return False       # Prozessnummer gibt es nicht mehr - verwaiste Datei
     teile = [t for t in roh.decode("utf-8", "replace").split("\0") if t]
-    # Erwartet wird ".../hk_service.py" als eigenes Argument - entweder als
-    # aufgerufenes Programm oder als Argument hinter dem Python-Programm.
-    for teil in teile[:3]:
-        if os.path.basename(teil) == "hk_service.py":
-            return True
-    return False
+    # Argumentweise nach Regeln/06 (seit 1.3.14): GENAU zwei Argumente,
+    # argv[0] ein python-Interpreter, argv[1] zeichengenau DIESES
+    # hk_service.py (ein relativer Start wird gegen das Arbeitsverzeichnis
+    # DES PROZESSES aufgeloest), und der Prozess gehoert diesem Benutzer.
+    # Bis 1.3.13 genuegte "eines der ersten drei Argumente heisst
+    # hk_service.py" - ein Editor auf der Datei, eine Kopie in einem anderen
+    # Ordner oder der Einmallauf "hk_service.py --themen" galten als Dienst
+    # (Muster 4 der Nachlese).
+    if len(teile) != 2:
+        return False
+    programm = os.path.basename(teile[0])
+    if not (programm == "python" or programm.startswith("python3")):
+        return False
+    pfad = teile[1]
+    if not os.path.isabs(pfad):
+        try:
+            pfad = os.path.join(os.readlink("/proc/%s/cwd" % pid), pfad)
+        except OSError:
+            return False
+    soll = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hk_service.py")
+    if os.path.realpath(pfad) != os.path.realpath(soll):
+        return False
+    try:
+        return os.stat("/proc/%s" % pid).st_uid == os.getuid()
+    except OSError:
+        return False
+
+
+def dienst_laeuft():
+    """Laeuft der Dienst dieser Installation? Ueber die PID-Datei und die
+    argumentweise Gegenprobe - fuer hk_cmd.py, das ohne Dienst keinen Auftrag
+    mehr ablegt (Muster 5)."""
+    try:
+        with open(P["pid"], "r", encoding="utf-8") as datei:
+            alt = datei.read().strip()
+    except OSError:
+        return False
+    return alt.isdigit() and _ist_unser_dienst(alt)
 
 
 def pid_belegen(log):

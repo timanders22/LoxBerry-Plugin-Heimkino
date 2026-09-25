@@ -25,7 +25,20 @@
     "des Tages, altert), xbox/geheimnis_tage (zaehlt taeglich herunter).",
     "Zaehlerstaende (betriebsstunden) und das absolute Ablaufdatum bleiben",
     "retained. Ein Thema ohne Eintrag geht NICHT retained hinaus. Dienst",
-    "(hk_common.retain_themen) und Oberflaeche (hk_themen) lesen diese Spalte."
+    "(hk_common.retain_themen) und Oberflaeche (hk_themen) lesen diese Spalte.",
+    "",
+    "Seit 1.3.14 (Regeln/07, Entscheidung 19.09.2026: eine Aussage des Dienstes",
+    "ueber sich selbst ist nie retained) ausserdem NICHT retained: last_error,",
+    "beamer/erreichbar und beamer/grund (Ergebnis des EIGENEN Verbindungsversuchs),",
+    "xbox/angemeldet (traegt die eigene Anmeldung noch), beamer/letzte_aktion,",
+    "xbox/letzte_aktion und szene/* (Ablauf und Ergebnis der eigenen Befehle).",
+    "Stirbt der Dienst, bliebe sonst ein alter Fehler, ein 'erreichbar' oder",
+    "szene/laeuft=1 fuer immer stehen. Die Altwerte raeumt der Dienst bei jeder",
+    "Verbindung mit einer leeren retain-Nutzlast ab (Melder._bei_verbindung).",
+    "Ein Platzhalter aus eigenem Fehlschlag (beamer/status unbekannt, an 0, app -,",
+    "lautstaerke/stumm -1, xbox/status unbekannt, an 0, name -) geht in diesem",
+    "Durchgang ohne Retain hinaus, auch wenn die Spalte true sagt - der Broker",
+    "behaelt dann den letzten Geraetestand (hk_service.platzhalter)."
   ],
   "themen": [
     {
@@ -51,7 +64,7 @@
     {
       "thema": "last_error",
       "art": "text",
-      "retain": true,
+      "retain": false,
       "min": 0,
       "max": 0,
       "einheit": "",
@@ -71,7 +84,7 @@
     {
       "thema": "beamer/erreichbar",
       "art": "digital",
-      "retain": true,
+      "retain": false,
       "min": 0,
       "max": 1,
       "einheit": "",
@@ -81,7 +94,7 @@
     {
       "thema": "beamer/grund",
       "art": "text",
-      "retain": true,
+      "retain": false,
       "min": 0,
       "max": 0,
       "einheit": "",
@@ -161,7 +174,7 @@
     {
       "thema": "beamer/letzte_aktion",
       "art": "text",
-      "retain": true,
+      "retain": false,
       "min": 0,
       "max": 0,
       "einheit": "",
@@ -211,7 +224,7 @@
     {
       "thema": "xbox/angemeldet",
       "art": "digital",
-      "retain": true,
+      "retain": false,
       "min": 0,
       "max": 1,
       "einheit": "",
@@ -241,7 +254,7 @@
     {
       "thema": "xbox/letzte_aktion",
       "art": "text",
-      "retain": true,
+      "retain": false,
       "min": 0,
       "max": 0,
       "einheit": "",
@@ -271,7 +284,7 @@
     {
       "thema": "szene/laeuft",
       "art": "digital",
-      "retain": true,
+      "retain": false,
       "min": 0,
       "max": 1,
       "einheit": "",
@@ -281,7 +294,7 @@
     {
       "thema": "szene/schritt",
       "art": "text",
-      "retain": true,
+      "retain": false,
       "min": 0,
       "max": 0,
       "einheit": "",
@@ -291,7 +304,7 @@
     {
       "thema": "szene/ergebnis",
       "art": "text",
-      "retain": true,
+      "retain": false,
       "min": 0,
       "max": 0,
       "einheit": "",

@@ -49,6 +49,9 @@ LAEUFT = True
 # Dauerbefragung geraet.
 TAKT_NACHFASSEN = 5
 
+# Ein Auftrag, der beim Dienststart aelter ist, wird verworfen (Muster 5).
+AUFTRAG_VERALTET = 60
+
 
 def _abbruch(nummer, rahmen):        # noqa: ARG001
     global LAEUFT
@@ -504,6 +507,34 @@ EREIGNIS_THEMEN = ("beamer/letzte_aktion", "xbox/letzte_aktion",
                    "szene/laeuft", "szene/schritt", "szene/ergebnis")
 
 
+def platzhalter(beamer, xbox):
+    """Die Themen, deren Wert in diesem Durchgang ein PLATZHALTER ist.
+
+    Ein Platzhalter entsteht, wenn der Dienst das Geraet nicht befragen
+    konnte (eigener Fehlschlag, Geraet abgeschaltet, nicht angemeldet) und
+    trotzdem etwas senden muss - "unbekannt", 0, -1, "-". Er geht weiter an
+    die Abonnenten, damit Loxone ihn wie bisher sieht, aber OHNE Retain: der
+    Broker behaelt den letzten Geraetestand (Muster 12 der Nachlese, Bauart
+    KODI-NG 1.2.10 und Robonect 1.1.12). Bis 1.3.13 ging "unbekannt"
+    retained ueber den letzten gemessenen Stand.
+
+    "aus" nach einer ABGEWIESENEN Verbindung ist kein Platzhalter: der Beamer
+    weist sie ab, weil er aus ist - das sagt das Geraet.
+    """
+    raus = set()
+    if beamer.get("status") == "unbekannt":
+        raus.update(("beamer/status", "beamer/an", "beamer/app"))
+    if beamer.get("lautstaerke", -1) == -1:
+        raus.add("beamer/lautstaerke")
+    if beamer.get("stumm", -1) == -1:
+        raus.add("beamer/stumm")
+    if xbox.get("status") == "unbekannt":
+        raus.update(("xbox/status", "xbox/an", "xbox/name"))
+    elif not xbox.get("name"):
+        raus.add("xbox/name")
+    return raus
+
+
 def _alle_themen():
     leer_beamer = {"aktiv": False, "erreichbar": False, "status": "unbekannt",
                    "app": "", "grund": "aus", "grund_text": "", "fehler": "",
@@ -551,6 +582,10 @@ def keycode_nachziehen(cfg, log):
 # --------------------------------------------------------------------------
 
 def hauptteil():
+    # Ohne Anlage nichts anlegen und nichts schalten (Muster 1-3): VOR dem
+    # Protokoll, der PID-Datei und MQTT.
+    if not gemein.wurzel_oder_abbruch("hk_service.py"):
+        return 1
     log = gemein.protokoll_einrichten("heimkino")
     signal.signal(signal.SIGTERM, _abbruch)
     signal.signal(signal.SIGINT, _abbruch)
@@ -583,6 +618,26 @@ def hauptteil():
         melder.sende("service/online", 1)
         melder.sende("szene/laeuft", 0)
 
+        # Ein Auftrag, der beim Start schon laenger als AUFTRAG_VERALTET
+        # liegt, wurde gestellt, als kein Dienst lief - er wird verworfen,
+        # nicht ausgefuehrt. Bis 1.3.13 lief eine Kino-Szene, die jemand am
+        # Abend ohne laufenden Dienst gedrueckt hatte, beim naechsten Start
+        # ab, womoeglich Stunden spaeter (Muster 5 der Nachlese; Bauart
+        # ZendureSolarFlow 0.9.26). hk_cmd.py legt ohne Dienst seit 1.3.14
+        # gar keinen mehr ab; dieser Zweig faengt die Reste ab.
+        alt_auftrag = gemein.auftrag_lesen()
+        if alt_auftrag:
+            try:
+                alter = time.time() - float(alt_auftrag.get("gestellt", 0))
+            except (TypeError, ValueError):
+                alter = float("inf")
+            if not (0 <= alter <= AUFTRAG_VERALTET):
+                gemein.auftrag_loeschen()
+                log.warning("Auftrag %s vom Start verworfen: er lag %s, als kein "
+                            "Dienst lief.", alt_auftrag.get("aktion", "?"),
+                            ("seit %d s" % alter) if alter != float("inf")
+                            else "ohne lesbare Zeit")
+
         letzte_config = 0.0
         letzte_runde = time.time()
         # Wird ein Durchgang wegen besetzter Sperre uebersprungen, bleiben
@@ -605,11 +660,27 @@ def hauptteil():
                 neuer = gemein.praefix_saeubern(
                     gemein.wert(cfg, "heimkino", "themenpraefix", "heimkino"))
                 if melder.aktiv and neuer != melder.praefix:
-                    log.info("Themenpraefix geaendert: %s -> %s. Die alten "
-                             "zurueckbehaltenen Werte bleiben beim Broker "
-                             "stehen und muessen dort von Hand geloescht "
-                             "werden.", melder.praefix, neuer)
+                    alter_praefix = melder.praefix
                     melder.schliessen()
+                    # Das alte Praefix abraeumen und nachlesen (seit 1.3.14).
+                    # Bis 1.3.13 blieben die behaltenen Werte dort stehen -
+                    # auch service/online=1, denn ein sauberes Trennen loest
+                    # den Letzten Willen nicht aus. Ein Teilnehmer, der noch
+                    # auf das alte Praefix hoerte, sah einen lebenden Dienst.
+                    leer = gemein.broker_leeren(
+                        alter_praefix,
+                        [str(t.get("thema")) for t in gemein.themen()])
+                    if leer["rc"] == 0:
+                        log.info("Themenpraefix geaendert: %s -> %s. Unter %s/ "
+                                 "sind %d behaltene Themen geloescht und "
+                                 "nachgelesen.", alter_praefix, neuer,
+                                 alter_praefix, len(leer["geleert"]))
+                    else:
+                        log.warning("Themenpraefix geaendert: %s -> %s. Die "
+                                    "behaltenen Werte unter %s/ liessen sich "
+                                    "nicht abraeumen (%s) - von Hand loeschen.",
+                                    alter_praefix, neuer, alter_praefix,
+                                    leer["grund"] or ("noch da: " + ", ".join(leer["rest"])))
                     melder = gemein.Melder(neuer, log,
                                            gemein.ja(cfg, "heimkino", "mqtt"))
 
@@ -671,7 +742,8 @@ def hauptteil():
             melder.sende_viele(mqtt_werte(beamer, xbox, ablauf_datum,
                                           ablauf_tage, jetzt,
                                           b_stunden, b_heute,
-                                          x_stunden, x_heute))
+                                          x_stunden, x_heute),
+                               platzhalter(beamer, xbox))
 
             # Die Protokolldatei liegt auf einer Ramdisk. Ohne Kappung frisst
             # sie Arbeitsspeicher, bis nichts mehr geht.
@@ -692,6 +764,51 @@ def hauptteil():
     return 0
 
 
+def mqtt_leeren():
+    """Fuer uninstall/uninstall: die behaltenen Themen dieser Linie am Broker
+    abraeumen und nachlesen (seit 1.3.14).
+
+    Entschieden am 18.09.2026 (Regeln/07, Abschnitt 3): der Letzte Wille
+    service/online darf retained sein, weil die Deinstallation das Thema
+    abraeumt - sonst bliebe die 0 eines entfernten Plugins fuer immer stehen.
+    Geraeumt werden ALLE Namen aus bin/hk_themen.json unter dem Praefix der
+    Konfiguration, auch Altlasten aus Vorfassungen, die damals retained
+    gingen. Ein fremdes Thema unter demselben Praefix bleibt stehen.
+
+    Ausgabe in der Form der Installationsmeldungen; Rueckgabe 0 erledigt,
+    1 Reste, 2 nicht moeglich. Ein Broker, der nicht zu fragen ist, heisst
+    nie "nichts belegt" (Muster 11).
+    """
+    if not gemein.wurzel_oder_abbruch("hk_service.py --mqtt-leeren"):
+        print("<INFO> MQTT: ohne LoxBerry-Wurzel wurden keine behaltenen Themen geleert.")
+        return 2
+    namen = [str(t.get("thema")) for t in gemein.themen() if t.get("thema")]
+    if not namen:
+        print("<INFO> MQTT: bin/hk_themen.json fehlt - behaltene Themen wurden "
+              "nicht geleert. Sie sind von Hand zu loeschen.")
+        return 2
+    cfg, _lage = gemein.config_lesen()
+    praefix = gemein.praefix_saeubern(
+        gemein.wert(cfg, "heimkino", "themenpraefix", "heimkino"))
+    erg = gemein.broker_leeren(praefix, namen)
+    if erg["rc"] == 2:
+        print("<WARNING> MQTT: behaltene Themen unter %s/ nicht geleert - %s. "
+              "Der Broker war nicht zu fragen; ob dort noch etwas steht, ist "
+              "unbekannt. Von Hand: mosquitto_pub -r -n -t %s/<thema>"
+              % (praefix, erg["grund"], praefix))
+        return 2
+    if erg["rest"]:
+        print("<WARNING> MQTT: %d behaltene Themen stehen nach dem Loeschen noch "
+              "im Broker: %s" % (len(erg["rest"]), ", ".join(erg["rest"])))
+        return 1
+    if erg["geleert"]:
+        print("<OK> MQTT: %d behaltene Themen unter %s/ geloescht und nachgelesen "
+              "(%s)." % (len(erg["geleert"]), praefix, ", ".join(erg["geleert"])))
+    else:
+        print("<OK> MQTT: unter %s/ stand nichts behalten (nachgelesen)." % praefix)
+    return 0
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--vorgaben":
         print(json.dumps(gemein.vorgaben(), ensure_ascii=False, indent=1))
@@ -704,10 +821,21 @@ if __name__ == "__main__":
         print(json.dumps({"zustand": zustand, "text": text},
                          ensure_ascii=False))
         sys.exit(0)
+    if sys.argv[1:] == ["--mqtt-leeren"]:
+        sys.exit(mqtt_leeren())
     if len(sys.argv) > 1 and sys.argv[1] == "--themen":
         # Die WIRKLICH gesendeten Themen, nicht die Datei. Nur so beantwortet
         # die Pruefzeile im Reiter Test die Frage, ob die angezeigte Tabelle
         # zum Sendecode passt.
         print(json.dumps(_alle_themen(), ensure_ascii=False, indent=1))
         sys.exit(0)
+    # Ein unbekannter Schalter startet KEINEN Dienst (seit 1.3.14). Ein Dienst
+    # hat genau zwei Argumente - so erkennen ihn dienst.sh, postupgrade.sh und
+    # uninstall. Ein Vertipper wie "--mqtt-leren" liefe sonst als Dienst, den
+    # keiner dieser Wege als solchen sieht und keiner anhaelt.
+    if len(sys.argv) > 1:
+        sys.stderr.write("hk_service.py: unbekannter Aufruf %r - erlaubt sind "
+                         "kein Argument (Dienst), --vorgaben, --protokoll, "
+                         "--themen, --mqtt-leeren.\n" % sys.argv[1:])
+        sys.exit(2)
     sys.exit(hauptteil())

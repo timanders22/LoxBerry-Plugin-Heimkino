@@ -59,12 +59,16 @@ SELF=$(cd "$(dirname "$(readlink -f "$0")")" && pwd -P)       # <home>/bin/plugi
 # "gestoppt" (rc 1), obwohl der Dienst der Anlage lief - es sah in
 # <archiv>/data/plugins/bin nach.
 #
-# Drei Stufen, in dieser Reihenfolge:
+# Zwei Stufen, in dieser Reihenfolge - und DANACH NICHTS MEHR:
 #   1. $LBHOMEDIR aus der Umgebung, wenn es eine Wurzel bezeichnet,
 #   2. aufwaerts suchen, bis ein Verzeichnis config/plugins, data/plugins
 #      UND config/system/general.json traegt (der dritte Nachweis seit dem
-#      Raumklima-Vorfall, Regeln/06),
-#   3. drei Ebenen ueber dem Ablageort - das bisherige Verhalten.
+#      Raumklima-Vorfall, Regeln/06).
+# Bis 1.3.13 gab es eine dritte Stufe, "drei Ebenen ueber dem Ablageort". Sie
+# machte die Suche wirkungslos: in einem fremden Baum ohne general.json
+# loeschte "stop" dort einen fremden soll_laufen (in WSL gemessen,
+# Pruefung-Heimkino-1.3.14, Fall D3; Muster 1 der Nachlese). Ohne Wurzel
+# wird jetzt gewarnt statt vollzogen.
 hk_wurzel_suchen() {
     hk_v="$SELF"
     hk_i=0
@@ -79,11 +83,13 @@ hk_wurzel_suchen() {
     done
     return 1
 }
+HK_AUS_UMGEBUNG=0
 if [ -n "${LBHOMEDIR:-}" ] && [ -d "$LBHOMEDIR/config/plugins" ] \
    && [ -d "$LBHOMEDIR/data/plugins" ]; then
     LBHOMEDIR=$(cd "$LBHOMEDIR" && pwd -P)
+    HK_AUS_UMGEBUNG=1
 else
-    LBHOMEDIR=$(hk_wurzel_suchen) || LBHOMEDIR=$(cd "$SELF/../../.." && pwd -P)
+    LBHOMEDIR=$(hk_wurzel_suchen) || LBHOMEDIR=""
 fi
 
 # Der Ordnername kommt aus $LBPPLUGINDIR, sonst aus dem Ablageort. Am Geraet
@@ -103,7 +109,44 @@ PNAME="${LBPPLUGINDIR:-}"
 # vom 05.09.2026). Deshalb wird der Ablageort gegengeprueft, und was
 # schreibt, faellt geschlossen aus.
 INSTALLIERT=0
-[ "$SELF" = "$LBHOMEDIR/bin/plugins/$PNAME" ] && INSTALLIERT=1
+[ -n "$LBHOMEDIR" ] && [ "$SELF" = "$LBHOMEDIR/bin/plugins/$PNAME" ] && INSTALLIERT=1
+
+# Ausdruecklich: Wurzel UND Ordner kommen aus der Umgebung ($LBHOMEDIR und
+# $LBPPLUGINDIR - so arbeiten die Pruefwerkzeuge, und so verwaltet ein
+# ausgepacktes Archiv die Anlage, wenn man es ausdruecklich will; Muster 3,
+# Bauart Spotpreis-Tibber 0.9.19). Dann gilt der Dienst DER ANLAGE
+# (<Wurzel>/bin/plugins/<ordner>/hk_service.py), nicht die Kopie daneben.
+AUSDRUECKLICH=0
+if [ "$HK_AUS_UMGEBUNG" = "1" ] && [ -n "${LBPPLUGINDIR:-}" ]; then
+    case "$PNAME" in
+        .|/|bin|html|plugins|*/*) ;;
+        *) AUSDRUECKLICH=1 ;;
+    esac
+fi
+
+# Was schaltet oder schreibt, faellt ohne Wurzel und ausserhalb der
+# Installation geschlossen aus - auch stop, restart und der Waechter, nicht
+# nur start (seit 1.3.14). Bis 1.3.13 prueften nur start; eine Kopie von
+# bin/plugins/heimkino an anderer Stelle unter der Wurzel hielt mit "stop"
+# und "restart" den Dienst der Anlage an, schon mit $LBHOMEDIR allein, wie
+# es am Geraet in /etc/environment steht (in WSL gemessen,
+# Pruefung-Heimkino-1.3.14, Faelle D1 und D2; Muster 3 der Nachlese).
+vollzug_erlaubt() {
+    if [ -z "$LBHOMEDIR" ]; then
+        echo "WARNUNG: keine LoxBerry-Wurzel gefunden (\$LBHOMEDIR nicht brauchbar, und"
+        echo "WARNUNG: oberhalb von $SELF traegt kein Verzeichnis config/plugins,"
+        echo "WARNUNG: data/plugins und config/system/general.json) - es wird nichts getan."
+        return 1
+    fi
+    if [ "$INSTALLIERT" != "1" ] && [ "$AUSDRUECKLICH" != "1" ]; then
+        echo "FEHLER: dieses Skript liegt nicht unter"
+        echo "FEHLER: $LBHOMEDIR/bin/plugins/$PNAME - aus einem ausgepackten"
+        echo "FEHLER: Archiv oder einer Kopie wird nichts gestartet oder angehalten"
+        echo "FEHLER: (ausser mit LBHOMEDIR UND LBPPLUGINDIR in der Umgebung)."
+        return 1
+    fi
+    return 0
+}
 
 PDATA="$LBHOMEDIR/data/plugins/$PNAME"
 PLOG="$LBHOMEDIR/log/plugins/$PNAME"
@@ -130,6 +173,10 @@ LOGDATEI="$PLOG/heimkino.log"
 # Regel: genau einer schreibt in eine Protokolldatei.
 STARTLOG="$PLOG/heimkino_start.log"
 SKRIPT="$SELF/hk_service.py"
+# Ausdruecklich aus einer Kopie: der Dienst der Anlage (siehe AUSDRUECKLICH).
+if [ "$INSTALLIERT" != "1" ] && [ "$AUSDRUECKLICH" = "1" ]; then
+    SKRIPT="$LBHOMEDIR/bin/plugins/$PNAME/hk_service.py"
+fi
 CFG="$PCONFIG/heimkino.cfg"
 
 # Angelegt wird erst beim START, nicht bei jedem Aufruf.
@@ -157,23 +204,59 @@ eingeschaltet() {
     esac
 }
 
+# Ist diese Prozessnummer UNSER Dienst? Argumentweise nach Regeln/06:
+# GENAU zwei Argumente, argv[0] ein python-Interpreter, argv[1] zeichengenau
+# DIESES hk_service.py (ein relativer Start wird gegen das Arbeitsverzeichnis
+# DES PROZESSES aufgeloest), und der Prozess gehoert diesem Benutzer.
+#
+# Bis 1.3.13 genuegte "eines der ersten drei Argumente heisst hk_service.py".
+# Ein Koeder "python3 <anderer Ordner>/hk_service.py --halten", auf den die
+# PID-Datei zeigte, galt damit als Dienst: "status" meldete "laeuft", und
+# "stop" beendete ihn (in WSL gemessen, Pruefung-Heimkino-1.3.14, Faelle D4
+# und D5; Muster 4 der Nachlese). Bauart wie hk_dienste_finden() in
+# uninstall/uninstall und postupgrade.sh.
+ist_dienst() {
+    hk_p="$1"
+    case "$hk_p" in ''|*[!0-9]*) return 1 ;; esac
+    [ -r "/proc/$hk_p/cmdline" ] || return 1
+    [ "$(stat -c %u "/proc/$hk_p" 2>/dev/null)" = "$(id -u)" ] || return 1
+    hk_n=0
+    hk_treffer=0
+    while IFS= read -r hk_arg; do
+        hk_n=$((hk_n + 1))
+        if [ "$hk_n" = 1 ]; then
+            case "${hk_arg##*/}" in
+                python|python3|python3.*) ;;
+                *) return 1 ;;
+            esac
+        elif [ "$hk_n" = 2 ]; then
+            case "$hk_arg" in
+                /*) hk_voll=$(readlink -f "$hk_arg" 2>/dev/null) ;;
+                *)  hk_voll=$(readlink -f "$(readlink -f "/proc/$hk_p/cwd" 2>/dev/null)/$hk_arg" 2>/dev/null) ;;
+            esac
+            [ -n "$hk_voll" ] && [ "$hk_voll" = "$(readlink -f "$SKRIPT")" ] && hk_treffer=1
+        fi
+    done <<HK_ARGUMENTE
+$(tr '\0' '\n' < "/proc/$hk_p/cmdline" 2>/dev/null)
+HK_ARGUMENTE
+    [ "$hk_treffer" = 1 ] && [ "$hk_n" = 2 ]
+}
+
+# Alle eigenen Dienste, auch einer ohne PID-Datei (Waise: purge_installation
+# loescht data/plugins/<ordner> samt PID-Datei, der Prozess laeuft weiter).
+# Bis 1.3.13 hielt "stop" nur den Prozess aus der PID-Datei an; eine Waise
+# lief weiter (in WSL gemessen, Pruefung-Heimkino-1.3.14, Fall D6).
+dienste() {
+    for hk_d in /proc/[0-9]*; do
+        grep -qaF "hk_service.py" "$hk_d/cmdline" 2>/dev/null || continue
+        ist_dienst "${hk_d#/proc/}" && echo "${hk_d#/proc/}"
+    done
+}
+
 laeuft() {
     [ -f "$PID" ] || return 1
     P=$(cat "$PID" 2>/dev/null)
-    [ -n "$P" ] || return 1
-    kill -0 "$P" 2>/dev/null || return 1
-    # Nummernrecycling ausschliessen: der Prozess muss unser Skript sein.
-    #
-    # Argumentweise pruefen, nicht die ganze Befehlszeile durchsuchen:
-    # /proc/<pid>/cmdline trennt die Argumente mit Nullbytes, und ein grep
-    # darueber traefe auch einen Editor mit geoeffneter hk_service.py. Beim
-    # Erproben der Python-Fassung ist genau dieser Fall aufgetreten.
-    # Jede Zeile ist EIN Argument; sed schneidet den Pfad ab, grep -x
-    # vergleicht die ganze Zeile. Damit trifft es "hk_service.py" nur als
-    # eigenes Argument, nicht als Teilzeichenkette irgendwo.
-    NAMEN=$(tr '\0' '\n' < "/proc/$P/cmdline" 2>/dev/null | sed -n '1,3p' | sed 's#.*/##')
-    echo "$NAMEN" | grep -qx 'hk_service.py' || return 1
-    return 0
+    ist_dienst "$P"
 }
 
 # Laeuft gerade eine Aktualisierung dieses Plugins?
@@ -196,23 +279,34 @@ laeuft() {
 marke_gilt() {
     [ "${HK_START_TROTZ_MARKE:-0}" = "1" ] && return 1
     [ -f "$MARKE" ] || return 1
-    SEIT=$(cat "$MARKE" 2>/dev/null)
-    case "$SEIT" in ''|*[!0-9]*) return 1 ;; esac
     # Die Uhr wird gemessen, nicht angenommen: liefert "date" nichts - unter
     # Last kann ein fork scheitern -, dann rechnete die Schale mit einer leeren
     # Zeichenkette, das Alter wuerde negativ, die Bedingung fiele durch, und
     # der Dienst startete mitten in der Aktualisierung. Ein Schutz faellt
-    # geschlossen aus (CLAUDE.md 4): ohne lesbare Uhr gilt die Marke.
+    # geschlossen aus (CLAUDE.md 4): ohne lesbare Uhr gilt eine LIEGENDE
+    # Marke - auch eine unlesbare. Die Uhr wird deshalb VOR dem Inhalt
+    # geprueft; bis 1.3.13 stand es umgekehrt, und ohne Uhr liess eine
+    # unlesbare Marke den Start durch (in WSL gemessen,
+    # Pruefung-Heimkino-1.3.14, Fall M3; Bauart Sprachsteuerung 0.11.9).
     JETZT=$(date +%s 2>/dev/null)
-    case "$JETZT" in ''|*[!0-9]*) JETZT="" ;; esac
-    [ -z "$JETZT" ] && return 0
+    case "$JETZT" in ''|*[!0-9]*) return 0 ;; esac
+    SEIT=$(cat "$MARKE" 2>/dev/null)
+    case "$SEIT" in ''|*[!0-9]*) return 1 ;; esac
     ALTER=$(( JETZT - SEIT ))
-    [ "$ALTER" -ge 0 ] && [ "$ALTER" -lt 3600 ]
+    # 300 s Vorlauf: eine Marke, die ein paar Minuten "aus der Zukunft"
+    # stammt, zeugt von einer nachgestellten Uhr, nicht von einem fremden
+    # Vorgang. Bis 1.3.13 galt sie dann nicht, und der Dienst startete mitten
+    # in der Aktualisierung (Fall M1; Muster 8 der Nachlese).
+    [ "$ALTER" -ge -300 ] && [ "$ALTER" -lt 3600 ]
 }
 
 starten() {
-    if laeuft; then
-        echo "laeuft bereits (PID $(cat "$PID"))"
+    vollzug_erlaubt || return 1
+    # Auch eine Waise ohne PID-Datei zaehlt als laufender Dienst - sonst
+    # liefen danach zwei (seit 1.3.14, siehe dienste()).
+    HK_LAUFEND=$(dienste | tr '\n' ' ')
+    if [ -n "$HK_LAUFEND" ]; then
+        echo "laeuft bereits (PID ${HK_LAUFEND% })"
         return 0
     fi
     # VOR dem Sollmerker und vor jeder anderen Datei im Datenordner: was in
@@ -234,16 +328,6 @@ starten() {
         echo "FEHLER: $SKRIPT fehlt. Plugin neu installieren."
         return 1
     fi
-    # Ein Schutz faellt geschlossen aus (CLAUDE.md 4): wer aus einem
-    # Pruefarchiv oder einem ausgepackten Archiv startet, wuerde in die
-    # laufende Anlage schreiben - unter einem Ordnernamen, den niemand
-    # gewollt hat.
-    if [ "$INSTALLIERT" != "1" ]; then
-        echo "FEHLER: dieses Skript liegt nicht unter"
-        echo "FEHLER: $LBHOMEDIR/bin/plugins/$PNAME - aus einem ausgepackten"
-        echo "FEHLER: Archiv wird nichts gestartet."
-        return 1
-    fi
     ordner_anlegen
     touch "$SOLL"
     # Die Ausgabe des Dienstes geht in die Startdatei, NICHT in das Protokoll:
@@ -261,22 +345,32 @@ starten() {
 }
 
 anhalten() {
+    vollzug_erlaubt || return 1
     rm -f "$SOLL"
-    if ! laeuft; then
+    HK_ZIELE=$(dienste)
+    if [ -z "$HK_ZIELE" ]; then
         echo "laeuft nicht"
         return 0
     fi
-    P=$(cat "$PID")
     # SIGTERM, nicht SIGKILL: der Dienst meldet beim Beenden noch
     # service/online = 0 per MQTT, damit Loxone den Ausfall sieht.
-    kill "$P" 2>/dev/null
+    for P in $HK_ZIELE; do
+        kill "$P" 2>/dev/null
+    done
     for i in 1 2 3 4 5 6 7 8 9 10; do
-        laeuft || break
+        [ -n "$(dienste)" ] || break
         sleep 1
     done
-    if laeuft; then
+    # Vor JEDEM Signal wird geprueft, auch vor kill -9: dienste() liefert
+    # nur, was argumentweise noch unser Dienst ist - nie nach blossem kill -0.
+    for P in $(dienste); do
         kill -9 "$P" 2>/dev/null
-        sleep 1
+    done
+    sleep 1
+    HK_UEBRIG=$(dienste | tr '\n' ' ')
+    if [ -n "$HK_UEBRIG" ]; then
+        echo "FEHLER: laesst sich nicht anhalten (PID ${HK_UEBRIG% })"
+        return 1
     fi
     echo "angehalten"
     return 0
@@ -285,10 +379,19 @@ anhalten() {
 case "$1" in
     start)   starten ;;
     stop)    anhalten ;;
-    restart) anhalten; sleep 1; starten ;;
+    restart) anhalten || exit 1; sleep 1; starten ;;
     status)
+        if [ -z "$LBHOMEDIR" ]; then
+            echo "unbekannt - keine LoxBerry-Wurzel gefunden"
+            exit 1
+        fi
         if laeuft; then
             echo "laeuft $(cat "$PID")"
+            exit 0
+        fi
+        HK_LAUFEND=$(dienste | tr '\n' ' ')
+        if [ -n "$HK_LAUFEND" ]; then
+            echo "laeuft ${HK_LAUFEND% } (ohne PID-Datei)"
             exit 0
         fi
         echo "gestoppt"
@@ -302,7 +405,8 @@ case "$1" in
         # Nur neu starten, wenn der Dienst laufen SOLL und das Plugin
         # eingeschaltet ist. Ein bewusst angehaltener Dienst bleibt
         # angehalten.
-        if [ -f "$SOLL" ] && eingeschaltet && ! laeuft; then
+        vollzug_erlaubt >&2 || exit 1
+        if [ -f "$SOLL" ] && eingeschaltet && [ -z "$(dienste)" ]; then
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waechter: Dienst lief nicht, wird neu gestartet." >> "$LOGDATEI"
             starten >> "$STARTLOG" 2>&1
         fi

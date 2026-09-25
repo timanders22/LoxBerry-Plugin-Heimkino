@@ -105,6 +105,14 @@ def _wert(rest, was):
 
 
 def hauptteil(argumente):
+    # Ohne Anlage nichts schalten und nichts anlegen - VOR dem Protokoll
+    # (Muster 1-3 der Nachlese, seit 1.3.14). Bis 1.3.13 legte ein Aufruf
+    # ohne Wurzel log/plugins/heimkino im Arbeitsverzeichnis an, und eine
+    # Kopie unter einer echten Wurzel schrieb Auftraege in die Anlage.
+    if not gemein.wurzel_oder_abbruch("hk_cmd.py"):
+        print("Fehler: keine LoxBerry-Installation gefunden (ausgepacktes Archiv "
+              "oder Kopie) - es wurde nichts geschaltet.")
+        return 1
     log = gemein.protokoll_einrichten("heimkino-cmd")
     cfg, lage = gemein.config_lesen(log)
     if lage == "keine_vorgaben":
@@ -226,6 +234,15 @@ def hauptteil(argumente):
         elif befehl in ("kino-an", "kino-aus"):
             if not gemein.ja(cfg, "szene", "aktiv"):
                 print("Die Kino-Szene ist in den Einstellungen abgeschaltet.")
+                return 1
+            # Die Szene fuehrt der Dienst aus. Ohne ihn wird der Auftrag
+            # abgewiesen, nicht eingereiht: bis 1.3.13 lag er, bis der Dienst
+            # wieder lief, und die Szene startete dann - womoeglich Stunden
+            # spaeter (Muster 5 der Nachlese; Bauart BatterieBMS 0.9.25).
+            if not gemein.dienst_laeuft():
+                log.warning("Szene %s abgewiesen: der Dienst laeuft nicht.", befehl)
+                print("Szene %s abgewiesen: der Dienst laeuft nicht. Im Reiter "
+                      "Einstellungen starten oder das Protokoll ansehen." % befehl)
                 return 1
             # Nur den Auftrag hinterlegen - siehe Kopf dieser Datei.
             if not gemein.auftrag_stellen(befehl, "szene", 600):
