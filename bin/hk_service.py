@@ -36,6 +36,7 @@ import json
 import os
 import signal
 import sys
+import threading
 import time
 
 import hk_common as gemein
@@ -59,11 +60,59 @@ def _abbruch(nummer, rahmen):        # noqa: ARG001
 
 
 def _warten(sekunden):
-    """In Ein-Sekunden-Schritten warten, damit ein Stopp sofort greift."""
-    ende = time.time() + sekunden
-    while LAEUFT and time.time() < ende:
-        time.sleep(min(1.0, max(0.0, ende - time.time())))
+    """In Ein-Sekunden-Schritten warten, damit ein Stopp sofort greift.
+
+    Mit time.monotonic() seit 1.3.15 (C11): bis 1.3.14 rechnete die Schleife
+    mit time.time(), und ein Uhrsprung rueckwaerts verlaengerte die Wartezeit
+    um den Sprung (Befund code 13).
+    """
+    ende = time.monotonic() + sekunden
+    while LAEUFT and time.monotonic() < ende:
+        time.sleep(min(1.0, max(0.0, ende - time.monotonic())))
     return LAEUFT
+
+
+class Lebenszeichen:
+    """service/zeitstempel weiter senden, solange eine Szene laeuft (seit 1.3.15, M7).
+
+    Die Kino-Szene laeuft im Hauptdurchgang und wartet auf den Beamer (bis
+    600 s) und die Konsole (bis 600 s). Bis 1.3.14 stand das Lebenszeichen
+    in dieser Zeit still; gemessen: 13,5 s Luecke bei einem Takt von 1,5 s
+    (Befund mqtt 7). Die Themenliste sagt aber "Bleibt der Wert stehen,
+    arbeitet der Dienst nicht mehr" - eine Ueberwachung in Loxone meldete bei
+    jedem "Kino an" einen toten Dienst. Ein eigener Faden sendet deshalb
+    waehrend der Szene alle Takt/2 Sekunden (hoechstens 30) den Zeitstempel
+    und frischt die Aenderungszeit von zustand.json auf, an der der Waechter
+    einen haengenden Dienst erkennt (C11). Er haengt an keinem Geraeteaufruf.
+    """
+
+    def __init__(self, melder, takt):
+        self.melder = melder
+        self.abstand = max(0.5, min(30.0, float(takt) / 2.0))
+        self._halt = threading.Event()
+        self._faden = None
+
+    def _lauf(self):
+        while not self._halt.wait(self.abstand):
+            try:
+                self.melder.sende("service/zeitstempel", int(time.time()))
+            except Exception:            # noqa: BLE001 - das Lebenszeichen darf nie stoeren
+                pass
+            try:
+                os.utime(P["zustand"], None)
+            except OSError:
+                pass
+
+    def __enter__(self):
+        self._faden = threading.Thread(target=self._lauf, name="lebenszeichen", daemon=True)
+        self._faden.start()
+        return self
+
+    def __exit__(self, art, wert, spur):
+        self._halt.set()
+        if self._faden is not None:
+            self._faden.join(5)
+        return False
 
 
 # --------------------------------------------------------------------------
@@ -212,8 +261,11 @@ def geheimnis_restlaufzeit(cfg, log=None, meldungen=None):
 
 
 def xbox_abfragen(cfg, log, meldungen):
+    # "erreichbar" seit 1.3.15 (M3): ist die Abfrage bei der Cloud gelungen?
+    # Bis 1.3.14 gab es fuer die Xbox keinen Merker, an dem Loxone einen
+    # Ausfall erkennen konnte - nur den Text last_error (Befund mqtt 3).
     ergebnis = {"aktiv": False, "status": "unbekannt", "angemeldet": False,
-                "fehler": "", "quelle": "", "name": ""}
+                "fehler": "", "quelle": "", "name": "", "erreichbar": False}
     if not gemein.ja(cfg, "xbox", "aktiv"):
         return ergebnis
     ergebnis["aktiv"] = True
@@ -234,6 +286,7 @@ def xbox_abfragen(cfg, log, meldungen):
             return ergebnis
         auskunft = wolke.status(kennung)
         ergebnis["status"] = auskunft["status"]
+        ergebnis["erreichbar"] = True
         ergebnis["quelle"] = auskunft.get("quelle", "")
         # Der Name kam schon bisher mit und wurde weggeworfen.
         ergebnis["name"] = auskunft.get("name", "")
@@ -324,10 +377,10 @@ def _warten_auf_beamer(cfg, sekunden):
     """Warten, bis der Steuerport antwortet. Gibt die Dauer oder None zurueck."""
     ip = gemein.wert(cfg, "beamer", "ip")
     port = gemein.zahl(cfg, "beamer", "port", 9761, 1, 65535)
-    anfang = time.time()
-    while LAEUFT and (time.time() - anfang) < sekunden:
+    anfang = time.monotonic()
+    while LAEUFT and (time.monotonic() - anfang) < sekunden:
         if gemein.erreichbarkeit(ip, port, 2, P["sperre"], 5)[0]:
-            return time.time() - anfang
+            return time.monotonic() - anfang
         if not _warten(3):
             break
     return None
@@ -335,12 +388,12 @@ def _warten_auf_beamer(cfg, sekunden):
 
 def _warten_auf_xbox(cfg, log, sekunden):
     kennung = gemein.wert(cfg, "xbox", "geraete_id")
-    anfang = time.time()
-    while LAEUFT and (time.time() - anfang) < sekunden:
+    anfang = time.monotonic()
+    while LAEUFT and (time.monotonic() - anfang) < sekunden:
         try:
             from xbox_cloud import XboxCloud
             if XboxCloud(P["auth"], log).status(kennung)["status"] in ("On", "on"):
-                return time.time() - anfang
+                return time.monotonic() - anfang
         except Exception:                # noqa: BLE001
             pass
         if not _warten(5):
@@ -358,7 +411,7 @@ def szene_ausfuehren(aktion, cfg, melder, log):
     Jeder Schritt geht als szene/schritt hinaus, damit in der App sichtbar
     ist, wo es klemmt.
     """
-    anfang = time.time()
+    anfang = time.monotonic()
     beamer_an = gemein.ja(cfg, "beamer", "aktiv")
     xbox_an = gemein.ja(cfg, "xbox", "aktiv")
     w_beamer = gemein.zahl(cfg, "szene", "warten_beamer", 120, 10, 600)
@@ -439,7 +492,7 @@ def szene_ausfuehren(aktion, cfg, melder, log):
         else:
             fehler.append("unbekannte Szene %r" % aktion)
     finally:
-        dauer = int(time.time() - anfang)
+        dauer = int(time.monotonic() - anfang)
         if not LAEUFT:
             ergebnis = "%s abgebrochen - der Dienst wurde beendet" % aktion
         elif fehler:
@@ -474,6 +527,15 @@ def mqtt_werte(beamer, xbox, ablauf_datum, ablauf_tage, jetzt,
         fehler.append("beamer: " + beamer["fehler"])
     if xbox["fehler"]:
         fehler.append("xbox: " + xbox["fehler"])
+    # Ohne eingetragenes Ablaufdatum: 9999 statt "-" (seit 1.3.15, M5).
+    # Loxone liest "-" an einem Analogeingang als 0, und 0 hiesse "laeuft
+    # heute ab" - eine Warnlogik schlug bei jedem Anwender ohne Datum an
+    # (Befund mqtt 5). Ob ein Datum eingetragen ist, sagt daneben
+    # xbox/geheimnis_datum_bekannt (0/1). Das Thema bleibt fluechtig: es
+    # zaehlt taeglich herunter.
+    datum_bekannt = 0 if ablauf_tage == "" else 1
+    if ablauf_tage == "":
+        ablauf_tage = GEHEIMNIS_OHNE_DATUM
     return {
         "service/online": 1,
         "service/zeitstempel": int(jetzt),
@@ -489,6 +551,7 @@ def mqtt_werte(beamer, xbox, ablauf_datum, ablauf_tage, jetzt,
         "beamer/betriebsstunden": b_stunden,
         "beamer/laufzeit_heute": b_heute,
         "xbox/aktiv": xbox["aktiv"],
+        "xbox/erreichbar": 1 if xbox.get("erreichbar") else 0,
         "xbox/status": xbox["status"],
         "xbox/an": 1 if xbox["status"] in ("On", "on") else 0,
         "xbox/name": xbox.get("name", ""),
@@ -497,6 +560,7 @@ def mqtt_werte(beamer, xbox, ablauf_datum, ablauf_tage, jetzt,
         "xbox/laufzeit_heute": x_heute,
         "xbox/geheimnis_ablauf": ablauf_datum,
         "xbox/geheimnis_tage": ablauf_tage,
+        "xbox/geheimnis_datum_bekannt": datum_bekannt,
     }
 
 
@@ -507,32 +571,116 @@ EREIGNIS_THEMEN = ("beamer/letzte_aktion", "xbox/letzte_aktion",
                    "szene/laeuft", "szene/schritt", "szene/ergebnis")
 
 
-def platzhalter(beamer, xbox):
-    """Die Themen, deren Wert in diesem Durchgang ein PLATZHALTER ist.
+# Ohne eingetragenes Ablaufdatum geht xbox/geheimnis_tage als 9999 hinaus
+# (seit 1.3.15, M5); daneben xbox/geheimnis_datum_bekannt = 0.
+GEHEIMNIS_OHNE_DATUM = 9999
 
-    Ein Platzhalter entsteht, wenn der Dienst das Geraet nicht befragen
-    konnte (eigener Fehlschlag, Geraet abgeschaltet, nicht angemeldet) und
-    trotzdem etwas senden muss - "unbekannt", 0, -1, "-". Er geht weiter an
-    die Abonnenten, damit Loxone ihn wie bisher sieht, aber OHNE Retain: der
-    Broker behaelt den letzten Geraetestand (Muster 12 der Nachlese, Bauart
-    KODI-NG 1.2.10 und Robonect 1.1.12). Bis 1.3.13 ging "unbekannt"
-    retained ueber den letzten gemessenen Stand.
+# Einmal "-" (Text) bzw. -1 (Zahl) retained fuer die Zustaende eines
+# abgeschalteten Geraets (Entscheidung 5 und 8, seit 1.3.15, M4). Danach
+# gehen fuer dieses Geraet keine Themen mehr hinaus ausser <geraet>/aktiv.
+ENTFERNT = {
+    "beamer": {"beamer/status": "-", "beamer/an": -1, "beamer/app": "-",
+               "beamer/lautstaerke": -1, "beamer/stumm": -1,
+               "beamer/betriebsstunden": -1},
+    "xbox": {"xbox/status": "-", "xbox/an": -1, "xbox/name": "-",
+             "xbox/betriebsstunden": -1, "xbox/geheimnis_ablauf": "-",
+             "xbox/geheimnis_datum_bekannt": -1},
+}
 
-    "aus" nach einer ABGEWIESENEN Verbindung ist kein Platzhalter: der Beamer
-    weist sie ab, weil er aus ist - das sagt das Geraet.
+
+def ausfall_themen(beamer, xbox):
+    """Die Zustaende, die in diesem Durchgang NICHT hinausgehen (seit 1.3.15, M3).
+
+    Entscheidung 8 (30.09.2026, gilt fuer alle Linien): faellt ein Geraet
+    zeitweise aus, bleiben die retained Zustaende stehen, und nur
+    erreichbar/ok geht auf 0. Bis 1.3.14 gingen stattdessen Platzhalter
+    hinaus - "unbekannt", beamer/an 0, xbox/an 0 - zwar ohne Retain, aber an
+    jeden Abonnenten: Loxone bekam bei jedem Ausfall "Beamer aus" und
+    "Konsole aus", nach einem Neustart des Gateways wieder die behaltene 1
+    (gemessen, Befund mqtt 3). Jetzt wird im Ausfall gar nicht gesendet; in
+    Loxone gilt ein Zustand nur zusammen mit beamer/erreichbar bzw.
+    xbox/erreichbar.
+
+    "aus" nach einer ABGEWIESENEN Verbindung ist kein Ausfall: der Beamer
+    weist sie ab, weil er aus ist - das sagt das Geraet. Lautstaerke und
+    Stummschaltung gehen dann als -1 retained hinaus: das Feld liefert der
+    gelungene Abruf nicht (Entscheidung 8).
     """
-    raus = set()
-    if beamer.get("status") == "unbekannt":
-        raus.update(("beamer/status", "beamer/an", "beamer/app"))
-    if beamer.get("lautstaerke", -1) == -1:
-        raus.add("beamer/lautstaerke")
-    if beamer.get("stumm", -1) == -1:
-        raus.add("beamer/stumm")
-    if xbox.get("status") == "unbekannt":
-        raus.update(("xbox/status", "xbox/an", "xbox/name"))
-    elif not xbox.get("name"):
-        raus.add("xbox/name")
-    return raus
+    weg = set()
+    if beamer.get("aktiv") and beamer.get("status") == "unbekannt":
+        weg.update(("beamer/status", "beamer/an", "beamer/app",
+                    "beamer/lautstaerke", "beamer/stumm"))
+    if xbox.get("aktiv") and xbox.get("status") == "unbekannt":
+        weg.update(("xbox/status", "xbox/an", "xbox/name"))
+    return weg
+
+
+def werte_fuer_versand(werte, beamer, xbox, entfernt_gemeldet):
+    """Aus den Werten eines Durchgangs das machen, was hinausgeht.
+
+    entfernt_gemeldet: Menge der Geraete, fuer die "-"/-1 schon gesendet ist
+    (sie lebt im Dienst; nach einem Neustart geht es genau einmal wieder).
+    """
+    aus = dict(werte)
+    for thema in ausfall_themen(beamer, xbox):
+        aus.pop(thema, None)
+    for geraet, daten in (("beamer", beamer), ("xbox", xbox)):
+        if daten.get("aktiv"):
+            entfernt_gemeldet.discard(geraet)
+            continue
+        for thema in list(aus):
+            if thema.startswith(geraet + "/") and thema != geraet + "/aktiv":
+                del aus[thema]
+        if geraet not in entfernt_gemeldet:
+            aus.update(ENTFERNT[geraet])
+            entfernt_gemeldet.add(geraet)
+    return aus
+
+
+def altwerte_abraeumen(praefix, log):
+    """Behaltene Altwerte der Themen OHNE retain abraeumen - nur was wirklich
+    da ist, mit Nachlesen, einmal je Prozess (seit 1.3.15, M6).
+
+    Bis 1.3.14 gingen dafuer bei jeder Verbindung leere retained Nutzlasten
+    hinaus (siehe Melder._bei_verbindung). Ein Broker, der nicht zu fragen
+    ist, heisst nicht "nichts belegt" - dann steht es im Protokoll.
+    """
+    behalten = gemein.retain_themen()
+    namen = [str(t.get("thema")) for t in gemein.themen()
+             if t.get("thema") and str(t.get("thema")) not in behalten]
+    erg = gemein.broker_leeren(praefix, namen)
+    if erg["rc"] == 0:
+        if erg["geleert"]:
+            log.info("MQTT: %d behaltene Altwerte ohne Retain unter %s/ abgeraeumt "
+                     "und nachgelesen: %s", len(erg["geleert"]), praefix,
+                     ", ".join(erg["geleert"]))
+    else:
+        log.info("MQTT: behaltene Altwerte unter %s/ nicht abgeraeumt (%s).", praefix,
+                 erg["grund"] or ("noch da: " + ", ".join(erg["rest"])))
+    return erg
+
+
+def praefixe_aufraeumen(aktuell, log):
+    """Jedes gemerkte Praefix ausser dem aktuellen abraeumen (seit 1.3.15, M1).
+
+    Vergessen wird ein Praefix erst, wenn das Abraeumen samt Nachlesen
+    gelungen ist; sonst versucht es der naechste Start wieder.
+    """
+    namen = [str(t.get("thema")) for t in gemein.themen() if t.get("thema")]
+    for alt in gemein.praefixe_lesen():
+        if alt == aktuell:
+            continue
+        erg = gemein.broker_leeren(alt, namen)
+        if erg["rc"] == 0:
+            gemein.praefix_vergessen(alt)
+            log.info("Themenpraefix %s gilt nicht mehr: %d behaltene Themen "
+                     "geloescht und nachgelesen.", alt, len(erg["geleert"]))
+        else:
+            log.warning("Themenpraefix %s gilt nicht mehr, die behaltenen Werte "
+                        "liessen sich noch nicht abraeumen (%s) - naechster "
+                        "Versuch beim naechsten Start.", alt,
+                        erg["grund"] or ("noch da: " + ", ".join(erg["rest"])))
+    gemein.praefix_merken(aktuell)
 
 
 def _alle_themen():
@@ -540,7 +688,7 @@ def _alle_themen():
                    "app": "", "grund": "aus", "grund_text": "", "fehler": "",
                    "lautstaerke": -1, "stumm": -1}
     leer_xbox = {"aktiv": False, "status": "unbekannt", "angemeldet": False,
-                 "fehler": "", "quelle": "", "name": ""}
+                 "fehler": "", "quelle": "", "name": "", "erreichbar": False}
     return sorted(list(mqtt_werte(leer_beamer, leer_xbox, "", "", 0).keys())
                   + list(EREIGNIS_THEMEN))
 
@@ -617,6 +765,10 @@ def hauptteil():
                  (" " + fassung) if fassung else "", takt, melder.praefix)
         melder.sende("service/online", 1)
         melder.sende("szene/laeuft", 0)
+        if melder.aktiv:
+            praefixe_aufraeumen(melder.praefix, log)
+            altwerte_abraeumen(melder.praefix, log)
+        entfernt_gemeldet = set()
 
         # Ein Auftrag, der beim Start schon laenger als AUFTRAG_VERALTET
         # liegt, wurde gestellt, als kein Dienst lief - er wird verworfen,
@@ -671,6 +823,7 @@ def hauptteil():
                         alter_praefix,
                         [str(t.get("thema")) for t in gemein.themen()])
                     if leer["rc"] == 0:
+                        gemein.praefix_vergessen(alter_praefix)
                         log.info("Themenpraefix geaendert: %s -> %s. Unter %s/ "
                                  "sind %d behaltene Themen geloescht und "
                                  "nachgelesen.", alter_praefix, neuer,
@@ -683,12 +836,16 @@ def hauptteil():
                                     leer["grund"] or ("noch da: " + ", ".join(leer["rest"])))
                     melder = gemein.Melder(neuer, log,
                                            gemein.ja(cfg, "heimkino", "mqtt"))
+                    if melder.aktiv:
+                        gemein.praefix_merken(melder.praefix)
+                    entfernt_gemeldet = set()
 
             # --- Auftrag: Szene sofort ausfuehren, sonst spaeter nachfassen.
             auftrag = gemein.auftrag_lesen()
             if auftrag and str(auftrag.get("aktion", "")).startswith("kino-"):
                 gemein.auftrag_loeschen()
-                szene_ausfuehren(str(auftrag["aktion"]), cfg, melder, log)
+                with Lebenszeichen(melder, takt):
+                    szene_ausfuehren(str(auftrag["aktion"]), cfg, melder, log)
                 auftrag = None
 
             beamer = beamer_abfragen(cfg, log, meldungen, letzter_beamer)
@@ -739,11 +896,10 @@ def hauptteil():
                 "takt": takt,
             })
 
-            melder.sende_viele(mqtt_werte(beamer, xbox, ablauf_datum,
-                                          ablauf_tage, jetzt,
-                                          b_stunden, b_heute,
-                                          x_stunden, x_heute),
-                               platzhalter(beamer, xbox))
+            melder.sende_viele(werte_fuer_versand(
+                mqtt_werte(beamer, xbox, ablauf_datum, ablauf_tage, jetzt,
+                           b_stunden, b_heute, x_stunden, x_heute),
+                beamer, xbox, entfernt_gemeldet))
 
             # Die Protokolldatei liegt auf einer Ramdisk. Ohne Kappung frisst
             # sie Arbeitsspeicher, bis nichts mehr geht.
@@ -790,23 +946,32 @@ def mqtt_leeren():
     cfg, _lage = gemein.config_lesen()
     praefix = gemein.praefix_saeubern(
         gemein.wert(cfg, "heimkino", "themenpraefix", "heimkino"))
-    erg = gemein.broker_leeren(praefix, namen)
-    if erg["rc"] == 2:
-        print("<WARNING> MQTT: behaltene Themen unter %s/ nicht geleert - %s. "
-              "Der Broker war nicht zu fragen; ob dort noch etwas steht, ist "
-              "unbekannt. Von Hand: mosquitto_pub -r -n -t %s/<thema>"
-              % (praefix, erg["grund"], praefix))
-        return 2
-    if erg["rest"]:
-        print("<WARNING> MQTT: %d behaltene Themen stehen nach dem Loeschen noch "
-              "im Broker: %s" % (len(erg["rest"]), ", ".join(erg["rest"])))
-        return 1
-    if erg["geleert"]:
-        print("<OK> MQTT: %d behaltene Themen unter %s/ geloescht und nachgelesen "
-              "(%s)." % (len(erg["geleert"]), praefix, ", ".join(erg["geleert"])))
-    else:
-        print("<OK> MQTT: unter %s/ stand nichts behalten (nachgelesen)." % praefix)
-    return 0
+    # Seit 1.3.15 (M1) auch jedes gemerkte Praefix, unter dem der Dienst
+    # einmal gesendet hat - bis 1.3.14 erreichte die Deinstallation ein altes
+    # Praefix nie (Befund mqtt 1, Fall U2).
+    alle = [praefix] + [p for p in gemein.praefixe_lesen() if p != praefix]
+    schlimmster = 0
+    for p in alle:
+        erg = gemein.broker_leeren(p, namen)
+        if erg["rc"] == 2:
+            print("<WARNING> MQTT: behaltene Themen unter %s/ nicht geleert - %s. "
+                  "Der Broker war nicht zu fragen; ob dort noch etwas steht, ist "
+                  "unbekannt. Von Hand: mosquitto_pub -r -n -t %s/<thema>"
+                  % (p, erg["grund"], p))
+            schlimmster = 2
+            continue
+        if erg["rest"]:
+            print("<WARNING> MQTT: %d behaltene Themen stehen nach dem Loeschen noch "
+                  "im Broker: %s" % (len(erg["rest"]), ", ".join(erg["rest"])))
+            schlimmster = max(schlimmster, 1)
+            continue
+        gemein.praefix_vergessen(p)
+        if erg["geleert"]:
+            print("<OK> MQTT: %d behaltene Themen unter %s/ geloescht und nachgelesen "
+                  "(%s)." % (len(erg["geleert"]), p, ", ".join(erg["geleert"])))
+        else:
+            print("<OK> MQTT: unter %s/ stand nichts behalten (nachgelesen)." % p)
+    return schlimmster
 
 
 if __name__ == "__main__":

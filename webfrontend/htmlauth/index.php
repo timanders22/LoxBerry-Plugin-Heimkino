@@ -32,6 +32,22 @@ $hk_saved   = false;
 $hk_fehler  = array();   // alle Beanstandungen, nicht nur die letzte
 $hk_hinweis = array();
 
+/* ==================================================================
+ * Beschaedigte Konfiguration - VOR dem Lesen und vor dem Token (seit 1.3.15)
+ *
+ * Bis 1.3.14 genuegte ein Seitenaufruf mit "[beamer" statt "[beamer]": die
+ * Oberflaeche las die Vorgaben, wuerfelte ein neues Aktionstoken und schrieb
+ * die Werkseinstellungen in die Datei. Jetzt wird bei einer beschaedigten
+ * Datei nichts geschrieben; traegt die Zweitschrift Inhalt, wird geheilt
+ * (der Stand bleibt als .kaputt liegen), sonst bleibt alles, wie es ist.
+ * ================================================================== */
+list($hk_heil, $hk_heil_pfad) = hk_config_heilen();
+if ($hk_heil === 'geheilt') {
+    $hk_fehler[] = hk_tf('MELD.CFG_GEHEILT', array('%1' => hk_e($hk_heil_pfad)));
+} elseif ($hk_heil !== 'nichts') {
+    $hk_fehler[] = hk_tf('FEHLER.CFG_KAPUTT', array('%1' => hk_e($hk_heil_pfad)));
+}
+
 $hk_cfg = hk_config_read();
 
 /* ==================================================================
@@ -42,7 +58,7 @@ $hk_cfg = hk_config_read();
  * Formularmerkmals unten, muss also VOR dem Wachposten feststehen.
  * ================================================================== */
 if (trim((string) hk_cfg($hk_cfg, 'heimkino', 'aktionstoken', '')) === ''
-    && hk_config_lage() !== 'keine_vorgaben') {
+    && in_array(hk_config_lage(), array('fehlt', 'ok'), true)) {
     try {
         $hk_cfg['heimkino']['aktionstoken'] = hk_token_erzeugen();
         hk_config_write($hk_cfg);
@@ -119,6 +135,13 @@ if (isset($_POST['activetab']) && is_string($_POST['activetab'])
  *
  * Reihenfolge: Bibliothek, Konfiguration, Wachposten, Reiterwahl,
  * ALLE Handler samt Downloads, dann erst lbheader(), dann HTML.
+ *
+ * Seit 1.3.15 (O1, Regeln/04) endet JEDER POST mit einer Umleitung 303 auf
+ * index.php?form=<reiter>; Meldungen und das Ergebnis eines Testknopfs
+ * reisen als Einmalmeldung. Bis 1.3.14 antwortete jeder POST mit 200, und F5
+ * wiederholte Speichern samt Dienstneustart, Zurueckspielen und die
+ * Schaltknoepfe im Reiter Test (Befund oberflaeche 5, Bauart D). Ausgenommen
+ * sind nur die Downloads: sie liefern ihre Datei unmittelbar.
  * ================================================================== */
 /* ============ Loxone-Vorlage herunterladen ============ */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['download'])) {
@@ -234,7 +257,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_mqtt'])) {
     // virtuellen Eingaenge, und der Bediener sah nur "gespeichert".
     if ($hk_praefix_roh === '') {
         $hk_fehler[] = hk_t('FEHLER.PRAEFIX_LEER');
-    } elseif (!preg_match('#^[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*$#', $hk_praefix_roh)) {
+    } elseif (!hk_wert_pruefen('heimkino', 'themenpraefix', $hk_praefix_roh)[0]) {
         $hk_fehler[] = hk_t('FEHLER.PRAEFIX');
     } else {
         $hk_neu['heimkino']['themenpraefix'] = $hk_praefix_roh;
@@ -275,13 +298,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
      * Der Zweig "war da, ist jetzt weg" konnte das nicht auffangen, weil
      * der Ausgangswert selbst schon leer war.
      */
+    /* Seit 1.3.15 (O2) wird nur noch der Rand beschnitten. Bis 1.3.14
+     * entfernte diese Stelle Anfuehrungszeichen und Steuerzeichen still:
+     * aus FD00"1234'5678 wurde FD0012345678 und aus 192.168.178."50 eine
+     * gueltige Adresse, beide ohne Meldung (Befund oberflaeche 6). Jetzt
+     * scheitert ein solcher Wert an der Positivliste (hk_wert_pruefen, dieselbe
+     * wie beim Zurueckspielen) und wird gemeldet; der alte Wert bleibt.
+     * Ein Feld statt einer Zeichenkette ergibt einen Wert, der sicher
+     * scheitert - bis 1.3.14 wurde daraus ein leeres Feld. */
     $hk_saeubern = function ($s) {
-        if (!is_string($s)) { return ''; }
-        return trim(preg_replace('/[\x00-\x1F\x7F"\']+/', '', $s));
+        if (!is_string($s)) { return "\x00"; }
+        return trim($s);
     };
     $hk_ganz = function ($wert, $vorgabe, $min, $max, &$fehler, $schluessel) {
         if (!is_string($wert) && !is_numeric($wert)) { return (string) $vorgabe; }
-        if (!preg_match('/^-?[0-9]+$/', trim((string) $wert))) {
+        if (!preg_match('/^-?[0-9]+\z/', trim((string) $wert))) {
             $fehler[] = hk_t($schluessel);
             return (string) $vorgabe;
         }
@@ -315,7 +346,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     $hk_neu['beamer']['aktiv'] = isset($_POST['beamer_aktiv']) ? '1' : '0';
 
     $hk_ip = $hk_saeubern(isset($_POST['beamer_ip']) ? $_POST['beamer_ip'] : '');
-    if ($hk_ip === '' || preg_match('/^[A-Za-z0-9._-]+$/', $hk_ip)) {
+    if (hk_wert_pruefen('beamer', 'ip', $hk_ip)[0]) {
         $hk_neu['beamer']['ip'] = $hk_ip;
     } else {
         $hk_fehler[] = hk_t('FEHLER.BEAMER_IP');
@@ -329,7 +360,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     $hk_mac_roh = $hk_saeubern(isset($_POST['beamer_mac']) ? $_POST['beamer_mac'] : '');
     if ($hk_mac_roh === '') {
         $hk_neu['beamer']['mac'] = '';
-    } elseif (preg_match('/^[0-9A-Fa-f]{2}([:.-]?[0-9A-Fa-f]{2}){5}$/', $hk_mac_roh)) {
+    } elseif (hk_wert_pruefen('beamer', 'mac', $hk_mac_roh)[0]) {
         $hk_hex = strtoupper(preg_replace('/[^0-9A-Fa-f]/', '', $hk_mac_roh));
         $hk_neu['beamer']['mac'] = implode(':', str_split($hk_hex, 2));
     } else {
@@ -341,7 +372,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     // Umschrift waere eine Umschrift des Schluessels. Die Vorlage
     // (lgtv-ip-control) prueft ebenfalls /[A-Z0-9]{8}/ und wandelt nichts.
     $hk_key = $hk_saeubern(isset($_POST['beamer_keycode']) ? $_POST['beamer_keycode'] : '');
-    if ($hk_key === '' || preg_match('/^[A-Z0-9]{8}$/', $hk_key)) {
+    if (hk_wert_pruefen('beamer', 'keycode', $hk_key)[0]) {
         $hk_neu['beamer']['keycode'] = $hk_key;
     } else {
         $hk_fehler[] = hk_t('FEHLER.BEAMER_KEYCODE');
@@ -374,7 +405,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
         $liste = isset($hk_woerter_h[$art]) ? $hk_woerter_h[$art] : array();
         if ($liste) {
             if (in_array($w, $liste, true)) { return $w; }
-        } elseif (preg_match('/^[A-Za-z0-9_]{1,32}$/', $w)) {
+        } elseif (preg_match('/^[A-Za-z0-9_]{1,32}\z/', $w)) {
             return $w;
         }
         $hk_fehler[] = hk_tf($schluessel, array('%1' => hk_e($w),
@@ -397,11 +428,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     /* --- Xbox --- */
     $hk_neu['xbox']['aktiv'] = isset($_POST['xbox_aktiv']) ? '1' : '0';
     // Die Kennung ist eine undurchsichtige Zeichenkette. Sie wird NICHT in
-    // Grossbuchstaben gewandelt und es werden keine Zeichen entfernt. Die
-    // erste Fassung warf Bindestriche weg und schrieb alles gross - das
-    // verdirbt eine gueltige Kennung, ohne dass man es sieht.
+    // Grossbuchstaben gewandelt und es werden keine Zeichen entfernt; nur der
+    // Rand wird beschnitten. Die erste Fassung warf Bindestriche weg und
+    // schrieb alles gross. BERICHTIGT 1.3.15: bis 1.3.14 stand dieser Satz
+    // hier, waehrend $hk_saeubern Anfuehrungszeichen doch still entfernte
+    // (Befund oberflaeche 6). Jetzt scheitert ein Anfuehrungszeichen an der
+    // Positivliste und wird gemeldet.
     $hk_kennung = $hk_saeubern(isset($_POST['xbox_geraete_id']) ? $_POST['xbox_geraete_id'] : '');
-    if ($hk_kennung === '' || preg_match('/^[A-Za-z0-9._:-]{1,128}$/', $hk_kennung)) {
+    if (hk_wert_pruefen('xbox', 'geraete_id', $hk_kennung)[0]) {
         $hk_neu['xbox']['geraete_id'] = $hk_kennung;
     } else {
         $hk_fehler[] = hk_t('FEHLER.XBOX_ID');
@@ -414,8 +448,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
         ? trim((string) $_POST['xbox_geheimnis_ablauf']) : '';
     if ($hk_frist === '') {
         $hk_neu['xbox']['geheimnis_ablauf'] = '';
-    } elseif (preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $hk_frist)
-              && strtotime($hk_frist) !== false) {
+    } elseif (hk_datum_gueltig($hk_frist)) {
+        // checkdate seit 1.3.15 (O2): bis 1.3.14 genuegte strtotime(), und
+        // aus 2027-02-31 wurde still der 03.03.2027.
         $hk_neu['xbox']['geheimnis_ablauf'] = $hk_frist;
     } else {
         $hk_fehler[] = hk_t('FEHLER.FRIST');
@@ -437,6 +472,132 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     $hk_tab = 'tab-settings';
 }
 
+/* ---------------- Einstellungen sichern ----------------
+ *
+ * Ausgegeben wird die VOLLE Konfiguration samt Aktionstoken, dazu die
+ * Xbox-Anmeldung und ein lesbarer Kopf (hk_sicherung_bauen). Ohne Token und
+ * Anmeldung stuenden nach dem Zurueckspielen alle Felder richtig, und das
+ * Plugin kaeme trotzdem nicht an die Anlage. Die Datei ist damit ein
+ * Geheimnis: der Kopf sagt es, der Hinweis am Knopf sagt es, und die Antwort
+ * darf von keinem Zwischenspeicher behalten werden.
+ * Bis 1.3.14 stand hier json_encode(hk_cfg()) - hk_cfg verlangt drei
+ * Argumente, und der Knopf endete unter 7.4 und 8.5 in HTTP 500 mit leerem
+ * Rumpf (Befund code 1, oberflaeche 1). */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['hk_sichern'])) {
+    $hk_js = json_encode(hk_sicherung_bauen(),
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($hk_js !== false) {
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename="heimkino_einstellungen_'
+               . date('Ymd_His') . '.json"');
+        header('Cache-Control: no-store, private');
+        header('Pragma: no-cache');
+        header('X-Content-Type-Options: nosniff');
+        header('Content-Length: ' . strlen($hk_js));
+        echo $hk_js;
+        exit;
+    }
+    $hk_fehler[] = hk_t('SET.SICH_SCHREIBFEHLER');
+    $hk_tab = 'tab-settings';
+}
+
+/* ---------------- Einstellungen zurueckspielen ----------------
+ *
+ * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei des
+ * Servers unterschieben. Dann die Groessengrenze von 64 kB (Regeln/05) - eine
+ * Sicherung dieses Plugins ist kaum zwei Kilobyte gross.
+ *
+ * Seit 1.3.15 (C2/C3) wird jeder Wert geprueft (hk_sicherung_lesen), der
+ * Zweig steht VOR "Anzeige vorbereiten", die Meldung geht in $hk_hinweis und
+ * zaehlt Werte, und der Dienst wird nachgezogen. Bis 1.3.14 lief der Zweig
+ * erst nach dem Seitenaufbau, die Meldung landete in einer Variablen, die
+ * nie ausgegeben wurde, die Seite zeigte die alten Werte - und wer danach
+ * "Speichern" drueckte, schrieb sie zurueck (Befund code 3, oberflaeche 3). */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['hk_zurueck'])) {
+    if (!isset($_FILES['hk_sicherung']) || !is_array($_FILES['hk_sicherung'])
+        || !isset($_FILES['hk_sicherung']['tmp_name'])
+        || !is_string($_FILES['hk_sicherung']['tmp_name'])
+        || !@is_uploaded_file($_FILES['hk_sicherung']['tmp_name'])) {
+        $hk_fehler[] = hk_t('SET.SICH_KEINE_DATEI');
+    } elseif ((int) $_FILES['hk_sicherung']['size'] > 65536) {
+        $hk_fehler[] = hk_t('SET.SICH_ZU_GROSS');
+    } else {
+        list($hk_neu, $hk_mangel, $hk_n, $hk_anm, $hk_tleer) = hk_sicherung_lesen(
+            (string) @file_get_contents($_FILES['hk_sicherung']['tmp_name']));
+        if ($hk_neu === null) {
+            /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
+             * nichts. */
+            $hk_fehler[] = hk_t('SET.SICH_ABGELEHNT') . ' '
+                            . implode(' ', $hk_mangel);
+        } elseif (!hk_config_write($hk_neu)) {
+            $hk_fehler[] = hk_t('SET.SICH_SCHREIBFEHLER');
+        } else {
+            $hk_cfg = hk_config_read();
+            $hk_fmt = hk_formtoken($hk_cfg);
+            $hk_hinweis[] = sprintf(hk_t('SET.SICH_UEBERNOMMEN'), $hk_n);
+            if ($hk_tleer) {
+                $hk_hinweis[] = hk_t('SET.SICH_TOKEN_BLEIBT');
+            }
+            $hk_anm_lage = hk_xbox_anmeldung_uebernehmen($hk_anm);
+            if ($hk_anm_lage === 'ok') {
+                $hk_hinweis[] = hk_t('SET.SICH_ANMELDUNG_OK');
+            } elseif ($hk_anm_lage === 'fehler') {
+                $hk_fehler[] = hk_tf('FEHLER.AUTH_SCHREIBEN', array('%1' => hk_e($hk_p['auth'])));
+            } else {
+                $hk_hinweis[] = hk_t('SET.SICH_ANMELDUNG_KEINE');
+            }
+            // Den Dienst nachziehen und sagen, was mit ihm geschah (Regeln/05
+            // Punkt 7). Ein bewusst angehaltener Dienst bleibt angehalten.
+            if (hk_dienst_pid()) {
+                $hk_pid_neu = hk_dienst('restart');
+                $hk_hinweis[] = $hk_pid_neu
+                    ? hk_tf('SET.SICH_DIENST_NEU', array('%1' => (string) $hk_pid_neu))
+                    : hk_t('SET.SICH_DIENST_WEG');
+            } else {
+                $hk_hinweis[] = hk_t('SET.SICH_DIENST_AUS');
+            }
+        }
+    }
+    $hk_tab = 'tab-settings';
+}
+
+/* ============ Jeder POST endet mit einer Umleitung (PRG, seit 1.3.15) ============
+ *
+ * Auch ein abgewiesener POST (Formularmerkmal falsch) und "Neu laden". Laesst
+ * sich die Einmalmeldung nicht ablegen, wird wie bis 1.3.14 unmittelbar
+ * gerendert - eine verschluckte Meldung waere schlimmer als ein F5-Risiko. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (hk_einmal_schreiben(array(
+            'saved'      => $hk_saved,
+            'hinweis'    => $hk_hinweis,
+            'fehler'     => $hk_fehler,
+            'test_titel' => $hk_test_titel,
+            'test_text'  => $hk_test_text,
+        ))) {
+        header('Location: index.php?form=' . substr($hk_tab, 4), true, 303);
+        exit;
+    }
+} else {
+    // Die Einmalmeldung wird NUR beim GET gelesen (Regeln/04) und dabei
+    // geloescht.
+    $hk_einmal = hk_einmal_lesen();
+    if ($hk_einmal) {
+        $hk_saved = !empty($hk_einmal['saved']);
+        foreach (array('hinweis' => 'hk_hinweis', 'fehler' => 'hk_fehler') as $hk_q => $hk_z) {
+            if (isset($hk_einmal[$hk_q]) && is_array($hk_einmal[$hk_q])) {
+                foreach ($hk_einmal[$hk_q] as $hk_m) {
+                    if (is_string($hk_m)) { ${$hk_z}[] = $hk_m; }
+                }
+            }
+        }
+        if (isset($hk_einmal['test_titel'], $hk_einmal['test_text'])
+            && is_string($hk_einmal['test_titel']) && is_string($hk_einmal['test_text'])) {
+            $hk_test_titel = $hk_einmal['test_titel'];
+            $hk_test_text = $hk_einmal['test_text'];
+        }
+    }
+}
+
 /* ============ Anzeige vorbereiten ============ */
 hk_cfg_vervollstaendigen($hk_cfg);
 $hk_ablauf = hk_cfg($hk_cfg, 'xbox', 'geheimnis_ablauf', '');
@@ -454,57 +615,11 @@ $hk_token   = hk_cfg($hk_cfg, 'heimkino', 'aktionstoken', '');
 $hk_host    = hk_hostname();
 
 require_once __DIR__ . '/hk_test.php';
-$hk_pruefzeilen = hk_test_zeilen($hk_cfg);
+// Die Pruefzeilen, die einen Prozess starten oder das Netz fragen, laufen nur,
+// wenn der Reiter Test serverseitig offen ist (seit 1.3.15, O8; Regeln/04).
+$hk_pruefzeilen = hk_test_zeilen($hk_cfg, $hk_tab === 'tab-test');
 
 $hk_frame = class_exists('LBWeb', false);
-
-/* ---------------- Einstellungen sichern ----------------
- *
- * Ausgegeben wird die VOLLE Konfiguration - samt Aktionstoken. Ohne ihn
- * stuenden nach dem Zurueckspielen alle Felder richtig, und das Plugin
- * kaeme trotzdem nicht an die Anlage; die Datei waere wertlos. Damit
- * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das. */
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['hk_sichern'])) {
-    $hk_js = json_encode(hk_cfg(),
-        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    if ($hk_js !== false) {
-        header('Content-Type: application/json; charset=utf-8');
-        header('Content-Disposition: attachment; filename="heimkino_einstellungen_'
-               . date('Ymd_His') . '.json"');
-        echo $hk_js;
-        exit;
-    }
-    $hk_fehler[] = hk_t('SET.SICH_SCHREIBFEHLER');
-}
-
-/* ---------------- Einstellungen zurueckspielen ----------------
- *
- * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei des
- * Servers unterschieben. Dann die Groessengrenze - eine Sicherung dieses
- * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht gelesen. */
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['hk_zurueck'])) {
-    if (!isset($_FILES['hk_sicherung']) || !is_array($_FILES['hk_sicherung'])
-        || !isset($_FILES['hk_sicherung']['tmp_name'])
-        || !@is_uploaded_file($_FILES['hk_sicherung']['tmp_name'])) {
-        $hk_fehler[] = hk_t('SET.SICH_KEINE_DATEI');
-    } elseif ((int) $_FILES['hk_sicherung']['size'] > 262144) {
-        $hk_fehler[] = hk_t('SET.SICH_ZU_GROSS');
-    } else {
-        list($hk_neu, $hk_mangel, $hk_n) = hk_sicherung_lesen(
-            (string) @file_get_contents($_FILES['hk_sicherung']['tmp_name']));
-        if ($hk_neu === null) {
-            /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
-             * nichts. */
-            $hk_fehler[] = hk_t('SET.SICH_ABGELEHNT') . ' '
-                            . implode(' ', $hk_mangel);
-        } elseif (hk_config_write($hk_neu)) {
-            $hk_meldungen[] = sprintf(hk_t('SET.SICH_UEBERNOMMEN'), $hk_n);
-        } else {
-            $hk_fehler[] = hk_t('SET.SICH_SCHREIBFEHLER');
-        }
-    }
-}
-
 
 if ($hk_frame) {
     LBWeb::lbheader('Heimkino', 'https://wiki.loxberry.de/', 'help.html');
@@ -1123,20 +1238,20 @@ if ($hk_gwf >= 2) { ?>
 <div class="sm-breit">
 <table class="sm-tbl">
 <tr><th>#</th><th><?= hk_te('LOX.SP_BAUSTEIN') ?></th><th><?= hk_te('LOX.SP_NAME') ?></th><th><?= hk_te('LOX.SP_PARAMETER') ?></th><th><?= hk_te('LOX.SP_VERBINDEN') ?></th></tr>
-<tr><td>1</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e($hk_praefix) ?>_beamer_an</td><td><?= hk_te('ART.DIGITAL') ?></td><td>&mdash;</td></tr>
-<tr><td>2</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e($hk_praefix) ?>_beamer_erreichbar</td><td><?= hk_te('ART.DIGITAL') ?></td><td>&mdash;</td></tr>
-<tr><td>3</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e($hk_praefix) ?>_xbox_an</td><td><?= hk_te('ART.DIGITAL') ?></td><td>&mdash;</td></tr>
-<tr><td>4</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e($hk_praefix) ?>_xbox_angemeldet</td><td><?= hk_te('ART.DIGITAL') ?></td><td>&mdash;</td></tr>
-<tr><td>5</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e($hk_praefix) ?>_xbox_geheimnis_tage</td><td><?= hk_te('ART.ANALOG') ?>, MinVal -10000</td><td>&mdash;</td></tr>
-<tr><td>6</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e($hk_praefix) ?>_service_online</td><td><?= hk_te('ART.DIGITAL') ?></td><td>&mdash;</td></tr>
-<tr><td>7</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e($hk_praefix) ?>_service_zeitstempel</td><td><?= hk_te('ART.ANALOG') ?></td><td>&mdash;</td></tr>
-<tr><td>8</td><td><?= hk_te('LOX.MERKER') ?></td><td>Kino-Modus</td><td><?= hk_te('LOX.P_VISU') ?></td><td>&mdash;</td></tr>
-<tr><td>9</td><td><?= hk_te('LOX.FLANKE_AUF') ?></td><td>Kino startet</td><td>&mdash;</td><td>#8</td></tr>
-<tr><td>10</td><td><?= hk_te('LOX.FLANKE_AB') ?></td><td>Kino endet</td><td>&mdash;</td><td>#8</td></tr>
+<tr><td>1</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e(hk_vi_name($hk_praefix, 'beamer/an')) ?></td><td><?= hk_te('ART.DIGITAL') ?></td><td>&mdash;</td></tr>
+<tr><td>2</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e(hk_vi_name($hk_praefix, 'beamer/erreichbar')) ?></td><td><?= hk_te('ART.DIGITAL') ?></td><td>&mdash;</td></tr>
+<tr><td>3</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e(hk_vi_name($hk_praefix, 'xbox/an')) ?></td><td><?= hk_te('ART.DIGITAL') ?></td><td>&mdash;</td></tr>
+<tr><td>4</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e(hk_vi_name($hk_praefix, 'xbox/angemeldet')) ?></td><td><?= hk_te('ART.DIGITAL') ?></td><td>&mdash;</td></tr>
+<tr><td>5</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e(hk_vi_name($hk_praefix, 'xbox/geheimnis_tage')) ?></td><td><?= hk_te('ART.ANALOG') ?>, MinVal -10000, MaxVal 9999</td><td>&mdash;</td></tr>
+<tr><td>6</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e(hk_vi_name($hk_praefix, 'service/online')) ?></td><td><?= hk_te('ART.DIGITAL') ?></td><td>&mdash;</td></tr>
+<tr><td>7</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e(hk_vi_name($hk_praefix, 'service/zeitstempel')) ?></td><td><?= hk_te('ART.ANALOG') ?></td><td>&mdash;</td></tr>
+<tr><td>8</td><td><?= hk_te('LOX.MERKER') ?></td><td><?= hk_te('LOX.N_KINO_MODUS') ?></td><td><?= hk_te('LOX.P_VISU') ?></td><td>&mdash;</td></tr>
+<tr><td>9</td><td><?= hk_te('LOX.FLANKE_AUF') ?></td><td><?= hk_te('LOX.N_KINO_STARTET') ?></td><td>&mdash;</td><td>#8</td></tr>
+<tr><td>10</td><td><?= hk_te('LOX.FLANKE_AB') ?></td><td><?= hk_te('LOX.N_KINO_ENDET') ?></td><td>&mdash;</td><td>#8</td></tr>
 <tr><td>11</td><td><?= hk_te('LOX.VO') ?></td><td>Heimkino</td><td>http://<?= hk_e($hk_host) ?></td><td><span class="sm-mono">beamer-wol</span>, <span class="sm-mono">xbox-an</span> &larr; #9; <span class="sm-mono">beamer-aus</span>, <span class="sm-mono">xbox-aus</span> &larr; #10</td></tr>
-<tr><td>12</td><td><?= hk_te('LOX.EINSCHALTVERZ') ?></td><td>Beamer kam nicht hoch</td><td>90 s</td><td>#8 UND NICHT #1</td></tr>
-<tr><td>13</td><td><?= hk_te('LOX.SCHWELLWERT') ?></td><td>Xbox-Geheimnis</td><td><?= hk_te('LOX.P_SCHWELLE') ?></td><td>#5</td></tr>
-<tr><td>14</td><td><?= hk_te('LOX.MELDUNG') ?></td><td>Xbox-Geheimnis erneuern</td><td>&mdash;</td><td>&larr; #13</td></tr>
+<tr><td>12</td><td><?= hk_te('LOX.EINSCHALTVERZ') ?></td><td><?= hk_te('LOX.N_BEAMER_NICHT_HOCH') ?></td><td>90 s</td><td>#8 <?= hk_te('LOX.UND_NICHT') ?> #1</td></tr>
+<tr><td>13</td><td><?= hk_te('LOX.SCHWELLWERT') ?></td><td><?= hk_te('LOX.N_XBOX_GEHEIMNIS') ?></td><td><?= hk_te('LOX.P_SCHWELLE') ?></td><td>#5</td></tr>
+<tr><td>14</td><td><?= hk_te('LOX.MELDUNG') ?></td><td><?= hk_te('LOX.N_XBOX_ERNEUERN') ?></td><td>&mdash;</td><td>&larr; #13</td></tr>
 <tr><td>15</td><td><?= hk_te('LOX.STATUS') ?></td><td>Heimkino</td><td><?= hk_te('LOX.P_VISU') ?></td><td>v1 = #1, v2 = #3</td></tr>
 </table>
 </div>

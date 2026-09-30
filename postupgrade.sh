@@ -12,6 +12,8 @@ PCONFIG="$LBPCONFIG/$PDIR"
 SICHER="$BASE/data/plugins/$PDIR.upgrade_sicherung"
 PDATA="$BASE/data/plugins/$PDIR"
 MARKE="$BASE/data/plugins/$PDIR.upgrade_laeuft"
+# Merker aus preupgrade.sh: der Dienst lief vor der Aktualisierung (I3).
+LIEF_VORHER="$BASE/data/plugins/$PDIR.lief_vorher"
 
 # Die Marke aus preupgrade.sh faellt ueber einen trap, nicht am Dateiende.
 #
@@ -21,7 +23,7 @@ MARKE="$BASE/data/plugins/$PDIR.upgrade_laeuft"
 # Startweg den Dienst eine Stunde lang ab, ohne dass irgendwo stuende, warum.
 # Ein trap traegt auch dann, wenn spaeter einmal ein frueher Ausstieg
 # dazukommt (Regeln/06, Nachtrag 17.09.2026).
-trap 'rm -f "$MARKE" 2>/dev/null' EXIT
+trap 'rm -f "$MARKE" "$LIEF_VORHER" 2>/dev/null' EXIT
 
 # ---------- Was "Inhalt" heisst ----------
 #
@@ -38,7 +40,11 @@ hk_inhalt() {   # $1 Datei, $2 Art (cfg|json)
     case "$2" in
         cfg)
             grep -q '^[[:space:]]*\[heimkino\][[:space:]]*$' "$1" 2>/dev/null || return 1
-            for hk_f in aktionstoken keycode ip mac geraete_id; do
+            # Das Aktionstoken zaehlt NICHT (seit 1.3.15, I4): es entsteht beim
+            # ersten Oeffnen der Oberflaeche von selbst. Bis 1.3.14 galt eine
+            # nach der Token-Zeile abgeschnittene Datei als "mit Inhalt" und
+            # verdraengte die einzige heile Zweitschrift (Befund installer 4).
+            for hk_f in keycode ip mac geraete_id; do
                 hk_w=$(sed -n "s/^[[:space:]]*$hk_f[[:space:]]*=[[:space:]]*//p" "$1" 2>/dev/null | head -1)
                 hk_w=$(printf '%s' "$hk_w" | tr -d '[:space:]')
                 [ -n "$hk_w" ] && return 0
@@ -121,17 +127,11 @@ sicher_zurueck() {   # $1 Dateiname, $2 Art (cfg|json), $3 Klartext fuer die Mel
 
 mkdir -p "$PCONFIG" 2>/dev/null
 
-# Wer von 1.1.1 oder frueher kommt, hat die Sicherung noch in der Ramdisk -
-# damit dieses eine Update nichts verliert, wird auch dort nachgesehen.
-if [ ! -f "$SICHER/heimkino.cfg" ] && [ -f /tmp/heimkino.cfg.sicherung ]; then
-    mkdir -p "$SICHER" 2>/dev/null
-    cp -a /tmp/heimkino.cfg.sicherung "$SICHER/heimkino.cfg" 2>/dev/null
-    echo "<INFO> Sicherung am alten Ort (/tmp) gefunden und uebernommen."
-fi
-if [ ! -f "$SICHER/xbox_auth.json" ] && [ -f /tmp/heimkino_xbox_auth.sicherung ]; then
-    mkdir -p "$SICHER" 2>/dev/null
-    cp -a /tmp/heimkino_xbox_auth.sicherung "$SICHER/xbox_auth.json" 2>/dev/null
-fi
+# Der Rueckfall auf eine Sicherung unter /tmp (Anlagen bis 1.1.1) ist seit
+# 1.3.15 gestrichen (I7): er uebernahm eine Datei aus dem allgemein
+# beschreibbaren /tmp als Konfiguration samt Aktionstoken und Xbox-Anmeldung
+# (Befund installer 7). Ein Sprung von 1.1.1 auf 1.3.15 hat ohnehin keinen
+# gemeinsamen Sicherungsweg.
 
 if sicher_zurueck heimkino.cfg cfg "Bestehende Einstellungen"; then
     :
@@ -156,7 +156,7 @@ else
 fi
 sicher_zurueck xbox_auth.json json "Bestehende Xbox-Anmeldung" || true
 
-chmod 640 "$PCONFIG/heimkino.cfg" 2>/dev/null
+chmod 600 "$PCONFIG/heimkino.cfg" 2>/dev/null
 chmod 600 "$PCONFIG/xbox_auth.json" 2>/dev/null
 chown loxberry:loxberry "$PCONFIG"/* 2>/dev/null
 chmod 755 "$LBPBIN/$PDIR"/*.py 2>/dev/null
@@ -168,19 +168,18 @@ chmod 644 "$LBPBIN/$PDIR/hk_vorgaben.json" "$LBPBIN/$PDIR/hk_themen.json" 2>/dev
 # anzeigen lassen, den es nicht mehr gibt.
 rm -f "$BASE/log/plugins/$PDIR/hk_service.pid" 2>/dev/null
 
-# Der Sollmerker sagt dem minuetlichen Waechter, dass der Dienst laufen soll.
-# Wer von 1.2.11 kommt, hat ihn noch nicht - ohne ihn bliebe der Waechter
-# nach dem Update fuer immer untaetig.
+# Der Sollmerker wird hier NICHT mehr gesetzt (seit 1.3.15, I3/C8): bis
+# 1.3.14 stand hier ein "touch soll_laufen" bei jedem Upgrade, und ein bewusst
+# angehaltener Dienst lief danach wieder (Befund installer 3). Den Merker
+# setzt dienst.sh nach einem bestaetigten Start, und gestartet wird unten nur,
+# wenn preupgrade.sh .lief_vorher gelegt hat.
 mkdir -p "$BASE/data/plugins/$PDIR" 2>/dev/null
-touch "$BASE/data/plugins/$PDIR/soll_laufen" 2>/dev/null
-chown loxberry:loxberry "$BASE/data/plugins/$PDIR/soll_laufen" 2>/dev/null
 
 # Aufraeumen - an beiden Orten, aber nur, wenn das Zurueckspielen gelang
 # (seit 1.3.14, siehe sicher_zurueck). Sonst ist die Sicherung die einzige
 # Quelle und bleibt liegen; uninstall raeumt sie spaeter weg.
 if [ "$SZ_FEHLER" = "0" ]; then
     rm -rf "$SICHER" 2>/dev/null
-    rm -f /tmp/heimkino.cfg.sicherung /tmp/heimkino_xbox_auth.sicherung 2>/dev/null
 else
     echo "<WARNING> Die Sicherung unter $SICHER wurde NICHT geloescht."
 fi
@@ -287,7 +286,12 @@ rm -f "$PDATA/hk_service.pid" 2>/dev/null
 # Erwarten als root laeuft und dienst.sh sich per "su" heruntersetzt -, dann
 # startet hier nichts, und der minuetliche Waechter holt es nach, sobald der
 # trap unten die Marke entfernt hat. Das ist der geschlossene Ausfall.
-if [ -z "$HK_UEBRIG" ] && [ -f "$LBPBIN/$PDIR/dienst.sh" ]; then
+# Nur mit dem Merker aus preupgrade.sh (seit 1.3.15, I3): ein bewusst
+# angehaltener Dienst bleibt angehalten. Den Merker raeumt der trap ab.
+if [ ! -f "$LIEF_VORHER" ]; then
+    echo "<INFO> Der Dienst war vor der Aktualisierung angehalten und bleibt es."
+    echo "<INFO> Starten: Reiter Einstellungen, Knopf \"Dienst starten\"."
+elif [ -z "$HK_UEBRIG" ] && [ -f "$LBPBIN/$PDIR/dienst.sh" ]; then
     HK_START_TROTZ_MARKE=1 /bin/bash "$LBPBIN/$PDIR/dienst.sh" start
 fi
 

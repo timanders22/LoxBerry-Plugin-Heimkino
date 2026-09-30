@@ -124,6 +124,20 @@ function hk_paths()
         'vorgaben' => $bin . '/hk_vorgaben.json',
         'themen'   => $bin . '/hk_themen.json',
         'general'  => $basis . '/config/system/general.json',
+        // Seit 1.3.15. Die Zweitschrift liegt NEBEN dem Konfigordner (den
+        // raeumt der Installer bei jedem Upgrade ab); preupgrade.sh legt sie
+        // an, seit 1.3.15 zieht auch jedes Schreiben der Oberflaeche mit
+        // Aktionstoken sie nach (Regeln/05). Aus ihr heilt hk_config_heilen().
+        'zweit'    => $basis . '/config/plugins/' . $ordner . '.backup.heimkino.cfg',
+        // Ergebnis eines POST fuer das folgende GET (PRG, Regeln/04), 0600.
+        'einmal'   => $basis . '/data/plugins/' . $ordner . '/einmalmeldung.json',
+        // Zwischenspeicher der Wortlisten aus lg_beamer.py --woerter (O8).
+        'woerter'  => $basis . '/data/plugins/' . $ordner . '/woerter.json',
+        // Bremse fuer die Protokollzeilen der Oberflaeche und des Endpunkts.
+        'bremse'   => $basis . '/data/plugins/' . $ordner . '/protokoll_bremse.json',
+        // Mindestabstand der Xbox-Befehle aus dem Endpunkt (C10).
+        'xbox_befehl' => $basis . '/data/plugins/' . $ordner . '/xbox_befehl.json',
+        'cron'     => $home !== '' ? $home . '/system/cron' : '',
     );
     return $p;
 }
@@ -263,6 +277,127 @@ function hk_config_read()
     return $cfg;
 }
 
+/**
+ * Schluessel der Datei, die die Vorgaben nicht kennen (seit 1.3.15, C9).
+ *
+ * Regeln/05: "fremd -> NENNEN, stehen lassen". Bis 1.3.14 schrieb
+ * hk_config_write() nur die Vorgabenschluessel, und ein fremder Schluessel -
+ * Rest einer anderen Fassung oder Vorgriff auf die naechste - verschwand
+ * beim ersten Ergaenzen wortlos (in WSL gemessen, Befund code 10).
+ * Rueckgabe: array(abschnitt => array(schluessel => wert)).
+ */
+function hk_config_fremde()
+{
+    $datei = hk_paths()['config'];
+    $gelesen = is_readable($datei) ? @parse_ini_file($datei, true, INI_SCANNER_RAW) : false;
+    if (!is_array($gelesen)) {
+        return array();
+    }
+    $vg = hk_vorgaben();
+    $fremd = array();
+    foreach ($gelesen as $abschnitt => $werte) {
+        if (!is_array($werte)) {
+            continue;
+        }
+        foreach ($werte as $k => $w) {
+            if (isset($vg[$abschnitt]) && array_key_exists($k, $vg[$abschnitt])) {
+                continue;
+            }
+            if (is_array($w)) {
+                continue;
+            }
+            $fremd[(string) $abschnitt][(string) $k] = (string) $w;
+        }
+    }
+    return $fremd;
+}
+
+/** Die fremden Schluessel als Liste "abschnitt.schluessel" - fuer die Anzeige. */
+function hk_config_fremde_namen()
+{
+    $namen = array();
+    foreach (hk_config_fremde() as $abschnitt => $werte) {
+        foreach (array_keys($werte) as $k) {
+            $namen[] = $abschnitt . '.' . $k;
+        }
+    }
+    return $namen;
+}
+
+/**
+ * Traegt eine .cfg Inhalt? Lesbar, Abschnitt [heimkino] und ein Aktionstoken
+ * (Merkwort, Regeln/05 "Die Selbstheilung entscheidet nach Inhalt").
+ */
+function hk_cfg_hat_inhalt($datei)
+{
+    if (!is_file($datei) || !is_readable($datei)) {
+        return false;
+    }
+    $g = @parse_ini_file($datei, true, INI_SCANNER_RAW);
+    return is_array($g) && isset($g['heimkino']) && is_array($g['heimkino'])
+        && isset($g['heimkino']['aktionstoken'])
+        && trim((string) $g['heimkino']['aktionstoken']) !== '';
+}
+
+/** Was hk_config_heilen() in DIESEM Aufruf festgestellt hat (Regeln/05: den
+ * Zustand merken, bevor die Selbstheilung ihn beseitigt). */
+function hk_heilung_lage($setzen = null)
+{
+    static $lage = 'nichts';
+    if ($setzen !== null) {
+        $lage = (string) $setzen;
+    }
+    return $lage;
+}
+
+/**
+ * Eine beschaedigte Konfiguration heilen (seit 1.3.15, C4).
+ *
+ * Bis 1.3.14 genuegte EIN Seitenaufruf mit einer Datei, in der nur "[beamer"
+ * statt "[beamer]" stand: hk_config_read() lieferte die Vorgaben, der
+ * Seitenaufbau wuerfelte ein neues Aktionstoken und schrieb die
+ * Werkseinstellungen samt Token in die Datei - ohne .kaputt, ohne
+ * Protokollzeile (in WSL und unter 7.4/8.5 gemessen, Befund code 5).
+ *
+ * Jetzt: bei "kaputt" wird NICHTS geschrieben und kein Token erzeugt. Traegt
+ * die Zweitschrift Inhalt, geht die Datei als .kaputt (0600) beiseite, die
+ * Zweitschrift wird einmal zurueckgeschrieben, und es gibt eine
+ * Protokollzeile. Ohne heile Zweitschrift bleibt die Datei, wie sie ist -
+ * hk_config_write() weist dann jedes Schreiben ab.
+ *
+ * Rueckgabe: array(zustand, pfad) mit zustand 'nichts' | 'geheilt' |
+ * 'ohne_zweitschrift' | 'fehler'.
+ */
+function hk_config_heilen()
+{
+    if (hk_config_lage() !== 'kaputt') {
+        return array('nichts', '');
+    }
+    $p = hk_paths();
+    $datei = $p['config'];
+    if (!hk_cfg_hat_inhalt($p['zweit'])) {
+        hk_log_gebremst('cfg_kaputt_ohne', 'Konfiguration ' . $datei . ' ist beschaedigt '
+            . '(nicht lesbar), und es gibt keine heile Zweitschrift. Es wird nichts '
+            . 'geschrieben und kein Token erzeugt - bitte die Datei von Hand berichtigen.',
+            'ERROR', 3600);
+        return array(hk_heilung_lage('ohne_zweitschrift'), $datei);
+    }
+    $inhalt = @file_get_contents($p['zweit']);
+    $kaputt = $datei . '.kaputt';
+    if ($inhalt === false || !@rename($datei, $kaputt)) {
+        return array(hk_heilung_lage('fehler'), $datei);
+    }
+    @chmod($kaputt, 0600);
+    if (!hk_datei_ersetzen($datei, $inhalt, 0600)) {
+        @rename($kaputt, $datei);
+        return array(hk_heilung_lage('fehler'), $datei);
+    }
+    hk_log_gebremst('cfg_geheilt', 'Konfiguration ' . $datei . ' war beschaedigt. Der Stand '
+        . 'liegt als ' . basename($kaputt) . ' daneben; die Konfiguration wurde aus der '
+        . 'Zweitschrift ' . basename($p['zweit']) . ' wiederhergestellt.', 'WARNING', 0);
+    return array(hk_heilung_lage('geheilt'), $kaputt);
+}
+
 /** Welche Schluessel fehlen wirklich in der Datei? "abschnitt.schluessel" */
 function hk_cfg_fehlende()
 {
@@ -294,7 +429,10 @@ function hk_cfg_fehlende()
 function hk_cfg_vervollstaendigen(&$cfg)
 {
     $fehlten = hk_cfg_fehlende();
-    if ($fehlten && hk_config_lage() !== 'keine_vorgaben') {
+    // Nur eine LESBARE Datei wird ergaenzt (seit 1.3.15, C4). Bis 1.3.14
+    // stand hier "!== 'keine_vorgaben'" - auch eine beschaedigte Datei wurde
+    // damit beim Seitenaufbau mit den Vorgaben ueberschrieben.
+    if ($fehlten && hk_config_lage() === 'ok') {
         hk_config_write($cfg);
     }
     return $fehlten;
@@ -350,7 +488,27 @@ function hk_datei_ersetzen($datei, $inhalt, $modus = 0640)
 
 function hk_config_write($cfg)
 {
+    // Eine beschaedigte Datei wird nicht ueberschrieben (seit 1.3.15, C4):
+    // sie ist Sache von hk_config_heilen(). Sonst ersetzten die Vorgaben
+    // den letzten Stand des Anwenders, ohne dass es jemand merkt.
+    if (hk_config_lage() === 'kaputt') {
+        return false;
+    }
+    // Ein Wert mit Zeilenumbruch oder Steuerzeichen erzeugte in einer
+    // zeilenorientierten Datei eine zweite Zeile oder einen Abschnitt (Befund
+    // oberflaeche 2d, "[heimkino]\naktionstoken=..."). Fail closed.
+    foreach ($cfg as $abschnitt => $werte) {
+        if (!is_array($werte)) {
+            continue;
+        }
+        foreach ($werte as $w) {
+            if (!is_scalar($w) || preg_match('/[\x00-\x1F\x7F]/', (string) $w)) {
+                return false;
+            }
+        }
+    }
     $datei = hk_paths()['config'];
+    $fremd = hk_config_fremde();
     $t  = "; Heimkino\n";
     $t .= "; Wird von der Plugin-Oberflaeche und vom Dienst geschrieben.\n";
     $t .= "; ACHTUNG: enthaelt den Keycode des Beamers - nicht veroeffentlichen.\n\n";
@@ -363,9 +521,35 @@ function hk_config_write($cfg)
                 . (isset($cfg[$abschnitt][$schluessel])
                    ? $cfg[$abschnitt][$schluessel] : $vorgabe) . "\n";
         }
+        // Fremde Schluessel bleiben stehen (Regeln/05, seit 1.3.15).
+        if (isset($fremd[$abschnitt])) {
+            foreach ($fremd[$abschnitt] as $k => $w) {
+                $t .= $k . '=' . $w . "\n";
+            }
+            unset($fremd[$abschnitt]);
+        }
         $t .= "\n";
     }
-    return hk_datei_ersetzen($datei, $t, 0640);
+    foreach ($fremd as $abschnitt => $werte) {
+        $t .= '[' . $abschnitt . "]\n";
+        foreach ($werte as $k => $w) {
+            $t .= $k . '=' . $w . "\n";
+        }
+        $t .= "\n";
+    }
+    // 0600 seit 1.3.15 (C9): die Datei traegt Aktionstoken und Keycode des
+    // Beamers - Regeln/05 "Wer das Aktionstoken in der Konfiguration fuehrt,
+    // fuehrt eine 0600-Datei". Bis 1.3.14 0640 (gemessen, Befund code 10).
+    if (!hk_datei_ersetzen($datei, $t, 0600)) {
+        return false;
+    }
+    // Die Zweitschrift zieht mit - aber nur ein Stand MIT Aktionstoken
+    // (Regeln/05: "Eine Wache ueberschreibt die Zweitschrift nur, wenn
+    // wirklich eine Konfiguration mit Token gespeichert wird").
+    if (trim((string) hk_cfg($cfg, 'heimkino', 'aktionstoken', '')) !== '') {
+        @hk_datei_ersetzen(hk_paths()['zweit'], $t, 0600);
+    }
+    return true;
 }
 
 function hk_cfg($cfg, $abschnitt, $schluessel, $vorgabe = '')
@@ -712,20 +896,40 @@ function hk_cmd($argumente)
     return hk_cmd_python('hk_cmd.py', (array) $argumente);
 }
 
-/** Ein Python-Programm aus bin/ aufrufen. */
-function hk_cmd_python($datei, $argumente = array())
+/**
+ * Ein Python-Programm aus bin/ aufrufen.
+ *
+ * Seit 1.3.15 (C6) mit einer Gesamtfrist ueber "timeout -k 5": bis 1.3.14
+ * lief der Aufruf so lange, wie das Geraet ihn hielt - an einer Attrappe, die
+ * ein Byte je Sekunde schickt, 25,7 s bei eingestellter Zeitgrenze 2 s
+ * (Befund code 7), und die Anfragen des Miniservers stapelten sich im
+ * Webserver. 90 s decken den laengsten regulaeren Weg: Xbox-Befehl mit
+ * Token-, Benutzer- und XSTS-Erneuerung (je 15 s) samt Ersatzweg.
+ * Ohne timeout (Arbeitsplatz) wird ohne Frist aufgerufen.
+ */
+function hk_cmd_python($datei, $argumente = array(), $frist = 90)
 {
     $bin = hk_paths()['bin'] . '/' . $datei;
     if (!is_readable($bin)) {
         return array(1, hk_tf('FEHLER.BIN_FEHLT', array('%1' => $datei, '%2' => $bin)));
     }
-    $befehl = escapeshellarg('python3') . ' ' . escapeshellarg($bin) . ' ';
+    $vorsatz = '';
+    foreach (array('/usr/bin/timeout', '/bin/timeout') as $t) {
+        if (@is_executable($t)) {
+            $vorsatz = escapeshellarg($t) . ' -k 5 ' . (int) $frist . ' ';
+            break;
+        }
+    }
+    $befehl = $vorsatz . escapeshellarg('python3') . ' ' . escapeshellarg($bin) . ' ';
     foreach ((array) $argumente as $a) {
         $befehl .= escapeshellarg($a) . ' ';
     }
     $aus = array();
     $code = 0;
     @exec($befehl . '2>&1', $aus, $code);
+    if ($vorsatz !== '' && ($code === 124 || $code === 137)) {
+        $aus[] = hk_tf('FEHLER.FRIST_UEBERSCHRITTEN', array('%1' => (string) (int) $frist));
+    }
     return array($code, implode("\n", $aus));
 }
 
@@ -758,6 +962,12 @@ function hk_themen()
                 'retain'  => isset($e['retain']) && $e['retain'] === true,
                 'text'    => isset($e[$sprache]) ? (string) $e[$sprache]
                              : (isset($e['en']) ? (string) $e['en'] : ''),
+                // Kurze Beschriftung fuer den Comment der Vorlage, hoechstens
+                // 40 Zeichen (seit 1.3.15, O5): der Comment wird beim Import
+                // zum Namen der Kachel (Regeln/07). Bis 1.3.14 stand dort der
+                // Satz aus der Spalte Bedeutung, bis zu 123 Zeichen lang.
+                'kurz'    => isset($e['kurz_' . $sprache]) ? (string) $e['kurz_' . $sprache]
+                             : (isset($e['kurz_en']) ? (string) $e['kurz_en'] : ''),
             );
         }
     }
@@ -823,7 +1033,28 @@ function hk_woerter()
         return $w;
     }
     $w = array();
-    list($code, $aus) = hk_cmd_python('lg_beamer.py', array('--woerter'));
+    /* Zwischengespeichert seit 1.3.15 (O8): bis 1.3.14 startete JEDER
+     * Seitenaufruf dafuer einen Python-Prozess. Der Speicher gilt, solange
+     * lg_beamer.py dieselbe Groesse und Aenderungszeit hat - die Woerter
+     * stehen dort und nirgends sonst. Gespeichert wird nur ein Erfolg. */
+    $quelle = hk_paths()['bin'] . '/lg_beamer.py';
+    $merkmal = is_file($quelle) ? (@filesize($quelle) . ':' . @filemtime($quelle)) : '';
+    $speicher = hk_paths()['woerter'];
+    if ($merkmal !== '' && is_readable($speicher)) {
+        $alt = json_decode((string) @file_get_contents($speicher), true);
+        if (is_array($alt) && isset($alt['merkmal'], $alt['woerter'])
+            && $alt['merkmal'] === $merkmal && is_array($alt['woerter']) && $alt['woerter']) {
+            foreach ($alt['woerter'] as $art => $liste) {
+                if (is_array($liste)) {
+                    $w[(string) $art] = array_values(array_map('strval', $liste));
+                }
+            }
+            if ($w) {
+                return $w;
+            }
+        }
+    }
+    list($code, $aus) = hk_cmd_python('lg_beamer.py', array('--woerter'), 20);
     if ($code === 0) {
         $j = json_decode($aus, true);
         if (is_array($j)) {
@@ -832,6 +1063,12 @@ function hk_woerter()
                     $w[(string) $art] = array_values(array_map('strval', $liste));
                 }
             }
+        }
+    }
+    if ($w && $merkmal !== '' && is_dir(dirname($speicher))) {
+        $js = json_encode(array('merkmal' => $merkmal, 'woerter' => $w));
+        if ($js !== false) {
+            @hk_datei_ersetzen($speicher, $js, 0640);
         }
     }
     return $w;
@@ -907,6 +1144,20 @@ function hk_xml_virtual_in_http($kopf, $cmds)
     return $o;
 }
 
+/**
+ * Name des virtuellen Eingangs, den das MQTT-Gateway fuer ein Thema bildet.
+ *
+ * Das Gateway V2 ersetzt JEDES "/" im ganzen Thema durch "_" (build_vi_name,
+ * mqtt_gateway_v2_geraet.py:1081-1083). Bis 1.3.14 wurde nur das Thema
+ * umgeformt, nicht das Praefix: mit dem zulaessigen Praefix "haus/kino"
+ * trugen 0 von 16 Titeln den Namen des Gateways (Befund mqtt 2). Seit
+ * 1.3.15 EINE Stelle fuer Vorlage und Baustein-Liste.
+ */
+function hk_vi_name($praefix, $thema)
+{
+    return str_replace('/', '_', (string) $praefix . '/' . (string) $thema);
+}
+
 /** Vorlage der Statuseingaenge. Rueckgabe: array(dateiname, inhalt) */
 function hk_vorlage($cfg)
 {
@@ -919,8 +1170,8 @@ function hk_vorlage($cfg)
         // Zahlengrenzen in der Datei.
         if ($e['art'] === 'text') { continue; }
         $cmds[] = array(
-            'title'   => $praefix . '_' . str_replace('/', '_', $thema),
-            'comment' => $e['text'],
+            'title'   => hk_vi_name($praefix, $thema),
+            'comment' => $e['kurz'],
             'check'   => ' ',
             'analog'  => ($e['art'] === 'analog'),
             'min'     => $e['min'],
@@ -1013,19 +1264,58 @@ function hk_xbox_auth_schreiben($daten)
     return hk_datei_ersetzen(hk_paths()['auth'], $js, 0600);
 }
 
+/**
+ * xbox_auth.json lesen, aendern und schreiben - unter EINER Dateisperre
+ * (seit 1.3.15, C7).
+ *
+ * Dienst, Aktionsendpunkt und Oberflaeche schrieben die Datei bis 1.3.14
+ * jeweils als Ganzes aus ihrem eigenen, beim Laden gelesenen Stand. Eine
+ * gerade gespeicherte App-Registrierung ging dabei verloren, sobald der
+ * Dienst waehrenddessen ein Token erneuerte (gemessen, Befund code 8, Fall
+ * 2). Die Sperre ist dieselbe Datei, die bin/xbox_cloud.py sperrt
+ * (<auth>.lock), und sie wird nur fuer Lesen-Aendern-Schreiben gehalten,
+ * nie ueber einen Netzaufruf. Ohne Sperre wird nicht geschrieben.
+ */
+function hk_xbox_auth_aendern($aendern)
+{
+    $auth = hk_paths()['auth'];
+    $ordner = dirname($auth);
+    if (!is_dir($ordner)) {
+        @mkdir($ordner, 0755, true);
+    }
+    $fh = @fopen($auth . '.lock', 'c');
+    if ($fh === false) {
+        return false;
+    }
+    if (!@flock($fh, LOCK_EX)) {
+        fclose($fh);
+        return false;
+    }
+    $ok = false;
+    try {
+        $daten = $aendern(hk_xbox_auth_lesen());
+        $ok = is_array($daten) ? hk_xbox_auth_schreiben($daten) : false;
+    } finally {
+        @flock($fh, LOCK_UN);
+        fclose($fh);
+    }
+    return $ok;
+}
+
 /** Anwendungskennung hinterlegen, vorhandene Token behalten. */
 function hk_xbox_app_speichern($client_id, $client_secret, $rueckleitung = '')
 {
-    $daten = hk_xbox_auth_lesen();
-    $daten['client_id'] = trim((string) $client_id);
-    // Ein leer gelassenes Feld loescht das Geheimnis nicht - sonst waere es
-    // nach jedem Speichern der Seite weg.
-    if (trim((string) $client_secret) !== '') {
-        $daten['client_secret'] = trim((string) $client_secret);
-    }
-    $daten['redirect_uri'] = trim((string) $rueckleitung) !== ''
-        ? trim((string) $rueckleitung) : HK_RUECKLEITUNG;
-    return hk_xbox_auth_schreiben($daten);
+    return hk_xbox_auth_aendern(function ($daten) use ($client_id, $client_secret, $rueckleitung) {
+        $daten['client_id'] = trim((string) $client_id);
+        // Ein leer gelassenes Feld loescht das Geheimnis nicht - sonst waere es
+        // nach jedem Speichern der Seite weg.
+        if (trim((string) $client_secret) !== '') {
+            $daten['client_secret'] = trim((string) $client_secret);
+        }
+        $daten['redirect_uri'] = trim((string) $rueckleitung) !== ''
+            ? trim((string) $rueckleitung) : HK_RUECKLEITUNG;
+        return $daten;
+    });
 }
 
 /**
@@ -1339,6 +1629,36 @@ function hk_sperre_probe()
     return array($u !== '' ? 1 : 0, $u);
 }
 
+/**
+ * Steht der Cron-Eintrag des Waechters? (seit 1.3.15, O4)
+ *
+ * Gesucht wird an ALLEN Cron-Orten (Regeln/04, Raumklima 0.11.8): glob
+ * system/cron/cron.*min/heimkino. Fehlt er an einer Installation, ist das ein
+ * roter Befund - ohne den minuetlichen Waechter startet ein abgestuerzter
+ * Dienst nie neu. Ohne Installation (Archiv, Pruefstand) nicht feststellbar.
+ * Rueckgabe: array(zustand, text) - Text ist der Pfad bzw. die Pfade.
+ */
+function hk_cron_probe()
+{
+    $p = hk_paths();
+    if ($p['home'] === '' || $p['cron'] === '') {
+        return array(2, '');
+    }
+    $treffer = glob($p['cron'] . '/cron.*min/' . $p['plugin']);
+    $dateien = array();
+    foreach ((is_array($treffer) ? $treffer : array()) as $t) {
+        if (is_file($t)) {
+            $dateien[] = $t;
+        }
+    }
+    if (!$dateien) {
+        return array(0, $p['cron'] . '/cron.*min/' . $p['plugin']);
+    }
+    // Ein Eintrag an einem anderen Takt als cron.01min ist ein Rest einer
+    // frueheren Fassung: gezeigt, aber nicht rot.
+    return array(1, implode(', ', $dateien));
+}
+
 /** Sind die erzeugbaren Loxone-Vorlagen wohlgeformt? */
 function hk_vorlagen_probe($cfg)
 {
@@ -1510,68 +1830,484 @@ function hk_version()
 }
 
 
+/* ==================================================================
+ * Sicherung und Wertpruefung (seit 1.3.15, C1/C2)
+ *
+ * Bis 1.3.14 stuerzte "Einstellungen sichern" ab (hk_cfg() mit 0 statt 3
+ * Argumenten, HTTP 500 unter 7.4 und 8.5), und das Zurueckspielen nahm jeden
+ * Abschnitt unbesehen (Bauart E): Token als Liste -> "aktionstoken=Array",
+ * und der Endpunkt nahm danach token=Array an; ein Zeilenumbruch schleuste
+ * einen zweiten Abschnitt [heimkino] mit fremdem Token ein; ip mit
+ * "; rm -rf /", port 99999 und intervall 1 gingen durch (Befunde code 1/2,
+ * oberflaeche 1/2).
+ * ================================================================== */
+
+/** Die Schluessel der Xbox-Anmeldung, die in die Sicherung gehoeren. */
+function hk_sicherung_anmeldeschluessel()
+{
+    // Nur, was fuer einen Umzug noetig ist. Zugriffs- und XSTS-Token sind
+    // Zwischenstaende; sie entstehen aus dem Erneuerungstoken neu.
+    return array('client_id', 'client_secret', 'redirect_uri', 'dienst', 'refresh_token');
+}
+
 /**
- * Eine Sicherungsdatei einlesen - und dabei NICHTS durchgehen lassen.
+ * Die Sicherungsdatei: lesbarer Kopf ("_"-Schluessel), alle Einstellungen aus
+ * hk_config_read() und die Xbox-Anmeldung (Regeln/05: "Beide Dateien gehoeren
+ * in die Sicherung"; xbox_auth.json ist dort ausdruecklich genannt).
+ */
+function hk_sicherung_bauen()
+{
+    $aus = array(
+        '_hinweis' => hk_t('SET.SICH_KOPF'),
+        '_plugin'  => 'heimkino',
+        '_fassung' => hk_version(),
+        '_stand'   => date('Y-m-d H:i:s'),
+    );
+    foreach (hk_config_read() as $abschnitt => $werte) {
+        $aus[$abschnitt] = $werte;
+    }
+    $auth = hk_xbox_auth_lesen();
+    $anm = array();
+    foreach (hk_sicherung_anmeldeschluessel() as $k) {
+        $anm[$k] = (isset($auth[$k]) && is_scalar($auth[$k])) ? (string) $auth[$k] : '';
+    }
+    $aus['xbox_anmeldung'] = $anm;
+    return $aus;
+}
+
+/** Taugt ein Wert ueberhaupt fuer eine Zeile? Zeichenkette oder Zahl, ohne Steuerzeichen. */
+function hk_wert_taugt($v)
+{
+    if (!is_string($v) && !is_int($v)) {
+        return false;
+    }
+    $s = (string) $v;
+    return strlen($s) <= 4096 && preg_match('/[\x00-\x1F\x7F]/', $s) !== 1;
+}
+
+/** Ein Datum JJJJ-MM-TT, das es gibt (checkdate, seit 1.3.15, O2). */
+function hk_datum_gueltig($s)
+{
+    if (!is_string($s) || !preg_match('/^([0-9]{4})-([0-9]{2})-([0-9]{2})\z/', $s, $m)) {
+        return false;
+    }
+    return checkdate((int) $m[2], (int) $m[3], (int) $m[1]);
+}
+
+/** Eingang oder Bildmodus gegen die Wortliste; ohne Liste nur die Form. */
+function hk_wort_gueltig($art, $s)
+{
+    if ($s === '') {
+        return true;
+    }
+    $w = hk_woerter();
+    $liste = isset($w[$art]) ? $w[$art] : array();
+    if ($liste) {
+        return in_array($s, $liste, true);
+    }
+    return preg_match('/^[A-Za-z0-9_]{1,32}\z/', $s) === 1;
+}
+
+/**
+ * Ist ein Wert fuer DIESE Einstellung zulaessig? Dieselbe Positivliste fuer
+ * das Formular und das Zurueckspielen (Regeln/05). Jedes Muster endet mit
+ * \z, nicht mit $ (Regeln/05). Rueckgabe: array(ok, Wert in Normalform).
+ * Ein unbekannter Schluessel faellt geschlossen aus.
+ */
+function hk_wert_pruefen($abschnitt, $schluessel, $wert)
+{
+    if (!hk_wert_taugt($wert)) {
+        return array(false, '');
+    }
+    $s = (string) $wert;
+    $ganz = function ($s, $min, $max) {
+        if (!preg_match('/^-?[0-9]{1,10}\z/', $s)) {
+            return array(false, '');
+        }
+        $n = (int) $s;
+        return ($n >= $min && $n <= $max) ? array(true, (string) $n) : array(false, '');
+    };
+    $ja = function ($ok) use ($s) {
+        return $ok ? array(true, $s) : array(false, '');
+    };
+    switch ($abschnitt . '.' . $schluessel) {
+        case 'heimkino.enabled':
+        case 'heimkino.mqtt':
+        case 'heimkino.nachfassen':
+        case 'beamer.aktiv':
+        case 'beamer.zusatzwerte':
+        case 'xbox.aktiv':
+        case 'szene.aktiv':
+            return $ja($s === '0' || $s === '1');
+        case 'heimkino.intervall':
+            return $ganz($s, 10, 3600);
+        case 'heimkino.themenpraefix':
+            return $ja(preg_match('#^[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*\z#', $s) === 1);
+        case 'heimkino.aktionstoken':
+            // is_string (Regeln/05): ein Feld wurde bis 1.3.14 zu "Array".
+            // Leer ist zulaessig und heisst "kein Token gesichert".
+            return $ja(is_string($wert) && preg_match('/^[A-Za-z0-9_.-]{0,64}\z/', $s) === 1);
+        case 'beamer.ip':
+            return $ja($s === '' || preg_match('/^[A-Za-z0-9._-]{1,253}\z/', $s) === 1);
+        case 'beamer.mac':
+            return $ja($s === '' || preg_match('/^[0-9A-Fa-f]{2}([:.-]?[0-9A-Fa-f]{2}){5}\z/', $s) === 1);
+        case 'beamer.keycode':
+            return $ja($s === '' || preg_match('/^[A-Z0-9]{8}\z/', $s) === 1);
+        case 'beamer.port':
+            return $ganz($s, 1, 65535);
+        case 'beamer.zeitgrenze':
+            return $ganz($s, 1, 60);
+        case 'xbox.geraete_id':
+            return $ja($s === '' || preg_match('/^[A-Za-z0-9._:-]{1,128}\z/', $s) === 1);
+        case 'xbox.geheimnis_ablauf':
+            return $ja($s === '' || hk_datum_gueltig($s));
+        case 'szene.eingang':
+            return $ja(hk_wort_gueltig('eingang', $s));
+        case 'szene.bildmodus':
+            return $ja(hk_wort_gueltig('bildmodus', $s));
+        case 'szene.warten_beamer':
+        case 'szene.warten_xbox':
+            return $ganz($s, 10, 600);
+    }
+    return array(false, '');
+}
+
+/** Ist ein Feld eine Liste (JSON-Array) statt eines Objekts? */
+function hk_ist_liste($a)
+{
+    return is_array($a) && $a !== array() && array_keys($a) === range(0, count($a) - 1);
+}
+
+/** Wie ein abgewiesener Wert beschrieben wird - nie roh (Regeln/03). */
+function hk_wert_art($w)
+{
+    if (is_array($w) || is_object($w)) {
+        return hk_t('SET.SICH_ART_FELD');
+    }
+    if (is_bool($w) || is_null($w) || is_float($w)) {
+        return hk_t('SET.SICH_ART_TYP');
+    }
+    return sprintf(hk_t('SET.SICH_ART_ZEICHEN'), strlen((string) $w));
+}
+
+/**
+ * Eine Sicherungsdatei pruefen (seit 1.3.15 je Wert, C2).
  *
- * Die sieben Punkte aus REGELN_2, und der wichtigste ist der dritte: eine
- * halb gueltige Datei ueberschreibt GAR NICHTS. Wer eine Sicherung
- * zurueckspielt, will entweder den ganzen Stand oder gar keinen - eine zur
- * Haelfte uebernommene Konfiguration ist schlimmer als die alte, und man
- * sieht es ihr nicht an.
+ * Jeder Abschnitt muss ein Feld sein, jeder Schluessel bekannt und jeder
+ * Wert zulaessig (hk_wert_pruefen). Fehlende und fremde Schluessel sind
+ * Beanstandungen. ALLE Beanstandungen werden gesammelt; gibt es eine, wird
+ * nichts geschrieben. Der lesbare Kopf ("_"-Schluessel) wird uebergangen.
+ * Ein leeres Aktionstoken heisst "keins gesichert": das geltende bleibt.
  *
- * Unbekannte Schluessel sind eine Beanstandung, kein stiller Verlust: sie
- * stammen aus einer anderen Fassung oder einem anderen Plugin.
- *
- * Rueckgabe: array(Konfiguration|null, Beanstandungen[], uebernommene Werte).
+ * Rueckgabe: array(Konfiguration|null, Beanstandungen, Zahl der Werte,
+ * Xbox-Anmeldung|null, Token leer?).
  */
 function hk_sicherung_lesen($roh)
 {
     $mangel = array();
     $daten = json_decode((string) $roh, true);
-    if (!is_array($daten)) {
-        return array(null, array(hk_t('SET.SICH_KEIN_JSON')), 0);
+    if (!is_array($daten) || hk_ist_liste($daten)) {
+        return array(null, array(hk_t('SET.SICH_KEIN_JSON')), 0, null, false);
     }
-    $neu = hk_vorgaben();
-    $bekannt = array_keys($neu);
+    $vg = hk_vorgaben();
+    $neu = hk_config_read();
     $anzahl = 0;
+    $auth = null;
+    $token_leer = false;
+    $fehlend = array();
+    $e = function ($s) {
+        return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8');
+    };
     foreach ($daten as $k => $w) {
-        if (!in_array($k, $bekannt, true)) {
-            $mangel[] = sprintf(hk_t('SET.SICH_FREMD'),
-                                 htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
+        $k = (string) $k;
+        if ($k !== '' && $k[0] === '_') {
             continue;
         }
-        $neu[$k] = $w;
-        $anzahl++;
+        if ($k === 'xbox_anmeldung') {
+            if (!is_array($w) || hk_ist_liste($w)) {
+                $mangel[] = sprintf(hk_t('SET.SICH_KEIN_ABSCHNITT'), $e($k));
+                continue;
+            }
+            $a = array();
+            foreach ($w as $ak => $av) {
+                $ak = (string) $ak;
+                if (!in_array($ak, hk_sicherung_anmeldeschluessel(), true)) {
+                    $mangel[] = sprintf(hk_t('SET.SICH_FREMD'), $e($k . '.' . $ak));
+                    continue;
+                }
+                $ok = is_string($av) && hk_wert_taugt($av);
+                if ($ok && $ak === 'dienst') {
+                    $ok = in_array(strtolower($av), array('', 'live', 'v2'), true);
+                } elseif ($ok && $ak === 'redirect_uri') {
+                    $ok = ($av === '' || preg_match('#^https?://[\x21-\x7E]{1,2000}\z#', $av) === 1);
+                } elseif ($ok && $ak === 'client_id') {
+                    $ok = ($av === '' || preg_match('/^[A-Za-z0-9{}._-]{1,128}\z/', $av) === 1);
+                }
+                if (!$ok) {
+                    $mangel[] = sprintf(hk_t('SET.SICH_WERT'), $e($k . '.' . $ak), hk_wert_art($av));
+                    continue;
+                }
+                $a[$ak] = $av;
+            }
+            foreach (hk_sicherung_anmeldeschluessel() as $pflicht) {
+                if (!array_key_exists($pflicht, $w)) {
+                    $fehlend[] = $k . '.' . $pflicht;
+                }
+            }
+            $auth = $a;
+            continue;
+        }
+        if (!isset($vg[$k])) {
+            $mangel[] = sprintf(hk_t('SET.SICH_FREMD'), $e($k));
+            continue;
+        }
+        if (!is_array($w) || hk_ist_liste($w)) {
+            $mangel[] = sprintf(hk_t('SET.SICH_KEIN_ABSCHNITT'), $e($k));
+            continue;
+        }
+        foreach ($w as $sk => $sw) {
+            $sk = (string) $sk;
+            if (!array_key_exists($sk, $vg[$k])) {
+                $mangel[] = sprintf(hk_t('SET.SICH_FREMD'), $e($k . '.' . $sk));
+                continue;
+            }
+            list($ok, $norm) = hk_wert_pruefen($k, $sk, $sw);
+            if (!$ok) {
+                $mangel[] = sprintf(hk_t('SET.SICH_WERT'), $e($k . '.' . $sk), hk_wert_art($sw));
+                continue;
+            }
+            if ($k === 'heimkino' && $sk === 'aktionstoken' && $norm === '') {
+                $token_leer = true;
+                continue;
+            }
+            $neu[$k][$sk] = $norm;
+            $anzahl++;
+        }
+        foreach (array_keys($vg[$k]) as $pflicht) {
+            if (!array_key_exists($pflicht, $w)) {
+                $fehlend[] = $k . '.' . $pflicht;
+            }
+        }
     }
-    if ($anzahl === 0) {
-        $mangel[] = hk_t('SET.SICH_LEER');
-    }
-    /* FEHLENDE Schluessel sind eine Beanstandung, kein stiller Rueckfall.
-     *
-     * Bis hierher war die Vorgabenliste der Ausgangspunkt, und nur was in
-     * der Datei stand wurde darueber geschrieben. Eine Datei mit einem
-     * einzigen Schluessel lief damit ohne Beanstandung durch, wurde
-     * gespeichert, und alle uebrigen Einstellungen fielen auf Werk
-     * zurueck - quittiert mit "1 Wert uebernommen".
-     *
-     * Gemessen an VolkswagenID 0.9.11 am 03.09.2026 unter PHP 7.4 und 8.4:
-     * dort fiel dabei auch das Aktionstoken auf '', und jede im Miniserver
-     * eingetragene Adresse war stumm ungueltig. Am 07.09.2026 ueber den
-     * Bestand ausgerollt (30 Linien).
-     *
-     * Der Hausstandard sagt: eine halb gueltige Datei aendert gar nichts.
-     * Verglichen wird gegen die VORGABEN, nicht gegen $bekannt: was
-     * ausserhalb der Konfigurationsdatei liegt - Zugangsdaten in einer
-     * eigenen Datei - faellt nicht auf Werk zurueck und darf hier fehlen. */
-    $fehlend = array();
-    foreach (array_keys(hk_vorgaben()) as $fk) {
-        if (!array_key_exists($fk, $daten)) {
-            $fehlend[] = $fk;
+    foreach (array_keys($vg) as $abschnitt) {
+        if (!array_key_exists($abschnitt, $daten)) {
+            $fehlend[] = $abschnitt;
         }
     }
     if ($fehlend) {
         $mangel[] = sprintf(hk_t('SET.SICH_FEHLEND'), count($fehlend),
             htmlspecialchars(implode(', ', $fehlend), ENT_QUOTES, 'UTF-8'));
     }
-    return array($mangel ? null : $neu, $mangel, $anzahl);
+    if ($anzahl === 0 && !$mangel) {
+        $mangel[] = hk_t('SET.SICH_LEER');
+    }
+    return array($mangel ? null : $neu, $mangel, $anzahl, $mangel ? null : $auth, $token_leer);
+}
+
+/**
+ * Die Xbox-Anmeldung aus einer Sicherung uebernehmen - unter der Sperre.
+ * Sind alle Werte leer, war keine Anmeldung gesichert: die geltende bleibt.
+ * Rueckgabe: 'keine' | 'ok' | 'fehler'.
+ */
+function hk_xbox_anmeldung_uebernehmen($auth)
+{
+    if (!is_array($auth) || implode('', $auth) === '') {
+        return 'keine';
+    }
+    $ok = hk_xbox_auth_aendern(function ($daten) use ($auth) {
+        foreach (hk_sicherung_anmeldeschluessel() as $k) {
+            $v = isset($auth[$k]) ? (string) $auth[$k] : '';
+            if ($v === '') {
+                unset($daten[$k]);
+            } else {
+                $daten[$k] = $v;
+            }
+        }
+        // Die Zwischenstaende gehoeren zur alten Anmeldung.
+        foreach (array('access_token', 'access_bis', 'xsts_token', 'userhash', 'xsts_bis') as $k) {
+            unset($daten[$k]);
+        }
+        return $daten;
+    });
+    return $ok ? 'ok' : 'fehler';
+}
+
+/* ==================================================================
+ * Einmalmeldung fuer PRG (seit 1.3.15, O1; Regeln/04 Docker NG, Raumklima)
+ *
+ * Jeder POST endet mit 303 auf index.php?form=<reiter>; was er zu sagen hat,
+ * liegt bis zum naechsten GET in data/plugins/heimkino/einmalmeldung.json
+ * (0600, hoechstens 120 s alt). Gelesen wird NUR beim GET, und die Datei wird
+ * dabei geloescht, VOR der Anzeige. Zugangsdaten stehen nie darin.
+ * ================================================================== */
+
+function hk_einmal_schreiben($daten)
+{
+    $datei = hk_paths()['einmal'];
+    if (!is_dir(dirname($datei))) {
+        @mkdir(dirname($datei), 0755, true);
+    }
+    $daten['zeit'] = time();
+    $js = json_encode($daten, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    return $js !== false && hk_datei_ersetzen($datei, $js, 0600);
+}
+
+function hk_einmal_lesen()
+{
+    $datei = hk_paths()['einmal'];
+    if (!is_file($datei)) {
+        return array();
+    }
+    $roh = (string) @file_get_contents($datei);
+    @unlink($datei);
+    $d = json_decode($roh, true);
+    if (!is_array($d) || !isset($d['zeit']) || (time() - (int) $d['zeit']) > 120
+        || (time() - (int) $d['zeit']) < -5) {
+        return array();
+    }
+    return $d;
+}
+
+/* ==================================================================
+ * Protokoll aus PHP, gebremst (seit 1.3.15)
+ *
+ * Regeln/03: "Wer ein Protokoll anzeigt, muss es auch schreiben - gebremst";
+ * die Bremse setzt sich zurueck, wenn die Protokolldatei fehlt. Geschrieben
+ * wird nur, wenn der Protokollordner da ist - angelegt wird nichts.
+ * ================================================================== */
+
+function hk_log_zeile($text, $stufe = 'INFO')
+{
+    $datei = hk_paths()['log'];
+    if (!is_dir(dirname($datei))) {
+        return false;
+    }
+    clearstatcache(true, $datei);
+    if (is_file($datei) && @filesize($datei) > 512000) {
+        $rest = @file($datei, FILE_IGNORE_NEW_LINES);
+        if (is_array($rest)) {
+            @file_put_contents($datei, implode("\n", array_slice($rest, -200)) . "\n", LOCK_EX);
+        }
+    }
+    $zeile = date('Y-m-d H:i:s') . ' ' . str_pad($stufe, 7) . ' '
+           . str_replace(array("\r", "\n"), ' ', (string) $text) . "\n";
+    return @file_put_contents($datei, $zeile, FILE_APPEND | LOCK_EX) !== false;
+}
+
+/**
+ * Eine Zeile hoechstens alle $sekunden je Schluessel; unterdrueckte Zeilen
+ * werden gezaehlt und mit der naechsten genannt. $sekunden = 0: immer.
+ */
+function hk_log_gebremst($schluessel, $text, $stufe = 'INFO', $sekunden = 3600)
+{
+    $p = hk_paths();
+    if ($sekunden <= 0 || !is_dir(dirname($p['bremse']))) {
+        return hk_log_zeile($text, $stufe);
+    }
+    $fh = @fopen($p['bremse'], 'c+');
+    if ($fh === false) {
+        return hk_log_zeile($text, $stufe);
+    }
+    @flock($fh, LOCK_EX);
+    $d = json_decode((string) stream_get_contents($fh), true);
+    if (!is_array($d)) {
+        $d = array();
+    }
+    // Ist das Protokoll fort (Ramdisk geleert, gekappt), gilt keine Bremse.
+    clearstatcache(true, $p['log']);
+    if (!is_file($p['log'])) {
+        $d = array();
+    }
+    $jetzt = time();
+    $alt = isset($d[$schluessel]) && is_array($d[$schluessel]) ? $d[$schluessel] : null;
+    $schreiben = true;
+    if ($alt !== null && ($jetzt - (int) $alt['zeit']) < $sekunden && ($jetzt - (int) $alt['zeit']) >= 0) {
+        $d[$schluessel]['still'] = (int) (isset($alt['still']) ? $alt['still'] : 0) + 1;
+        $schreiben = false;
+    } else {
+        $still = $alt !== null && isset($alt['still']) ? (int) $alt['still'] : 0;
+        if ($still > 0) {
+            $text .= ' (' . $still . ' gleichartige Zeilen seit ' . date('H:i:s', (int) $alt['zeit'])
+                   . ' unterdrueckt)';
+        }
+        $d[$schluessel] = array('zeit' => $jetzt, 'still' => 0);
+    }
+    // Aeltere Schluessel nicht ewig mitschleppen.
+    foreach ($d as $k => $v) {
+        if (!is_array($v) || !isset($v['zeit']) || ($jetzt - (int) $v['zeit']) > 86400) {
+            unset($d[$k]);
+        }
+    }
+    ftruncate($fh, 0);
+    rewind($fh);
+    fwrite($fh, (string) json_encode($d));
+    fflush($fh);
+    @flock($fh, LOCK_UN);
+    fclose($fh);
+    return $schreiben ? hk_log_zeile($text, $stufe) : true;
+}
+
+/**
+ * Jeder Ausgang des Aktionsendpunkts bekommt eine Zeile mit der Adresse des
+ * Anrufers (seit 1.3.15, C5; Regeln/03). Nie das Token; eine abgewiesene
+ * Aktion nur mit ihrer Laenge. Gebremst je Anrufer, Antwort und Grund auf
+ * eine Zeile je Minute.
+ */
+function hk_endpunkt_protokoll($code, $grund, $aktion = '')
+{
+    $adr = isset($_SERVER['REMOTE_ADDR']) ? (string) $_SERVER['REMOTE_ADDR'] : '';
+    $adr = preg_replace('/[^0-9A-Fa-f:.]/', '', $adr);
+    if ($adr === '') {
+        $adr = '?';
+    }
+    $akt = '';
+    if ($aktion !== '') {
+        $bekannt = array_merge(array_keys(hk_aktionen()), array_keys(hk_aktionen_mit_wert()));
+        $akt = in_array($aktion, $bekannt, true)
+            ? ' aktion=' . $aktion : ' aktion=(' . strlen($aktion) . ' Zeichen, unbekannt)';
+    }
+    $text = 'Endpunkt: ' . $adr . ' -> HTTP ' . (int) $code . ' ' . $grund . $akt;
+    return hk_log_gebremst('ep_' . $adr . '_' . (int) $code . '_' . $grund . '_' . $akt,
+                           $text, (int) $code >= 400 ? 'WARNING' : 'INFO', 60);
+}
+
+/**
+ * Mindestabstand fuer xbox-an/xbox-aus aus dem Endpunkt (seit 1.3.15, C10).
+ *
+ * Jeder Aufruf ging bis 1.3.14 ungebremst an die Microsoft-Cloud; ein
+ * flatternder Ausgang in Loxone loeste jede Sekunde einen Befehl aus
+ * (Regeln/03 Paragraph 9, Befund code 12). Ein gemeinsamer Abstand fuer beide
+ * Befehle: an und aus im Sekundentakt ist genau das Flattern.
+ * Rueckgabe: array(erlaubt, Restsekunden). Ohne Datenordner oder Sperre
+ * faellt die Bremse geschlossen aus (array(false, -1)).
+ */
+function hk_xbox_bremse($abstand = 10)
+{
+    $datei = hk_paths()['xbox_befehl'];
+    if (!is_dir(dirname($datei))) {
+        return array(false, -1);
+    }
+    $fh = @fopen($datei, 'c+');
+    if ($fh === false || !@flock($fh, LOCK_EX)) {
+        if ($fh !== false) {
+            fclose($fh);
+        }
+        return array(false, -1);
+    }
+    $d = json_decode((string) stream_get_contents($fh), true);
+    $zuletzt = (is_array($d) && isset($d['zeit'])) ? (float) $d['zeit'] : 0.0;
+    $jetzt = microtime(true);
+    $seit = $jetzt - $zuletzt;
+    if ($seit >= 0 && $seit < $abstand) {
+        @flock($fh, LOCK_UN);
+        fclose($fh);
+        return array(false, (int) ceil($abstand - $seit));
+    }
+    ftruncate($fh, 0);
+    rewind($fh);
+    fwrite($fh, (string) json_encode(array('zeit' => $jetzt)));
+    fflush($fh);
+    @flock($fh, LOCK_UN);
+    fclose($fh);
+    return array(true, 0);
 }

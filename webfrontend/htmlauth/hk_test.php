@@ -34,10 +34,15 @@ function hk_block($text)
  * "Nicht feststellbar" ist ein eigener Zustand und sieht auch so aus - ein
  * "ich kann es nicht messen" darf nicht wie ein Haken wirken.
  */
-function hk_test_zeilen($cfg)
+function hk_test_zeilen($cfg, $voll = true)
 {
     $zeilen = array();
     $p = hk_paths();
+    // Seit 1.3.15 (O8): was einen Python-Prozess startet oder das Netz
+    // fragt, laeuft nur, wenn der Reiter Test serverseitig offen ist. Bis
+    // 1.3.14 startete JEDER Seitenaufruf vier bis fuenf Python-Prozesse
+    // (Befund oberflaeche 12; Regeln/04 EVCC 0.9.29: 19,37 s).
+    $nur_test = hk_t('PRUEF.NUR_IM_TEST');
 
     // --- Laeuft der Dienst? Die Grundfrage.
     $pid = hk_dienst_pid();
@@ -58,6 +63,14 @@ function hk_test_zeilen($cfg)
         : ($hk_mz === 1
            ? hk_tf('PRUEF.MARKE_GILT', array('%1' => (string) (int) $hk_malter))
            : hk_t('PRUEF.MARKE_ALT')));
+
+    // --- Steht der Cron-Eintrag des Waechters? (seit 1.3.15, O4) Ohne ihn
+    // startet ein abgestuerzter Dienst nie neu. Gesucht an allen Cron-Orten.
+    list($zu, $tx) = hk_cron_probe();
+    $zeilen[] = array($zu, hk_t('PRUEF.CRON'),
+        $zu === 1 ? hk_tf('PRUEF.CRON_JA', array('%1' => $tx))
+        : ($zu === 0 ? hk_tf('PRUEF.CRON_FEHLT', array('%1' => $tx))
+                     : hk_t('PRUEF.CRON_OHNE_ANLAGE')));
 
     // --- Arbeitet er noch? Ein Prozess kann dastehen und nichts tun.
     // Ueber einen Dienst, der gar nicht laeuft, wird kein Herzschlag
@@ -80,34 +93,57 @@ function hk_test_zeilen($cfg)
     // --- Ist die Konfiguration heil? Jeder Zustand, den der Code erzeugen
     // kann, braucht seinen eigenen Satz.
     $lage = hk_config_lage();
-    $zeilen[] = array($lage === 'ok' ? 1 : 0, hk_t('PRUEF.CFG'),
-        hk_t('PRUEF.CFG_' . strtoupper($lage)));
+    $heil = hk_heilung_lage();
+    if ($heil === 'geheilt' && $lage === 'ok') {
+        $zeilen[] = array(0, hk_t('PRUEF.CFG'), hk_t('PRUEF.CFG_GEHEILT'));
+    } else {
+        $zeilen[] = array($lage === 'ok' ? 1 : 0, hk_t('PRUEF.CFG'),
+            hk_t('PRUEF.CFG_' . strtoupper($lage)));
+    }
 
     // --- Ist sie vollstaendig? "fehlt" darf nicht dasselbe sein wie
     // "steht auf dem Vorgabewert".
     list($zu, $tx) = hk_vollstaendig_probe();
+    // Fremde Schluessel bleiben stehen und werden genannt (Regeln/05, seit
+    // 1.3.15) - ein Hinweis, kein Befund.
+    $fremd = hk_config_fremde_namen();
+    if ($fremd) {
+        $tx .= ' ' . hk_tf('PRUEF.CFG_FREMD', array('%1' => implode(', ', $fremd)));
+    }
     $zeilen[] = array($zu, hk_t('PRUEF.CFG_VOLL'), $tx);
 
     // --- Kennen Oberflaeche und Dienst dieselben Vorgaben?
-    list($zu, $tx) = hk_vorgaben_probe();
-    $zeilen[] = array($zu, hk_t('PRUEF.VORGABEN'),
-        $zu === 2 ? hk_t('PRUEF.NICHT_MESSBAR') : hk_tf('PRUEF.ANZAHL', array('%1' => $tx)));
+    if (!$voll) {
+        $zeilen[] = array(2, hk_t('PRUEF.VORGABEN'), $nur_test);
+    } else {
+        list($zu, $tx) = hk_vorgaben_probe();
+        $zeilen[] = array($zu, hk_t('PRUEF.VORGABEN'),
+            $zu === 2 ? hk_t('PRUEF.NICHT_MESSBAR') : hk_tf('PRUEF.ANZAHL', array('%1' => $tx)));
+    }
 
     // --- Antwortet der eigene Endpunkt? Der echte Aufruf auf 127.0.0.1 -
     // nur er findet die getrennten Baeume, die keine Leseprobe sieht.
-    list($zu, $tx) = hk_endpunkt_probe($cfg);
-    $zeilen[] = array($zu, hk_t('PRUEF.ENDPUNKT'),
-        $zu === 1 ? hk_t('PRUEF.ENDPUNKT_OK')
-        : ($zu === 2 ? ($tx === 'KEIN_TOKEN' ? hk_t('PRUEF.ENDPUNKT_KEIN_TOKEN')
-                                             : hk_t('PRUEF.ENDPUNKT_UNKLAR'))
-        : hk_tf('PRUEF.ENDPUNKT_FALSCH', array('%1' => $tx))));
+    if (!$voll) {
+        $zeilen[] = array(2, hk_t('PRUEF.ENDPUNKT'), $nur_test);
+    } else {
+        list($zu, $tx) = hk_endpunkt_probe($cfg);
+        $zeilen[] = array($zu, hk_t('PRUEF.ENDPUNKT'),
+            $zu === 1 ? hk_t('PRUEF.ENDPUNKT_OK')
+            : ($zu === 2 ? ($tx === 'KEIN_TOKEN' ? hk_t('PRUEF.ENDPUNKT_KEIN_TOKEN')
+                                                 : hk_t('PRUEF.ENDPUNKT_UNKLAR'))
+            : hk_tf('PRUEF.ENDPUNKT_FALSCH', array('%1' => $tx))));
+    }
 
     // --- Nennt die Themen-Tabelle, was der Dienst wirklich sendet?
-    list($zu, $tx) = hk_themen_probe();
-    $zeilen[] = array($zu, hk_t('PRUEF.THEMEN'),
-        $zu === 1 ? hk_tf('PRUEF.ANZAHL', array('%1' => $tx))
-        : ($zu === 2 ? hk_t('PRUEF.NICHT_MESSBAR')
-                     : hk_tf('PRUEF.THEMEN_ABW', array('%1' => $tx))));
+    if (!$voll) {
+        $zeilen[] = array(2, hk_t('PRUEF.THEMEN'), $nur_test);
+    } else {
+        list($zu, $tx) = hk_themen_probe();
+        $zeilen[] = array($zu, hk_t('PRUEF.THEMEN'),
+            $zu === 1 ? hk_tf('PRUEF.ANZAHL', array('%1' => $tx))
+            : ($zu === 2 ? hk_t('PRUEF.NICHT_MESSBAR')
+                         : hk_tf('PRUEF.THEMEN_ABW', array('%1' => $tx))));
+    }
 
     // --- Setzt der Server das sm-active? Ohne das ist die Seite ohne
     // JavaScript leer.
@@ -130,6 +166,8 @@ function hk_test_zeilen($cfg)
     // nicht laeuft, wird nicht geurteilt - dann steht der Befund schon oben.
     if (!$pid) {
         $zeilen[] = array(2, hk_t('PRUEF.PROTOKOLL'), hk_t('PRUEF.HERZ_KEIN_DIENST'));
+    } elseif (!$voll) {
+        $zeilen[] = array(2, hk_t('PRUEF.PROTOKOLL'), $nur_test);
     } else {
         list($zu, $tx) = hk_protokoll_probe();
         // Eine fehlende oder leere Datei ist KEIN Befund: der Dienst legt sie
@@ -145,10 +183,14 @@ function hk_test_zeilen($cfg)
     // --- Wirkt die Geraetesperre? Ohne sie koennen Dienst und
     // Einzelbefehl gleichzeitig mit dem Beamer sprechen, und das Geraet
     // nimmt nur eine Verbindung zur Zeit an.
-    list($zu, $tx) = hk_sperre_probe();
-    $zeilen[] = array($zu, hk_t('PRUEF.SPERRE'),
-        $zu === 1 ? hk_tf('PRUEF.SPERRE_JA', array('%1' => $tx))
-        : ($zu === 2 ? hk_t('PRUEF.NICHT_MESSBAR') : hk_t('PRUEF.SPERRE_NEIN')));
+    if (!$voll) {
+        $zeilen[] = array(2, hk_t('PRUEF.SPERRE'), $nur_test);
+    } else {
+        list($zu, $tx) = hk_sperre_probe();
+        $zeilen[] = array($zu, hk_t('PRUEF.SPERRE'),
+            $zu === 1 ? hk_tf('PRUEF.SPERRE_JA', array('%1' => $tx))
+            : ($zu === 2 ? hk_t('PRUEF.NICHT_MESSBAR') : hk_t('PRUEF.SPERRE_NEIN')));
+    }
 
     // --- Sind die erzeugbaren Loxone-Vorlagen wohlgeformt?
     list($zu, $tx) = hk_vorlagen_probe($cfg);
@@ -190,10 +232,14 @@ function hk_test_zeilen($cfg)
         $zeilen[] = array(2, hk_t('PRUEF.FRIST'), hk_t('PRUEF.FRIST_XBOX_AUS'));
     } else {
         list($art, $tage, $hin) = hk_ablauf_lage(hk_cfg($cfg, 'xbox', 'geheimnis_ablauf', ''));
+        // Eigene Schluessel ohne Auszeichnung (seit 1.3.15, O3): die Zeile
+        // wird maskiert ausgegeben, und bis 1.3.14 stand dort woertlich
+        // "<b>30.06.2027</b>" (Befund oberflaeche 7; Regeln/04 "Texte fuer
+        // maskierte Meldungen tragen keine Auszeichnung").
         $zeilen[] = array(
             $art === 'ok' ? 1 : ($art === 'leer' ? 2 : 0),
             hk_t('PRUEF.FRIST'),
-            hk_tf('FRIST.' . strtoupper($art), array(
+            hk_tf('PRUEF.FRIST_' . strtoupper($art), array(
                 '%1' => $hin, '%2' => (string) (int) abs((int) $tage))));
     }
 

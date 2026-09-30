@@ -36,6 +36,7 @@ import os
 import re
 import socket
 import sys
+import time
 
 # Die Geraetesperre. Ohne sie laeuft alles wie vor 1.3.0 - das haelt den
 # Selbsttest dieser Datei eigenstaendig, auch auf einem Rechner ohne
@@ -232,6 +233,13 @@ class LgBeamer:
             with Sperre(self.sperre, warten=self.sperre_warten), \
                     socket.create_connection((self.ip, self.port),
                                              timeout=self.zeitgrenze) as buchse:
+                # Eine GESAMTfrist fuer den Wortwechsel, mit time.monotonic()
+                # (seit 1.3.15, C6). Bis 1.3.14 galt die Zeitgrenze je recv():
+                # ein Geraet, das ein Byte je Sekunde schickt, hielt den
+                # Aufruf bis zu 4096 x zeitgrenze fest - gemessen 25,7 s bei
+                # zeitgrenze 2 (Befund code 7), und so lange blieb die
+                # Geraetesperre belegt.
+                ende = time.monotonic() + self.zeitgrenze
                 buchse.settimeout(self.zeitgrenze)
                 buchse.sendall(anfrage)
                 stueck = b""
@@ -239,6 +247,10 @@ class LgBeamer:
                 # sichtbar, deshalb wird nach jedem Block versucht zu
                 # entschluesseln, bis es aufgeht.
                 while len(stueck) < 4096:
+                    rest = ende - time.monotonic()
+                    if rest <= 0:
+                        raise socket.timeout("Gesamtfrist abgelaufen")
+                    buchse.settimeout(rest)
                     teil = buchse.recv(1024)
                     if not teil:
                         break

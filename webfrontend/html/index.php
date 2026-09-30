@@ -61,8 +61,15 @@ if (!$hk_lib_gefunden) {
     exit;
 }
 
-function hk_ende($code, $text)
+/* Jeder Ausgang schreibt eine Protokollzeile mit der Adresse des Anrufers,
+ * gebremst auf eine je Minute und Grund (seit 1.3.15, C5; Regeln/03). Bis
+ * 1.3.14 war "der Miniserver ruft nicht an" nicht von "er ruft an und wird
+ * abgewiesen" zu unterscheiden (Befund code 11). Das Token steht nie darin. */
+$hk_aktion_roh = (isset($_GET['aktion']) && is_string($_GET['aktion'])) ? $_GET['aktion'] : '';
+
+function hk_ende($code, $text, $grund = 'ok')
 {
+    hk_endpunkt_protokoll($code, $grund, $GLOBALS['hk_aktion_roh']);
     http_response_code($code);
     echo $text . "\n";
     exit;
@@ -73,6 +80,11 @@ $soll = hk_cfg($cfg, 'heimkino', 'aktionstoken', '');
 // Ein Feld kann als Feld ankommen (?token[]=x). (string) darauf ergaebe
 // "Array" samt Meldung - erst is_string, dann alles andere.
 $ist = (isset($_GET['token']) && is_string($_GET['token'])) ? $_GET['token'] : '';
+// Wertmuster auch fuer das Token, mit \z statt $ (seit 1.3.15, C5;
+// Regeln/05 "Eine Positivliste in PHP endet mit \z").
+if (!preg_match('/^[A-Za-z0-9_.-]{1,64}\z/', $ist)) {
+    $ist = '';
+}
 
 /* ---------- Selbsttest: Token pruefen, ohne etwas auszuloesen ----------
  *
@@ -100,34 +112,51 @@ $ist = (isset($_GET['token']) && is_string($_GET['token'])) ? $_GET['token'] : '
 if (isset($_GET['selftest']) && is_string($_GET['selftest'])
     && $_GET['selftest'] === '1') {
     if ($soll === '') {
-        hk_ende(403, 'SELFTEST;OK=0;ERR=KEIN_TOKEN_EINGERICHTET');
+        hk_ende(403, 'SELFTEST;OK=0;ERR=KEIN_TOKEN_EINGERICHTET', 'selftest_kein_token');
     }
     // Dieselbe Abweisung wie sonst auch - der Selbsttest ist keine Abkuerzung
     // an der Sicherheit vorbei. hash_equals vergleicht in gleichbleibender
     // Zeit; ein einfaches == liesse sich ueber die Antwortzeit Zeichen fuer
     // Zeichen erraten.
     if (!hash_equals($soll, $ist)) {
-        hk_ende(403, 'SELFTEST;OK=0;ERR=TOKEN');
+        hk_ende(403, 'SELFTEST;OK=0;ERR=TOKEN', 'selftest_token_falsch');
     }
-    hk_ende(200, 'SELFTEST;OK=1;TOKEN=OK');
+    hk_ende(200, 'SELFTEST;OK=1;TOKEN=OK', 'selftest');
 }
 
 if (!hk_an($cfg, 'heimkino', 'enabled')) {
-    hk_ende(503, 'Das Plugin ist in den Einstellungen abgeschaltet.');
+    hk_ende(503, 'Das Plugin ist in den Einstellungen abgeschaltet.', 'abgeschaltet');
 }
 
 if ($soll === '') {
     hk_ende(403, 'Kein Aktionstoken eingerichtet. Reiter Einstellungen aufrufen '
-                 . 'und einmal speichern - dann wird eines erzeugt.');
+                 . 'und einmal speichern - dann wird eines erzeugt.', 'kein_token');
 }
 
 if (!hash_equals($soll, $ist)) {
-    hk_ende(403, 'Token falsch.');
+    hk_ende(403, 'Token falsch.', 'token_falsch');
 }
 
 $aktion = (isset($_GET['aktion']) && is_string($_GET['aktion'])) ? $_GET['aktion'] : '';
 $erlaubt = array_keys(hk_aktionen());
 $mit_wert = array_keys(hk_aktionen_mit_wert());
+
+/* Mindestabstand fuer die Xbox (seit 1.3.15, C10): jeder Aufruf geht an die
+ * Microsoft-Cloud, und ein flatternder Ausgang in Loxone loeste bis 1.3.14
+ * jede Sekunde einen aus (Befund code 12). 10 s fuer beide Befehle zusammen;
+ * sonst 429 mit Grund. Ohne Datenordner faellt die Bremse geschlossen aus. */
+if ($aktion === 'xbox-an' || $aktion === 'xbox-aus') {
+    list($hk_frei, $hk_rest) = hk_xbox_bremse(10);
+    if (!$hk_frei) {
+        if ($hk_rest < 0) {
+            hk_ende(503, 'Die Befehlsbremse fuer die Xbox ist nicht verfuegbar '
+                         . '(Datenordner fehlt) - es wird nichts gesendet.', 'bremse_fehlt');
+        }
+        header('Retry-After: ' . (int) $hk_rest);
+        hk_ende(429, 'Zu schnell: xbox-an und xbox-aus hoechstens alle 10 s. Noch '
+                     . (int) $hk_rest . ' s warten - der Befehl wurde nicht gesendet.', 'bremse');
+    }
+}
 
 if (in_array($aktion, $erlaubt, true)) {
     list($code, $ausgabe) = hk_cmd(array($aktion));
@@ -137,16 +166,18 @@ if (in_array($aktion, $erlaubt, true)) {
     // Geraetebefehl nichts zu suchen. Gross- und Kleinschreibung bleibt
     // dabei ERHALTEN: der Bildmodus filmMaker der LG-Steuerung ist gemischt
     // geschrieben, und ein Kleinschreiben zerstoerte einen gueltigen Wert.
-    if (!preg_match('/^[A-Za-z0-9_]{1,32}$/', $wert)) {
-        hk_ende(400, 'Der Wert enthaelt unerlaubte Zeichen.');
+    // \z statt $ seit 1.3.15 (C5): "volumeup%0A" bestand das Muster, und der
+    // Zeilenumbruch landete im Geraetebefehl (Befund code 6).
+    if (!preg_match('/^[A-Za-z0-9_]{1,32}\z/', $wert)) {
+        hk_ende(400, 'Der Wert enthaelt unerlaubte Zeichen.', 'wert');
     }
     list($code, $ausgabe) = hk_cmd(array($aktion, $wert));
 } else {
     hk_ende(400, 'Unbekannte Aktion. Erlaubt: '
-                 . implode(', ', array_merge($erlaubt, $mit_wert)));
+                 . implode(', ', array_merge($erlaubt, $mit_wert)), 'unbekannt');
 }
 
 if ($code === 0) {
-    hk_ende(200, trim($ausgabe) !== '' ? trim($ausgabe) : 'OK');
+    hk_ende(200, trim($ausgabe) !== '' ? trim($ausgabe) : 'OK', 'ausgefuehrt');
 }
-hk_ende(500, trim($ausgabe) !== '' ? trim($ausgabe) : 'Fehler');
+hk_ende(500, trim($ausgabe) !== '' ? trim($ausgabe) : 'Fehler', 'fehlgeschlagen');

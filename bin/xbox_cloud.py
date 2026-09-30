@@ -269,6 +269,51 @@ class XboxCloud:
             raise XboxFehler("Die Anmeldedatei %s liess sich nicht schreiben "
                              "(%s)." % (self.pfad, fehler)) from fehler
 
+    def _aendern(self, aendern):
+        """Lesen, aendern und schreiben unter EINER Dateisperre (seit 1.3.15, C7).
+
+        Dienst, Aktionsendpunkt und Oberflaeche schrieben die Datei bis 1.3.14
+        jeweils als Ganzes aus ihrem beim Laden gelesenen Stand. Gemessen
+        (Befund code 8): eine waehrend der Erneuerung gespeicherte Anwendung
+        stand danach wieder auf dem alten Stand, und eine frische Anmeldung
+        verschwand, weil der Dienst nach invalid_grant die ganze Datei
+        schrieb. Jetzt wird unter der Sperre NEU gelesen, nur das Eigene
+        geaendert und geschrieben. Die Sperre ist <auth>.lock - dieselbe, die
+        hk_xbox_auth_aendern() in PHP nimmt - und sie wird nie ueber einen
+        Netzaufruf gehalten. Ohne fcntl (Windows) ohne Sperre.
+        """
+        try:
+            import fcntl
+        except ImportError:
+            fcntl = None
+        sperre = None
+        if fcntl is not None:
+            ordner = os.path.dirname(self.pfad)
+            if ordner:
+                os.makedirs(ordner, exist_ok=True)
+            try:
+                sperre = open(self.pfad + ".lock", "a")
+                fcntl.flock(sperre.fileno(), fcntl.LOCK_EX)
+            except OSError as fehler:
+                if sperre is not None:
+                    sperre.close()
+                raise XboxFehler("Die Anmeldedatei %s liess sich nicht sperren (%s) - "
+                                 "es wurde nichts geschrieben." % (self.pfad, fehler)) from fehler
+        try:
+            frisch = self._laden()
+            if not isinstance(frisch, dict):
+                frisch = {}
+            aendern(frisch)
+            self.daten = frisch
+            self._speichern()
+        finally:
+            if sperre is not None:
+                try:
+                    fcntl.flock(sperre.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+                sperre.close()
+
     @property
     def dienst(self):
         name = str(self.daten.get("dienst", "live")).strip().lower()
@@ -290,17 +335,31 @@ class XboxCloud:
         client_id = (client_id or "").strip()
         if not client_id:
             raise XboxFehler("Ohne Anwendungskennung (Client-ID) geht es nicht.")
-        self.daten["client_id"] = client_id
-        self.daten["client_secret"] = (client_secret or "").strip()
-        self.daten["redirect_uri"] = (rueckleitung or "").strip() or RUECKLEITUNG_VORGABE
-        self._speichern()
+        geheim = (client_secret or "").strip()
+        leitung = (rueckleitung or "").strip() or RUECKLEITUNG_VORGABE
 
-    def vergessen(self):
-        """Anmeldung loeschen, App-Registrierung behalten."""
-        for schluessel in ("refresh_token", "access_token", "access_bis",
-                           "xsts_token", "userhash", "xsts_bis"):
-            self.daten.pop(schluessel, None)
-        self._speichern()
+        def aendern(daten):
+            daten["client_id"] = client_id
+            daten["client_secret"] = geheim
+            daten["redirect_uri"] = leitung
+        self._aendern(aendern)
+
+    def vergessen(self, nur_wenn=None):
+        """Anmeldung loeschen, App-Registrierung behalten.
+
+        nur_wenn (seit 1.3.15, C7): nur verwerfen, wenn in der Datei noch
+        DIESES Erneuerungstoken steht - das abgewiesene. Hat der Anwender
+        inzwischen einen neuen Code eingeloest, bleibt die frische Anmeldung
+        stehen (Befund code 8, Fall 3). Ohne Angabe (Knopf "Anmeldung
+        loeschen") wird immer verworfen.
+        """
+        def aendern(daten):
+            if nur_wenn is not None and daten.get("refresh_token") != nur_wenn:
+                return
+            for schluessel in ("refresh_token", "access_token", "access_bis",
+                               "xsts_token", "userhash", "xsts_bis"):
+                daten.pop(schluessel, None)
+        self._aendern(aendern)
 
     # ---------------- Schritt 1: OAuth2 ----------------
 
@@ -356,9 +415,10 @@ class XboxCloud:
         }
         if self.daten.get("client_secret"):
             daten["client_secret"] = self.daten["client_secret"]
+        vorher = self.daten.get("refresh_token")
         antwort = _ruf("post", self.dienst["token"], "Anmeldung", data=daten,
                        headers=_kopf(), timeout=self.zeitgrenze)
-        self._token_uebernehmen(antwort)
+        self._token_uebernehmen(antwort, vorher)
         return True
 
     def _erneuern(self):
@@ -372,11 +432,12 @@ class XboxCloud:
         }
         if self.daten.get("client_secret"):
             daten["client_secret"] = self.daten["client_secret"]
+        vorher = self.daten.get("refresh_token")
         antwort = _ruf("post", self.dienst["token"], "Token erneuern", data=daten,
                        headers=_kopf(), timeout=self.zeitgrenze)
-        self._token_uebernehmen(antwort)
+        self._token_uebernehmen(antwort, vorher)
 
-    def _token_uebernehmen(self, antwort):
+    def _token_uebernehmen(self, antwort, vorher=None):
         if antwort.status_code != 200:
             text = antwort.text[:400]
             if "invalid_client" in text:
@@ -396,7 +457,8 @@ class XboxCloud:
                 # weiter True, und xbox/angemeldet meldete dauerhaft 1 -
                 # waehrend jeder Befehl scheiterte. Jetzt wird es verworfen,
                 # damit die Oberflaeche und Loxone die Wahrheit sehen.
-                self.vergessen()
+                # Nur das abgewiesene Token verwerfen (seit 1.3.15, C7).
+                self.vergessen(nur_wenn=vorher)
                 raise XboxAnmeldungAbgelaufen(
                     "Microsoft nimmt das Erneuerungstoken nicht mehr an "
                     "(invalid_grant). Das passiert nach einem Passwortwechsel, "
@@ -411,14 +473,19 @@ class XboxCloud:
         if "access_token" not in inhalt:
             raise XboxFehler("In der Antwort fehlt das Zugriffstoken: %s"
                              % str(inhalt)[:300])
-        self.daten["access_token"] = inhalt["access_token"]
-        self.daten["access_bis"] = time.time() + int(inhalt.get("expires_in", 3600)) - 120
-        if inhalt.get("refresh_token"):
-            self.daten["refresh_token"] = inhalt["refresh_token"]
-        # Die XSTS-Kette haengt am Zugriffstoken und wird ungueltig.
-        self.daten.pop("xsts_token", None)
-        self.daten.pop("xsts_bis", None)
-        self._speichern()
+        zugriff = inhalt["access_token"]
+        bis = time.time() + int(inhalt.get("expires_in", 3600)) - 120
+        erneuerung = inhalt.get("refresh_token")
+
+        def aendern(daten):
+            daten["access_token"] = zugriff
+            daten["access_bis"] = bis
+            if erneuerung:
+                daten["refresh_token"] = erneuerung
+            # Die XSTS-Kette haengt am Zugriffstoken und wird ungueltig.
+            daten.pop("xsts_token", None)
+            daten.pop("xsts_bis", None)
+        self._aendern(aendern)
 
     def _zugriffstoken(self):
         if not self.daten.get("access_token") or \
@@ -481,13 +548,16 @@ class XboxCloud:
                 "Die XSTS-Antwort hat nicht den erwarteten Aufbau - es fehlt "
                 "Token oder DisplayClaims.xui[0].uhs: %s"
                 % str(inhalt)[:200]) from fehler
-        self.daten["xsts_token"] = token
-        self.daten["userhash"] = userhash
         # Gueltigkeit steht in der Antwort, wird aber sicherheitshalber
         # auf hoechstens acht Stunden begrenzt.
-        self.daten["xsts_bis"] = time.time() + 8 * 3600
-        self._speichern()
-        return "XBL3.0 x=%s;%s" % (self.daten["userhash"], self.daten["xsts_token"])
+        bis = time.time() + 8 * 3600
+
+        def aendern(daten):
+            daten["xsts_token"] = token
+            daten["userhash"] = userhash
+            daten["xsts_bis"] = bis
+        self._aendern(aendern)
+        return "XBL3.0 x=%s;%s" % (userhash, token)
 
     # ---------------- Schritt 4: Befehle ----------------
 
@@ -506,9 +576,12 @@ class XboxCloud:
             return vorhanden
         import uuid
         neu = str(uuid.uuid4())
-        self.daten["session_id"] = neu
-        self._speichern()
-        return neu
+
+        def aendern(daten):
+            if not str(daten.get("session_id", "")).strip():
+                daten["session_id"] = neu
+        self._aendern(aendern)
+        return str(self.daten.get("session_id") or neu)
 
     def konsolen(self):
         """Alle mit dem Konto verbundenen Konsolen auflisten."""

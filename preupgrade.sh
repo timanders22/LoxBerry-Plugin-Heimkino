@@ -41,6 +41,23 @@ else
     echo "<WARNING> koennte den Dienst mit der Vorgabe-Konfiguration anwerfen."
 fi
 
+# ---------- Lief der Dienst? (seit 1.3.15, I3) ----------
+#
+# Bis 1.3.14 setzte postupgrade.sh den Sollmerker bei JEDEM Upgrade und
+# startete den Dienst - ein bewusst angehaltener Dienst lief danach wieder
+# (gemessen, Befund installer 3, Fall U6; Regeln/06 "Ein bewusst angehaltener
+# Dienst bleibt angehalten"). Der Merker liegt NEBEN dem Datenordner, weil
+# purge_installation den Ordner samt soll_laufen loescht; postupgrade.sh
+# startet nur mit ihm und raeumt ihn ab.
+LIEF_VORHER="$BASE/data/plugins/$PDIR.lief_vorher"
+if [ -f "$BASE/data/plugins/$PDIR/soll_laufen" ]; then
+    date +%s > "$LIEF_VORHER" 2>/dev/null
+    echo "<INFO> Der Dienst soll laufen - er wird nach der Aktualisierung wieder gestartet."
+else
+    rm -f "$LIEF_VORHER" 2>/dev/null
+    echo "<INFO> Der Dienst war angehalten - er bleibt es auch nach der Aktualisierung."
+fi
+
 # ---------- Was "Inhalt" heisst ----------
 #
 # Eine Groessenpruefung ("[ -s ]") beantwortet nur, ob ueberhaupt etwas
@@ -61,7 +78,11 @@ hk_inhalt() {   # $1 Datei, $2 Art (cfg|json)
     case "$2" in
         cfg)
             grep -q '^[[:space:]]*\[heimkino\][[:space:]]*$' "$1" 2>/dev/null || return 1
-            for hk_f in aktionstoken keycode ip mac geraete_id; do
+            # Das Aktionstoken zaehlt NICHT (seit 1.3.15, I4): es entsteht beim
+            # ersten Oeffnen der Oberflaeche von selbst. Bis 1.3.14 galt eine
+            # nach der Token-Zeile abgeschnittene Datei als "mit Inhalt" und
+            # verdraengte die einzige heile Zweitschrift (Befund installer 4).
+            for hk_f in keycode ip mac geraete_id; do
                 hk_w=$(sed -n "s/^[[:space:]]*$hk_f[[:space:]]*=[[:space:]]*//p" "$1" 2>/dev/null | head -1)
                 hk_w=$(printf '%s' "$hk_w" | tr -d '[:space:]')
                 [ -n "$hk_w" ] && return 0
@@ -133,6 +154,25 @@ SICHER="$BASE/data/plugins/$PDIR.upgrade_sicherung"
 # schieben -> die neue an ihren Platz -> die alte wegwerfen. In keinem
 # Augenblick gibt es keine Sicherung.
 NEU="$SICHER.neu"
+# Ein Bestand aus einem FRUEHEREN Vorgang geht ZUERST nach .alt (seit 1.3.15,
+# I2; Entscheidung 1: "preupgrade.sh raeumt einen alten Bestand weg, bevor es
+# einen neuen anlegt"). Bis 1.3.14 blieb er liegen, wenn die neue Sicherung
+# scheiterte oder es nichts zu sichern gab - und postupgrade.sh spielte ihn
+# ein: ein veralteter Keycode samt Anmeldung ueberschrieb die richtige
+# Konfiguration (gemessen, Befund installer 2, Fall U5). postupgrade.sh
+# liest .alt nie; die Deinstallation raeumt es ab.
+ALT_BESTAND=0
+if [ -d "$SICHER" ]; then
+    rm -rf "$SICHER.alt" 2>/dev/null
+    if mv "$SICHER" "$SICHER.alt" 2>/dev/null; then
+        chmod 0700 "$SICHER.alt" 2>/dev/null
+        ALT_BESTAND=1
+    else
+        echo "<WARNING> Ein Bestand aus einem frueheren Vorgang ($SICHER) liess sich"
+        echo "<WARNING> nicht beiseitelegen und wird entfernt, damit er nicht eingespielt wird."
+        rm -rf "$SICHER" 2>/dev/null
+    fi
+fi
 rm -rf "$NEU" 2>/dev/null
 mkdir -p "$NEU" 2>/dev/null
 chmod 0700 "$NEU" 2>/dev/null
@@ -152,31 +192,32 @@ sichere_datei() {   # $1 Dateiname, $2 Rechte
         sicher_fehlt="$sicher_fehlt $1"
     fi
 }
-sichere_datei heimkino.cfg 0640
+sichere_datei heimkino.cfg 0600
 sichere_datei xbox_auth.json 0600
 
 if [ "$gesichert" = "1" ] && [ "$sicher_ok" = "1" ]; then
-    rm -rf "$SICHER.alt" 2>/dev/null
-    if [ -d "$SICHER" ]; then mv "$SICHER" "$SICHER.alt" 2>/dev/null; fi
     if mv "$NEU" "$SICHER" 2>/dev/null; then
+        # Der fruehere Bestand ist damit ueberholt.
         rm -rf "$SICHER.alt" 2>/dev/null
         echo "<OK> Einstellungen und Xbox-Anmeldung gesichert nach $SICHER."
     else
-        if [ -d "$SICHER.alt" ]; then mv "$SICHER.alt" "$SICHER" 2>/dev/null; fi
         rm -rf "$NEU" 2>/dev/null
         echo "<WARNING> Die neue Sicherung liess sich nicht an ihren Platz bringen."
-        echo "<WARNING> Platz und Rechte in $BASE/data/plugins pruefen."
+        echo "<WARNING> Platz und Rechte in $BASE/data/plugins pruefen. Zurueckgespielt"
+        echo "<WARNING> wird dann nur die Zweitschrift neben dem Konfigordner."
     fi
 elif [ "$gesichert" = "1" ]; then
     rm -rf "$NEU" 2>/dev/null
     echo "<WARNING> Die Einstellungen liessen sich NICHT vollstaendig sichern"
-    echo "<WARNING> (nicht in der Sicherung:$sicher_fehlt)."
-    if [ -d "$SICHER" ]; then
-        echo "<WARNING> Die bisherige Sicherung unter $SICHER bleibt unangetastet."
-    fi
+    echo "<WARNING> (nicht in der Sicherung:$sicher_fehlt). Zurueckgespielt wird"
+    echo "<WARNING> dann nur die Zweitschrift neben dem Konfigordner."
 else
     rm -rf "$NEU" 2>/dev/null
     echo "<INFO> Nichts zu sichern - offenbar eine Erstinstallation."
+fi
+if [ "$ALT_BESTAND" = "1" ] && [ -d "$SICHER.alt" ]; then
+    echo "<WARNING> Ein Bestand aus einem frueheren Vorgang liegt unter $SICHER.alt"
+    echo "<WARNING> und wird NICHT eingespielt (die Deinstallation raeumt ihn ab)."
 fi
 
 # ==== NETZ-EINSTELLUNGEN-UPDATE (automatisch eingefuegt, nicht doppeln) ====
@@ -203,6 +244,36 @@ NETZ_CFG="$NETZ_BASE/config/plugins/$NETZ_PDIR"
 # Zweitschrift MIT Inhalt. Gibt es noch gar keine Zweitschrift, wird auch
 # eine beschaedigte Datei kopiert - etwas ist besser als nichts, und es geht
 # nichts verloren (Fall C4).
+# Wie viele Anwenderfelder traegt eine Datei? (seit 1.3.15, I4) Eine
+# Zweitschrift mit MEHR davon wird nie ersetzt - sonst verdraengt ein
+# gekuerzter Stand die einzige heile Kopie.
+hk_felder() {   # $1 Datei, $2 Art (cfg|json)
+    [ -s "$1" ] || { echo 0; return; }
+    case "$2" in
+        cfg)
+            hk_z=0
+            for hk_f in keycode ip mac geraete_id; do
+                hk_w=$(sed -n "s/^[[:space:]]*$hk_f[[:space:]]*=[[:space:]]*//p" "$1" 2>/dev/null | head -1)
+                hk_w=$(printf '%s' "$hk_w" | tr -d '[:space:]')
+                [ -n "$hk_w" ] && hk_z=$((hk_z + 1))
+            done
+            echo "$hk_z"
+            ;;
+        json)
+            command -v python3 >/dev/null 2>&1 || { echo 0; return; }
+            python3 -c 'import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    d = {}
+if not isinstance(d, dict):
+    d = {}
+print(sum(1 for k in ("client_id", "client_secret", "refresh_token") if str(d.get(k, "")).strip()))' "$1" 2>/dev/null || echo 0
+            ;;
+        *) echo 0 ;;
+    esac
+}
+
 netz_zweitschrift() {   # $1 Dateiname, $2 Pruefart, $3 Rechte
     nz_quelle="$NETZ_CFG/$1"
     nz_ziel="$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.$1"
@@ -210,6 +281,11 @@ netz_zweitschrift() {   # $1 Dateiname, $2 Pruefart, $3 Rechte
     if [ -f "$nz_ziel" ] && hk_inhalt "$nz_ziel" "$2" && ! hk_inhalt "$nz_quelle" "$2"; then
         echo "<WARNING> $1 ist unvollstaendig - die vorhandene Zweitschrift"
         echo "<WARNING> bleibt unveraendert."
+        return 0
+    fi
+    if [ -f "$nz_ziel" ] && [ "$(hk_felder "$nz_ziel" "$2")" -gt "$(hk_felder "$nz_quelle" "$2")" ]; then
+        echo "<WARNING> $1 traegt weniger Anwenderfelder als die vorhandene"
+        echo "<WARNING> Zweitschrift - sie bleibt unveraendert."
         return 0
     fi
     # Rueckgabewert pruefen und nur melden, was wirklich geschah: eine

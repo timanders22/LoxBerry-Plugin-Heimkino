@@ -28,8 +28,10 @@ chmod 644 "$LBPBIN/$PDIR/hk_vorgaben.json" "$LBPBIN/$PDIR/hk_themen.json" 2>/dev
 mkdir -p "$LBPDATA/$PDIR" 2>/dev/null
 chown loxberry:loxberry "$LBPDATA/$PDIR" 2>/dev/null
 
-# Die Konfiguration enthaelt nach dem Einrichten den Keycode des Beamers.
-chmod 640 "$PCONFIG/heimkino.cfg" 2>/dev/null
+# Die Konfiguration enthaelt nach dem Einrichten den Keycode des Beamers und
+# das Aktionstoken: 0600 seit 1.3.15 (C9; Regeln/05, Ultraschall 1.2.6 - drei
+# Stellen, nicht eine: PHP, Python und der Installer).
+chmod 600 "$PCONFIG/heimkino.cfg" 2>/dev/null
 chown loxberry:loxberry "$PCONFIG/heimkino.cfg" 2>/dev/null
 
 # NACHKONTROLLE, keine Installationsanweisung.
@@ -103,7 +105,11 @@ hk_inhalt() {   # $1 Datei, $2 Art (cfg|json)
     case "$2" in
         cfg)
             grep -q '^[[:space:]]*\[heimkino\][[:space:]]*$' "$1" 2>/dev/null || return 1
-            for hk_f in aktionstoken keycode ip mac geraete_id; do
+            # Das Aktionstoken zaehlt NICHT (seit 1.3.15, I4): es entsteht beim
+            # ersten Oeffnen der Oberflaeche von selbst. Bis 1.3.14 galt eine
+            # nach der Token-Zeile abgeschnittene Datei als "mit Inhalt" und
+            # verdraengte die einzige heile Zweitschrift (Befund installer 4).
+            for hk_f in keycode ip mac geraete_id; do
                 hk_w=$(sed -n "s/^[[:space:]]*$hk_f[[:space:]]*=[[:space:]]*//p" "$1" 2>/dev/null | head -1)
                 hk_w=$(printf '%s' "$hk_w" | tr -d '[:space:]')
                 [ -n "$hk_w" ] && return 0
@@ -173,7 +179,7 @@ netz_zurueck() {   # $1 Datei, $2 Art (cfg|json), $3 Rechte, $4 Pruefsumme der V
 }
 # Die Pruefsumme ist die der MITGELIEFERTEN config/heimkino.cfg. Sie wird
 # beim Anheben der Fassung nachgezogen, wenn sich die Vorgabedatei aendert.
-netz_zurueck "heimkino.cfg" cfg 0640 \
+netz_zurueck "heimkino.cfg" cfg 0600 \
     "279a0e0f89591b0823f655ac9cafcc366d177d056035cfa066edd163db4701d0"
 # xbox_auth.json liefert das Archiv nie mit - es gibt also keine Vorgabe,
 # mit der man vergleichen koennte. Der leere vierte Wert sagt das aus.
@@ -199,9 +205,14 @@ hk_eingerichtet() {   # $1 Datei
     done
     return 1
 }
-if hk_eingerichtet "$NETZ_CFG/heimkino.cfg"; then
+# Von einer Aktualisierung ist nur die Rede, wenn die Marke aus preupgrade.sh
+# liegt (seit 1.3.15, I1). Bis 1.3.14 meldete eine Neuinstallation mit
+# liegengebliebener Zweitschrift "die Aktualisierung hat sie uebernommen"
+# (Befund installer 1, Fall N2/N4).
+HK_MARKE="$NETZ_BASE/data/plugins/$NETZ_PDIR.upgrade_laeuft"
+if [ -f "$HK_MARKE" ] && hk_eingerichtet "$NETZ_CFG/heimkino.cfg"; then
     echo "<OK> Einstellungen vorhanden - die Aktualisierung hat sie uebernommen."
-elif hk_eingerichtet "$NETZ_BASE/data/plugins/$NETZ_PDIR.upgrade_sicherung/heimkino.cfg"; then
+elif [ -f "$HK_MARKE" ] && hk_eingerichtet "$NETZ_BASE/data/plugins/$NETZ_PDIR.upgrade_sicherung/heimkino.cfg"; then
     echo "<INFO> Die Einstellungen liegen in der Sicherung dieser Aktualisierung;"
     echo "<INFO> postupgrade.sh spielt sie gleich zurueck."
 else

@@ -8,10 +8,74 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 
 | Aufgabe | Weg |
 |---|---|
-| Beamer **einschalten** | **braucht dieses Plugin nicht.** Loxone kann Wake-on-LAN selbst: virtueller Ausgang mit der Adresse `wol://`, als Befehl die MAC ohne Trennzeichen. |
+| Beamer **einschalten** | **Empfohlen direkt über Loxone:** Loxone kann Wake-on-LAN selbst – virtueller Ausgang mit der Adresse `wol://`, als Befehl die MAC ohne Trennzeichen. Alternativ die Aktion `beamer-wol` dieses Plugins (so legt es die Vorlage an). |
 | Beamer **ausschalten** | TCP 9761, verschlüsselt. Ohne Keycode nimmt das Gerät keinen Befehl an, und Loxone kann nicht verschlüsseln. **Dieses Plugin.** |
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
+
+## Neu in 1.3.15
+
+Durchgang vom 30.09.2026 mit vier Prüfern (Code, Oberfläche, Installer, MQTT).
+Gemessen an Attrappen für Beamer, Xbox-Cloud und Broker unter PHP 7.4, 8.3 und
+8.5 sowie paho 1.6.1; nicht am Gerät. Befunde mit Datei:Zeile:
+`Pruefung-Durchgang-2026-09-29/Heimkino_BEFUNDE_UND_VERBESSERUNGEN.md`.
+Die Abschnitte zu älteren Fassungen darunter beschreiben den damaligen Stand.
+
+**Sichern und Zurückspielen**
+
+* **„Einstellungen sichern“ funktioniert zum ersten Mal.** Der Knopf endete
+  bisher immer in einem PHP-Fehler (HTTP 500). Die Sicherung enthält jetzt auch
+  die Xbox-Anmeldung und ist als Geheimnis gekennzeichnet.
+* Beim Zurückspielen wird jeder Wert geprüft wie beim Speichern. Bisher öffnete
+  ein Token als Liste den Endpunkt für `token=Array`, und ein Zeilenumbruch im
+  Bildmodus schrieb einen zweiten Abschnitt samt fremdem Token in die
+  Konfiguration.
+* Die Meldung nach dem Zurückspielen erscheint jetzt; die Seite zeigt die neuen
+  Werte, und der Dienst wird neu gestartet.
+* Ein Tippfehler in der Konfiguration (etwa `[beamer` ohne `]`) setzt nicht
+  mehr alles samt Token auf Werk: die Datei bleibt als `.kaputt`, geheilt wird
+  aus der Zweitschrift.
+
+**Endpunkt und Geräte**
+
+* Ein Zeilenumbruch im Befehl wird abgewiesen, statt bis zum Beamer zu
+  gelangen. Jeder Aufruf steht gebremst mit Absender im Protokoll.
+* Ein langsam antwortender Beamer hält den Aufruf höchstens die eingestellte
+  Frist fest (gemessen 2,2 s statt 25,7 s).
+* Xbox ein/aus höchstens einmal je 10 Sekunden.
+* Eine frisch gespeicherte Xbox-App oder Anmeldung geht nicht mehr verloren,
+  wenn der Dienst gerade das Token erneuert.
+
+**MQTT**
+
+* Ein Präfixwechsel über die Oberfläche räumt das alte Präfix ab (bisher
+  blieben 14 zurückbehaltene Themen stehen). Vorlagentitel passen auch bei
+  einem Präfix mit `/`.
+* Fällt ein Gerät aus, bleiben seine Zustände stehen; nur `…/erreichbar` geht
+  auf 0 (neu: `xbox/erreichbar`). Ein abgeschaltetes Gerät bekommt einmal `-`
+  bzw. `-1`.
+* Ohne Ablaufdatum sendet `xbox/geheimnis_tage` den Wert 9999 (bisher `-`, das
+  Loxone als 0 = „läuft heute ab“ las); neu ist `xbox/geheimnis_datum_bekannt`.
+* Beim Verbinden gehen keine leeren zurückbehaltenen Werte mehr hinaus.
+* Während der Kino-Szene läuft das Lebenszeichen weiter.
+
+**Oberfläche und Dienst**
+
+* Nach jedem Absenden leitet die Seite um; F5 wiederholt nichts mehr.
+* Eingaben werden abgewiesen statt still umgeschrieben; ein ungültiges Datum
+  wird erkannt.
+* Der Reiter Test prüft den Cron-Eintrag. Seitenaufrufe sind deutlich
+  schneller (0,4 statt 2,8 s am Arbeitsplatz).
+* Startet der Dienst nicht, versucht der Wächter es gebremst (1, 5, 15 min)
+  statt jede Minute; ein hängender Dienst wird erkannt.
+* Die Konfiguration hat die Rechte 0600.
+
+**Installation**
+
+* Eine Neuinstallation spielt Token, Keycode und Xbox-Anmeldung einer früheren
+  Installation nicht mehr ein (neu: `preinstall.sh`, Reste nach `.alt`).
+* Ein bewusst angehaltener Dienst bleibt nach einem Update aus.
+* Die Deinstallation räumt alle Sicherungen mit dem Xbox-Token ab.
 
 ## Neu in 1.3.14
 

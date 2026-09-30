@@ -172,6 +172,12 @@ LOGDATEI="$PLOG/heimkino.log"
 # Deskriptoren 1, 2 UND 3 offen, alle drei auf der geloeschten Datei.
 # Regel: genau einer schreibt in eine Protokolldatei.
 STARTLOG="$PLOG/heimkino_start.log"
+# Startversuche des Waechters, die scheiterten: "<anzahl> <unixzeit>" (seit
+# 1.3.15, C8). Daraus der Abstand bis zum naechsten Versuch: 1, 5, 15 min.
+FEHLSTART="$PDATA/start_fehlschlaege"
+# Letzter Neustart wegen eines haengenden Dienstes (seit 1.3.15, C11).
+HAENGER="$PDATA/haenger_neustart"
+ZUSTAND="$PDATA/zustand.json"
 SKRIPT="$SELF/hk_service.py"
 # Ausdruecklich aus einer Kopie: der Dienst der Anlage (siehe AUSDRUECKLICH).
 if [ "$INSTALLIERT" != "1" ] && [ "$AUSDRUECKLICH" = "1" ]; then
@@ -329,7 +335,13 @@ starten() {
         return 1
     fi
     ordner_anlegen
-    touch "$SOLL"
+    # Der Sollmerker entsteht erst NACH einem bestaetigten Start (seit 1.3.15,
+    # C8; Regeln/03 "Der Sollmerker wird erst nach erfolgreicher Pruefung
+    # gesetzt"). Bis 1.3.14 stand hier "touch $SOLL" vor dem Start: scheiterte
+    # er, blieb der Merker liegen, und der Waechter versuchte es jede Minute
+    # neu, mit einer Protokollzeile je Versuch - rund 1440 am Tag (gemessen,
+    # Befund code 9). Ein Merker, der schon lag (der Dienst lief einmal),
+    # bleibt liegen; dann versucht es der Waechter mit steigendem Abstand.
     # Die Ausgabe des Dienstes geht in die Startdatei, NICHT in das Protokoll:
     # dort schreibt allein der Handler des Programms. Beim Start gekappt, damit
     # sie nur die Ausgabe EINES Laufes sammelt und nicht unbegrenzt waechst.
@@ -337,6 +349,8 @@ starten() {
     nohup python3 "$SKRIPT" >> "$STARTLOG" 2>&1 &
     sleep 1
     if laeuft; then
+        touch "$SOLL"
+        rm -f "$FEHLSTART"
         echo "gestartet (PID $(cat "$PID"))"
         return 0
     fi
@@ -344,9 +358,78 @@ starten() {
     return 1
 }
 
+# Wie viele Startversuche scheiterten zuletzt, und wann? Ausgabe "<n> <zeit>".
+fehlstart_lesen() {
+    hk_z=$(cat "$FEHLSTART" 2>/dev/null)
+    hk_n=${hk_z%% *}
+    hk_t=${hk_z#* }
+    case "$hk_n" in ''|*[!0-9]*) hk_n=0 ;; esac
+    case "$hk_t" in ''|*[!0-9]*) hk_t=0 ;; esac
+    echo "$hk_n $hk_t"
+}
+
+fehlstart_merken() {
+    # Nur aus der Installation (oder ausdruecklich) - sonst schriebe eine Kopie
+    # in den Datenordner der Anlage (Muster 3 der Nachlese).
+    vollzug_erlaubt >/dev/null 2>&1 || return 1
+    set -- $(fehlstart_lesen)
+    ordner_anlegen
+    echo "$(( $1 + 1 )) $(date +%s)" > "$FEHLSTART" 2>/dev/null
+}
+
+# Darf der Waechter jetzt einen Startversuch machen? Abstand nach dem n-ten
+# Fehlschlag: 0, 60, 300, danach 900 s. Springt die Uhr zurueck, gilt er.
+start_erlaubt() {
+    set -- $(fehlstart_lesen)
+    case "$1" in
+        0) hk_abstand=0 ;;
+        1) hk_abstand=60 ;;
+        2) hk_abstand=300 ;;
+        *) hk_abstand=900 ;;
+    esac
+    hk_jetzt=$(date +%s 2>/dev/null)
+    case "$hk_jetzt" in ''|*[!0-9]*) return 0 ;; esac
+    [ "$hk_jetzt" -lt "$2" ] && return 0
+    [ $(( hk_jetzt - $2 )) -ge "$hk_abstand" ]
+}
+
+# Haengt der laufende Dienst? Gemessen wird das ERZEUGNIS, nicht die
+# Prozessnummer (seit 1.3.15, C11; Regeln/03): zustand.json schreibt der
+# Dienst in jedem Durchgang, waehrend einer Szene frischt ein eigener Faden
+# die Aenderungszeit auf. Grenze 3 x Takt + 60 s - dieselbe Rechnung wie die
+# Zeile "Arbeitet er noch?" im Reiter Test (hk_test.php), damit Waechter und
+# Selbstpruefung nicht auseinanderlaufen. Fehlt die Datei noch, zaehlt die
+# Aenderungszeit der PID-Datei (Start des Dienstes). Bis 1.3.14 sah der
+# Waechter nur, ob der Prozess da ist (Befund code 13).
+haengt() {
+    hk_bezug="$ZUSTAND"
+    [ -f "$hk_bezug" ] || hk_bezug="$PID"
+    [ -f "$hk_bezug" ] || return 1
+    hk_takt=$(sed -n 's/^[[:space:]]*"takt":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$ZUSTAND" 2>/dev/null | head -1)
+    case "$hk_takt" in ''|*[!0-9]*)
+        hk_takt=$(sed -n 's/^[[:space:]]*intervall[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$CFG" 2>/dev/null | head -1) ;;
+    esac
+    case "$hk_takt" in ''|*[!0-9]*) hk_takt=60 ;; esac
+    [ "$hk_takt" -lt 10 ] && hk_takt=10
+    hk_grenze=$(( 3 * hk_takt + 60 ))
+    hk_jetzt=$(date +%s 2>/dev/null)
+    hk_mtime=$(stat -c %Y "$hk_bezug" 2>/dev/null)
+    case "$hk_jetzt$hk_mtime" in ''|*[!0-9]*) return 1 ;; esac
+    HK_ALTER=$(( hk_jetzt - hk_mtime ))
+    HK_GRENZE=$hk_grenze
+    [ "$HK_ALTER" -gt "$hk_grenze" ]
+}
+
 anhalten() {
     vollzug_erlaubt || return 1
-    rm -f "$SOLL"
+    rm -f "$SOLL" "$FEHLSTART"
+    prozesse_beenden
+}
+
+# Die eigenen Dienste beenden, OHNE den Sollmerker anzufassen (seit 1.3.15:
+# der Waechter startet einen haengenden Dienst neu, und restart behaelt den
+# Merker, damit ein gescheiterter Neustart nachgeholt wird).
+prozesse_beenden() {
     HK_ZIELE=$(dienste)
     if [ -z "$HK_ZIELE" ]; then
         echo "laeuft nicht"
@@ -377,9 +460,21 @@ anhalten() {
 }
 
 case "$1" in
-    start)   starten ;;
+    start)
+        # Scheitert der Start bei liegendem Merker (der Dienst lief schon
+        # einmal), holt der Waechter ihn mit steigendem Abstand nach.
+        starten || { [ -f "$SOLL" ] && fehlstart_merken; exit 1; }
+        ;;
     stop)    anhalten ;;
-    restart) anhalten || exit 1; sleep 1; starten ;;
+    restart)
+        # Seit 1.3.15 behaelt restart den Sollmerker: bis 1.3.14 hielt es mit
+        # "anhalten" an und entfernte ihn - ein gescheiterter Neustart haette
+        # jetzt (C8) keinen Merker mehr, und der Dienst bliebe aus.
+        vollzug_erlaubt || exit 1
+        prozesse_beenden || exit 1
+        sleep 1
+        starten || { [ -f "$SOLL" ] && fehlstart_merken; exit 1; }
+        ;;
     status)
         if [ -z "$LBHOMEDIR" ]; then
             echo "unbekannt - keine LoxBerry-Wurzel gefunden"
@@ -406,9 +501,33 @@ case "$1" in
         # eingeschaltet ist. Ein bewusst angehaltener Dienst bleibt
         # angehalten.
         vollzug_erlaubt >&2 || exit 1
-        if [ -f "$SOLL" ] && eingeschaltet && [ -z "$(dienste)" ]; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waechter: Dienst lief nicht, wird neu gestartet." >> "$LOGDATEI"
-            starten >> "$STARTLOG" 2>&1
+        [ -f "$SOLL" ] && eingeschaltet || exit 0
+        if [ -n "$(dienste)" ]; then
+            # Laeuft er, arbeitet er auch? (seit 1.3.15, C11) Ein Neustart
+            # wegen Haengens hoechstens alle 15 min, mit einer Protokollzeile.
+            haengt || exit 0
+            hk_letzt=$(cat "$HAENGER" 2>/dev/null)
+            case "$hk_letzt" in ''|*[!0-9]*) hk_letzt=0 ;; esac
+            hk_jetzt=$(date +%s)
+            if [ "$hk_jetzt" -ge "$hk_letzt" ] && [ $(( hk_jetzt - hk_letzt )) -lt 900 ]; then
+                exit 0
+            fi
+            echo "$hk_jetzt" > "$HAENGER" 2>/dev/null
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waechter: zustand.json ist $HK_ALTER s alt (Grenze $HK_GRENZE s) - der Dienst haengt und wird neu gestartet." >> "$LOGDATEI"
+            prozesse_beenden >> "$STARTLOG" 2>&1
+            starten >> "$STARTLOG" 2>&1 || fehlstart_merken
+            exit 0
+        fi
+        # Startversuche mit steigendem Abstand, je Versuch EINE Zeile (seit
+        # 1.3.15, C8): bis 1.3.14 jede Minute ein Versuch und eine Zeile.
+        start_erlaubt || exit 0
+        set -- $(fehlstart_lesen)
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waechter: Dienst lief nicht, wird neu gestartet (Versuch $(( $1 + 1 )))." >> "$LOGDATEI"
+        if ! starten >> "$STARTLOG" 2>&1; then
+            fehlstart_merken
+            set -- $(fehlstart_lesen)
+            case "$1" in 1) hk_naechst=1 ;; 2) hk_naechst=5 ;; *) hk_naechst=15 ;; esac
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waechter: Start fehlgeschlagen ($1. Versuch in Folge) - naechster Versuch in $hk_naechst min, siehe $STARTLOG." >> "$LOGDATEI"
         fi
         ;;
     *)

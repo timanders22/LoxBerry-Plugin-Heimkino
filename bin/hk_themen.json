@@ -35,10 +35,17 @@
     "Stirbt der Dienst, bliebe sonst ein alter Fehler, ein 'erreichbar' oder",
     "szene/laeuft=1 fuer immer stehen. Die Altwerte raeumt der Dienst bei jeder",
     "Verbindung mit einer leeren retain-Nutzlast ab (Melder._bei_verbindung).",
-    "Ein Platzhalter aus eigenem Fehlschlag (beamer/status unbekannt, an 0, app -,",
-    "lautstaerke/stumm -1, xbox/status unbekannt, an 0, name -) geht in diesem",
-    "Durchgang ohne Retain hinaus, auch wenn die Spalte true sagt - der Broker",
-    "behaelt dann den letzten Geraetestand (hk_service.platzhalter)."
+    "BERICHTIGT 1.3.15: die leeren retain-Nutzlasten bei jeder Verbindung sind",
+    "entfallen (Befund mqtt 6); abgeraeumt wird nur, was wirklich behalten",
+    "liegt, mit Nachlesen (hk_service.altwerte_abraeumen).",
+    "Seit 1.3.15 (Entscheidung 8): faellt ein Geraet aus, gehen seine Zustaende",
+    "in diesem Durchgang GAR NICHT hinaus - retained bleibt der letzte",
+    "Geraetestand, und nur beamer/erreichbar bzw. xbox/erreichbar (neu) geht",
+    "auf 0 (hk_service.ausfall_themen). Ein in den Einstellungen abgeschaltetes",
+    "Geraet bekommt EINMAL '-' bzw. -1 retained fuer seine Zustaende, danach",
+    "nichts mehr (Entscheidung 5, hk_service.ENTFERNT).",
+    "kurz_de/kurz_en (seit 1.3.15): hoechstens 40 Zeichen, Comment der",
+    "Loxone-Vorlage - er wird beim Import zum Namen der Kachel."
   ],
   "themen": [
     {
@@ -49,7 +56,9 @@
       "max": 1,
       "einheit": "",
       "de": "1 = der Dienst läuft. Wird beim Verbindungsabbruch vom Broker selbst auf 0 gesetzt (Last Will).",
-      "en": "1 = the service is running. Set to 0 by the broker itself when the connection drops (last will)."
+      "en": "1 = the service is running. Set to 0 by the broker itself when the connection drops (last will).",
+      "kurz_de": "Dienst läuft",
+      "kurz_en": "Service running"
     },
     {
       "thema": "service/zeitstempel",
@@ -59,7 +68,9 @@
       "max": 4102444800,
       "einheit": "<v.1> s",
       "de": "Unix-Zeit der letzten Abfrage. Für Loxone 1230768000 abziehen. Bleibt der Wert stehen, arbeitet der Dienst nicht mehr.",
-      "en": "Unix time of the last poll. Subtract 1230768000 for Loxone. If the value stops changing, the service has stopped working."
+      "en": "Unix time of the last poll. Subtract 1230768000 for Loxone. If the value stops changing, the service has stopped working.",
+      "kurz_de": "Letzte Abfrage (Unix-Zeit)",
+      "kurz_en": "Last poll (Unix time)"
     },
     {
       "thema": "last_error",
@@ -79,7 +90,9 @@
       "max": 1,
       "einheit": "",
       "de": "1 = der Beamer ist in den Einstellungen eingeschaltet",
-      "en": "1 = the projector is switched on in the settings"
+      "en": "1 = the projector is switched on in the settings",
+      "kurz_de": "Beamer in den Einstellungen an",
+      "kurz_en": "Projector enabled in settings"
     },
     {
       "thema": "beamer/erreichbar",
@@ -89,7 +102,9 @@
       "max": 1,
       "einheit": "",
       "de": "1 = der Beamer antwortet auf seinem Steuerport",
-      "en": "1 = the projector answers on its control port"
+      "en": "1 = the projector answers on its control port",
+      "kurz_de": "Beamer antwortet",
+      "kurz_en": "Projector responds"
     },
     {
       "thema": "beamer/grund",
@@ -108,8 +123,8 @@
       "min": 0,
       "max": 0,
       "einheit": "",
-      "de": "an, aus oder unbekannt",
-      "en": "an (on), aus (off) or unbekannt (unknown)"
+      "de": "an oder aus. Bleibt bei einem Ausfall stehen - dann gilt beamer/erreichbar = 0. - = Beamer in den Einstellungen abgeschaltet.",
+      "en": "an (on) or aus (off). Stays unchanged during an outage - then beamer/erreichbar = 0. - = projector disabled in the settings."
     },
     {
       "thema": "beamer/an",
@@ -118,8 +133,10 @@
       "min": 0,
       "max": 1,
       "einheit": "",
-      "de": "1 = der Beamer läuft",
-      "en": "1 = the projector is running"
+      "de": "1 = der Beamer läuft. Bleibt bei einem Ausfall stehen - nur zusammen mit beamer/erreichbar = 1 gültig. -1 = Beamer abgeschaltet.",
+      "en": "1 = the projector is running. Stays unchanged during an outage - only valid together with beamer/erreichbar = 1. -1 = projector disabled.",
+      "kurz_de": "Beamer läuft",
+      "kurz_en": "Projector on"
     },
     {
       "thema": "beamer/app",
@@ -128,8 +145,8 @@
       "min": 0,
       "max": 0,
       "einheit": "",
-      "de": "laufende Quelle, zum Beispiel hdmi1",
-      "en": "running source, for example hdmi1"
+      "de": "laufende Quelle, zum Beispiel hdmi1. Bleibt bei einem Ausfall stehen. - = keine Quelle oder Beamer abgeschaltet.",
+      "en": "running source, for example hdmi1. Stays unchanged during an outage. - = no source or projector disabled."
     },
     {
       "thema": "beamer/lautstaerke",
@@ -138,8 +155,10 @@
       "min": -1,
       "max": 100,
       "einheit": "<v.1>",
-      "de": "Lautstärke 0 bis 100; -1 = nicht gelesen. Nur wenn die Zusatzwerte eingeschaltet sind und das Gerät den Befehl kennt.",
-      "en": "volume 0 to 100; -1 = not read. Only when the extra values are enabled and the device knows the command."
+      "de": "Lautstärke 0 bis 100; -1 = nicht gelesen (Beamer aus, Zusatzwerte aus oder Befehl unbekannt) oder Beamer abgeschaltet.",
+      "en": "volume 0 to 100; -1 = not read (projector off, extra values off or command unknown) or projector disabled.",
+      "kurz_de": "Beamer Lautstärke",
+      "kurz_en": "Projector volume"
     },
     {
       "thema": "beamer/stumm",
@@ -148,8 +167,10 @@
       "min": -1,
       "max": 1,
       "einheit": "",
-      "de": "1 = stumm, 0 = nicht stumm, -1 = nicht gelesen",
-      "en": "1 = muted, 0 = not muted, -1 = not read"
+      "de": "1 = stumm, 0 = nicht stumm, -1 = nicht gelesen oder Beamer abgeschaltet",
+      "en": "1 = muted, 0 = not muted, -1 = not read or projector disabled",
+      "kurz_de": "Beamer stumm",
+      "kurz_en": "Projector muted"
     },
     {
       "thema": "beamer/betriebsstunden",
@@ -158,8 +179,10 @@
       "min": 0,
       "max": 100000,
       "einheit": "<v.1> h",
-      "de": "geschätzte Betriebsstunden seit dem ersten Lauf dieser Fassung. Aus dem Abfragetakt hochgerechnet, keine Angabe des Geräts.",
-      "en": "estimated operating hours since this version first ran. Extrapolated from the polling interval, not a value from the device."
+      "de": "geschätzte Betriebsstunden seit dem ersten Lauf dieser Fassung. Aus dem Abfragetakt hochgerechnet, keine Angabe des Geräts. -1 = Beamer abgeschaltet.",
+      "en": "estimated operating hours since this version first ran. Extrapolated from the polling interval, not a value from the device. -1 = projector disabled.",
+      "kurz_de": "Beamer Betriebsstunden (geschätzt)",
+      "kurz_en": "Projector hours (estimated)"
     },
     {
       "thema": "beamer/laufzeit_heute",
@@ -169,7 +192,9 @@
       "max": 1440,
       "einheit": "<v.1> min",
       "de": "geschätzte Laufzeit des heutigen Tages in Minuten",
-      "en": "estimated running time today, in minutes"
+      "en": "estimated running time today, in minutes",
+      "kurz_de": "Beamer Laufzeit heute",
+      "kurz_en": "Projector runtime today"
     },
     {
       "thema": "beamer/letzte_aktion",
@@ -189,7 +214,9 @@
       "max": 1,
       "einheit": "",
       "de": "1 = die Xbox ist in den Einstellungen eingeschaltet",
-      "en": "1 = the Xbox is switched on in the settings"
+      "en": "1 = the Xbox is switched on in the settings",
+      "kurz_de": "Xbox in den Einstellungen an",
+      "kurz_en": "Xbox enabled in settings"
     },
     {
       "thema": "xbox/status",
@@ -198,8 +225,8 @@
       "min": 0,
       "max": 0,
       "einheit": "",
-      "de": "Zustandstext der Cloud, zum Beispiel On oder ConnectedStandby",
-      "en": "power state text from the cloud, for example On or ConnectedStandby"
+      "de": "Zustandstext der Cloud, zum Beispiel On oder ConnectedStandby. Bleibt bei einem Ausfall stehen - dann gilt xbox/erreichbar = 0. - = Xbox abgeschaltet.",
+      "en": "power state text from the cloud, for example On or ConnectedStandby. Stays unchanged during an outage - then xbox/erreichbar = 0. - = Xbox disabled."
     },
     {
       "thema": "xbox/an",
@@ -208,8 +235,10 @@
       "min": 0,
       "max": 1,
       "einheit": "",
-      "de": "1 = die Konsole läuft",
-      "en": "1 = the console is running"
+      "de": "1 = die Konsole läuft. Bleibt bei einem Ausfall stehen - nur zusammen mit xbox/erreichbar = 1 gültig. -1 = Xbox abgeschaltet.",
+      "en": "1 = the console is running. Stays unchanged during an outage - only valid together with xbox/erreichbar = 1. -1 = Xbox disabled.",
+      "kurz_de": "Xbox läuft",
+      "kurz_en": "Xbox on"
     },
     {
       "thema": "xbox/name",
@@ -218,8 +247,8 @@
       "min": 0,
       "max": 0,
       "einheit": "",
-      "de": "Name der Konsole, wie ihn das Microsoft-Konto führt",
-      "en": "name of the console as the Microsoft account holds it"
+      "de": "Name der Konsole, wie ihn das Microsoft-Konto führt; - = nicht geliefert oder Xbox abgeschaltet",
+      "en": "name of the console as the Microsoft account holds it; - = not delivered or Xbox disabled"
     },
     {
       "thema": "xbox/angemeldet",
@@ -229,7 +258,9 @@
       "max": 1,
       "einheit": "",
       "de": "1 = die Anmeldung bei Microsoft trägt noch",
-      "en": "1 = the Microsoft sign-in is still valid"
+      "en": "1 = the Microsoft sign-in is still valid",
+      "kurz_de": "Xbox-Anmeldung trägt",
+      "kurz_en": "Xbox sign-in valid"
     },
     {
       "thema": "xbox/betriebsstunden",
@@ -238,8 +269,10 @@
       "min": 0,
       "max": 100000,
       "einheit": "<v.1> h",
-      "de": "geschätzte Betriebsstunden der Konsole seit dem ersten Lauf dieser Fassung",
-      "en": "estimated operating hours of the console since this version first ran"
+      "de": "geschätzte Betriebsstunden der Konsole seit dem ersten Lauf dieser Fassung; -1 = Xbox abgeschaltet",
+      "en": "estimated operating hours of the console since this version first ran; -1 = Xbox disabled",
+      "kurz_de": "Xbox Betriebsstunden (geschätzt)",
+      "kurz_en": "Xbox hours (estimated)"
     },
     {
       "thema": "xbox/laufzeit_heute",
@@ -249,7 +282,9 @@
       "max": 1440,
       "einheit": "<v.1> min",
       "de": "geschätzte Laufzeit der Konsole am heutigen Tag in Minuten",
-      "en": "estimated running time of the console today, in minutes"
+      "en": "estimated running time of the console today, in minutes",
+      "kurz_de": "Xbox Laufzeit heute",
+      "kurz_en": "Xbox runtime today"
     },
     {
       "thema": "xbox/letzte_aktion",
@@ -268,18 +303,20 @@
       "min": 0,
       "max": 0,
       "einheit": "",
-      "de": "Ablaufdatum des Clientgeheimnisses, JJJJ-MM-TT",
-      "en": "expiry date of the client secret, YYYY-MM-DD"
+      "de": "Ablaufdatum des Clientgeheimnisses, JJJJ-MM-TT; - = kein Datum eingetragen oder Xbox abgeschaltet",
+      "en": "expiry date of the client secret, YYYY-MM-DD; - = no date entered or Xbox disabled"
     },
     {
       "thema": "xbox/geheimnis_tage",
       "art": "analog",
       "retain": false,
       "min": -10000,
-      "max": 800,
+      "max": 9999,
       "einheit": "<v.1> d",
-      "de": "Tage bis zum Ablauf des Clientgeheimnisses; negativ = abgelaufen",
-      "en": "days until the client secret expires; negative = already expired"
+      "de": "Tage bis zum Ablauf des Clientgeheimnisses; negativ = abgelaufen; 9999 = kein Datum eingetragen (siehe xbox/geheimnis_datum_bekannt)",
+      "en": "days until the client secret expires; negative = already expired; 9999 = no date entered (see xbox/geheimnis_datum_bekannt)",
+      "kurz_de": "Xbox-Geheimnis Resttage",
+      "kurz_en": "Xbox secret days left"
     },
     {
       "thema": "szene/laeuft",
@@ -289,7 +326,9 @@
       "max": 1,
       "einheit": "",
       "de": "1 = eine Kino-Szene läuft gerade ab",
-      "en": "1 = a cinema scene is currently running"
+      "en": "1 = a cinema scene is currently running",
+      "kurz_de": "Kino-Szene läuft",
+      "kurz_en": "Cinema scene running"
     },
     {
       "thema": "szene/schritt",
@@ -310,6 +349,30 @@
       "einheit": "",
       "de": "Ergebnis der zuletzt gelaufenen Szene samt Dauer",
       "en": "result of the scene that ran last, including its duration"
+    },
+    {
+      "thema": "xbox/erreichbar",
+      "art": "digital",
+      "retain": false,
+      "min": 0,
+      "max": 1,
+      "einheit": "",
+      "de": "1 = die letzte Abfrage bei der Xbox-Cloud ist gelungen; 0 = Ausfall, nicht angemeldet oder keine Geräteidentität. Die Xbox-Zustände gelten nur mit 1.",
+      "en": "1 = the last query to the Xbox cloud succeeded; 0 = outage, not signed in or no device identity. The Xbox states are only valid with 1.",
+      "kurz_de": "Xbox-Cloud antwortet",
+      "kurz_en": "Xbox cloud responds"
+    },
+    {
+      "thema": "xbox/geheimnis_datum_bekannt",
+      "art": "digital",
+      "retain": true,
+      "min": -1,
+      "max": 1,
+      "einheit": "",
+      "de": "1 = ein Ablaufdatum des Clientgeheimnisses ist eingetragen, 0 = keines (dann steht xbox/geheimnis_tage auf 9999); -1 = Xbox abgeschaltet",
+      "en": "1 = an expiry date of the client secret is entered, 0 = none (then xbox/geheimnis_tage is 9999); -1 = Xbox disabled",
+      "kurz_de": "Xbox-Geheimnis: Ablauf eingetragen",
+      "kurz_en": "Xbox secret: expiry entered"
     }
   ]
 }

@@ -155,6 +155,10 @@ def pfade():
         "log": os.path.join(basis, "log", "plugins", ORDNER, "heimkino.log"),
         "pid": os.path.join(basis, "data", "plugins", ORDNER, "hk_service.pid"),
         "general": os.path.join(basis, "config", "system", "general.json"),
+        # Die gemerkten Themenpraefixe (seit 1.3.15, M1). NEBEN dem
+        # Konfigordner, damit die Liste ein Update uebersteht (der Installer
+        # raeumt config/plugins/<ordner>/ bei jedem Upgrade ab).
+        "praefixe": os.path.join(basis, "config", "plugins", ORDNER + ".mqtt_praefixe"),
         "vorgaben": os.path.join(eigen, "hk_vorgaben.json"),
         "themen": os.path.join(eigen, "hk_themen.json"),
     }
@@ -419,6 +423,26 @@ def config_lesen(log=None):
     return cfg, "ok"
 
 
+def config_fremde():
+    """Schluessel der Datei, die die Vorgaben nicht kennen (seit 1.3.15, C9).
+
+    Regeln/05: "fremd -> NENNEN, stehen lassen". Liste "abschnitt.schluessel".
+    """
+    gelesen = configparser.ConfigParser(interpolation=None)
+    gelesen.optionxform = str
+    try:
+        gelesen.read(P["config"], encoding="utf-8")
+    except (OSError, configparser.Error):
+        return []
+    vg = vorgaben()
+    fremd = []
+    for abschnitt in gelesen.sections():
+        for schluessel in gelesen.options(abschnitt):
+            if schluessel not in vg.get(abschnitt, {}):
+                fremd.append("%s.%s" % (abschnitt, schluessel))
+    return fremd
+
+
 def config_fehlende():
     """Welche Schluessel fehlen in der Datei? Liste "abschnitt.schluessel"."""
     gelesen = configparser.ConfigParser()
@@ -436,26 +460,55 @@ def config_fehlende():
 
 
 def config_schreiben(cfg):
-    """Konfiguration unteilbar schreiben, Rechte 0640 VOR dem Inhalt.
+    """Konfiguration unteilbar schreiben, Rechte 0600 VOR dem Inhalt.
 
     os.open mit dem Rechtemuster legt die Datei gleich geschuetzt an. Ein
     chmod NACH dem Schreiben laesst sie fuer die Dauer des Schreibens mit
     den Vorgaben der umask dastehen - in dieser Datei steht der Keycode des
     Beamers und das Aktionstoken.
+
+    Seit 1.3.15 (C9): 0600 statt 0640 (Regeln/05, "Wer das Aktionstoken in
+    der Konfiguration fuehrt, fuehrt eine 0600-Datei"), und fremde Schluessel
+    werden mitgeschrieben. Bis 1.3.14 verschwand ein fremder Schluessel beim
+    ersten Ergaenzen, und die Datei lag danach mit 640 da (in WSL gemessen,
+    Befund code 10). Ein Wert mit Zeilenumbruch wird nicht geschrieben - er
+    erzeugte eine zweite Zeile oder einen Abschnitt.
     """
     ziel = P["config"]
     os.makedirs(os.path.dirname(ziel), exist_ok=True)
     text = ("; Heimkino\n"
             "; Wird von der Plugin-Oberflaeche und vom Dienst geschrieben.\n"
             "; ACHTUNG: enthaelt den Keycode des Beamers - nicht veroeffentlichen.\n\n")
-    for abschnitt, werte in vorgaben().items():
-        text += "[%s]\n" % abschnitt
-        for schluessel in werte:
-            text += "%s=%s\n" % (schluessel, wert(cfg, abschnitt, schluessel, ""))
-        text += "\n"
+    vg = vorgaben()
+
+    def zeile(k, v):
+        v = "" if v is None else str(v)
+        if "\n" in v or "\r" in v:
+            raise ValueError("Zeilenumbruch im Wert von %s" % k)
+        return "%s=%s\n" % (k, v)
+
+    try:
+        for abschnitt, werte in vg.items():
+            text += "[%s]\n" % abschnitt
+            for schluessel in werte:
+                text += zeile(schluessel, wert(cfg, abschnitt, schluessel, ""))
+            if cfg.has_section(abschnitt):
+                for schluessel, inhalt in cfg.items(abschnitt, raw=True):
+                    if schluessel not in werte:
+                        text += zeile(schluessel, inhalt)
+            text += "\n"
+        for abschnitt in cfg.sections():
+            if abschnitt in vg:
+                continue
+            text += "[%s]\n" % abschnitt
+            for schluessel, inhalt in cfg.items(abschnitt, raw=True):
+                text += zeile(schluessel, inhalt)
+            text += "\n"
+    except (ValueError, configparser.Error):
+        return False
     vorlaeufig = "%s.%d.neu" % (ziel, os.getpid())
     try:
-        kennung = os.open(vorlaeufig, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+        kennung = os.open(vorlaeufig, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(kennung, "w", encoding="utf-8") as datei:
             datei.write(text)
             datei.flush()
@@ -481,6 +534,11 @@ def config_vervollstaendigen(cfg, log=None):
     fehlten = config_fehlende()
     if fehlten and config_schreiben(cfg) and log:
         log.info("Konfiguration ergaenzt: %s", ", ".join(fehlten))
+    # Fremde Schluessel bleiben stehen und werden genannt (seit 1.3.15, C9).
+    fremd = config_fremde()
+    if fremd and log:
+        log.info("Konfiguration: diese Schluessel kennt diese Fassung nicht, sie "
+                 "bleiben stehen: %s", ", ".join(fremd))
     return fehlten
 
 
@@ -828,27 +886,16 @@ class Melder:
         # bekommt sie nie wieder - bis sich der Wert von sich aus aendert.
         # Bei "beamer/an" kann das Tage dauern.
         #
-        # Vorher die Themen OHNE retain abraeumen: bis 1.3.10 ging auch
-        # service/zeitstempel retained hinaus, bis 1.3.13 dazu last_error,
-        # beamer/erreichbar, beamer/grund, xbox/angemeldet, die
-        # letzte_aktion-Themen und szene/* (Aussagen des Dienstes ueber sich
-        # selbst, Regeln/07 Entscheidung 19.09.2026). Diese alten Werte liegen
-        # noch im Broker. Eine leere Nutzlast mit retain loescht sie; der
-        # frische Wert folgt gleich darauf, ohne retain.
-        #
-        # Bewusst OHNE Merker und bei JEDER Verbindung: der Weg ist paho
-        # direkt am Broker (TCP), nicht der verlustbehaftete UDP-Eingang des
-        # Gateways (Regeln/07 Z. 215), und ein Merker muesste erst durch
-        # Nachlesen belegt werden. Grenze steht in der README.
+        # BERICHTIGT 1.3.15 (M6): bis 1.3.14 gingen hier bei JEDER Verbindung
+        # 13 leere Nutzlasten mit retain hinaus, um Altwerte der Themen ohne
+        # retain abzuraeumen. Das Gateway reicht eine leere Nachricht als
+        # leeren Wert an den Miniserver weiter; nach vier davon folgte kein
+        # Wert (letzte_aktion, szene/schritt, szene/ergebnis) - Loxone wurde
+        # bei jedem Start geleert (gemessen, Befund mqtt 6). Abgeraeumt wird
+        # jetzt nur, was WIRKLICH behalten im Broker liegt, mit Nachlesen,
+        # einmal je Prozess: hk_service.altwerte_abraeumen() ueber
+        # broker_leeren() (Bauart Gardena 1.2.10).
         behalten = retain_themen()
-        for eintrag in themen():
-            thema = str(eintrag.get("thema"))
-            if thema and thema not in behalten:
-                try:
-                    client.publish("%s/%s" % (self.praefix, thema), "",
-                                   qos=0, retain=True)
-                except (OSError, ValueError):
-                    pass
         # Ein Platzhalter aus eigenem Fehlschlag (sende(..., behalten=False),
         # vermerkt in _fluechtig) darf auch beim Wiederholen den behaltenen
         # Geraetestand nicht ueberschreiben (seit 1.3.14, Fall W3).
@@ -1104,6 +1151,77 @@ def broker_leeren(praefix, namen, warten=2.0):
             pass
         k.loop_stop()
     return erg
+
+
+# --------------------------------------------------------------------------
+# Gemerkte Themenpraefixe (seit 1.3.15, M1)
+#
+# Bis 1.3.14 raeumte nur der LAUFENDE Dienst das alte Praefix ab, wenn er die
+# Aenderung selbst bemerkte. Die Oberflaeche schreibt aber die Konfiguration
+# und startet den Dienst neu - der beendete Dienst liest nichts mehr, und der
+# neue kannte das alte Praefix nicht: 14 behaltene Themen blieben fuer immer
+# stehen, auch die Deinstallation erreichte sie nicht (gemessen, Befund
+# mqtt 1). Jetzt merkt sich der Dienst jedes Praefix, unter dem er gesendet
+# hat, in einer Datei NEBEN dem Konfigordner; beim Start raeumt er jedes
+# andere ab (mit Nachlesen) und vergisst es erst nach Erfolg. Die
+# Deinstallation (--mqtt-leeren) raeumt alle gemerkten ab.
+# --------------------------------------------------------------------------
+
+def praefixe_lesen():
+    """Die gemerkten Praefixe, in der Reihenfolge der Datei, ohne Dubletten."""
+    try:
+        with open(P["praefixe"], "r", encoding="utf-8") as datei:
+            zeilen = [z.strip() for z in datei.read().splitlines()]
+    except OSError:
+        return []
+    aus = []
+    for z in zeilen:
+        if z and not z.startswith("#") and z not in aus:
+            aus.append(z)
+    return aus
+
+
+def praefixe_schreiben(liste):
+    """Die Liste unteilbar schreiben; eine leere Liste entfernt die Datei."""
+    ziel = P["praefixe"]
+    if not liste:
+        try:
+            os.unlink(ziel)
+        except OSError:
+            pass
+        return True
+    text = ("# Heimkino: Themenpraefixe, unter denen der Dienst gesendet hat.\n"
+            "# Ein Praefix, das nicht mehr gilt, raeumt der Dienst beim Start ab.\n"
+            + "".join("%s\n" % p for p in liste))
+    os.makedirs(os.path.dirname(ziel), exist_ok=True)
+    vorlaeufig = "%s.%d.neu" % (ziel, os.getpid())
+    try:
+        kennung = os.open(vorlaeufig, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+        with os.fdopen(kennung, "w", encoding="utf-8") as datei:
+            datei.write(text)
+            datei.flush()
+            os.fsync(datei.fileno())
+        os.replace(vorlaeufig, ziel)
+        return True
+    except OSError:
+        try:
+            os.unlink(vorlaeufig)
+        except OSError:
+            pass
+        return False
+
+
+def praefix_merken(praefix):
+    liste = praefixe_lesen()
+    if praefix and praefix not in liste:
+        liste.append(praefix)
+        return praefixe_schreiben(liste)
+    return True
+
+
+def praefix_vergessen(praefix):
+    liste = [p for p in praefixe_lesen() if p != praefix]
+    return praefixe_schreiben(liste)
 
 
 # --------------------------------------------------------------------------
