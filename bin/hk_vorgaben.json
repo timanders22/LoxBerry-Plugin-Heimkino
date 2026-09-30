@@ -47,7 +47,8 @@
         { "name": "eingang",       "vorgabe": "" },
         { "name": "bildmodus",     "vorgabe": "" },
         { "name": "warten_beamer", "vorgabe": "120" },
-        { "name": "warten_xbox",   "vorgabe": "90" }
+        { "name": "warten_xbox",   "vorgabe": "90" },
+        { "name": "hausereignis",  "vorgabe": "0" }
       ]
     }
   ]

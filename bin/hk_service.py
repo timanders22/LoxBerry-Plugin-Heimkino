@@ -420,6 +420,7 @@ def szene_ausfuehren(aktion, cfg, melder, log):
 
     melder.sende("szene/laeuft", 1)
     melder.sende("szene/ergebnis", "-")
+    hausereignis_melden(aktion, cfg, melder, log)
 
     def schritt(text):
         melder.sende("szene/schritt", text)
@@ -569,6 +570,67 @@ def mqtt_werte(beamer, xbox, ablauf_datum, ablauf_tage, jetzt,
 # Pruefzeile im Reiter Test eine Abweichung gegen die Themenliste.
 EREIGNIS_THEMEN = ("beamer/letzte_aktion", "xbox/letzte_aktion",
                    "szene/laeuft", "szene/schritt", "szene/ergebnis")
+
+# Hausereignis Kino-Szene (Verbesserungsbau 30.09.2026, Kino-1). Das Thema
+# steht NICHT in bin/hk_themen.json und nicht in --themen: es liegt
+# ausserhalb des Praefixes, und die Themen-Tabelle zeigt <praefix>/<thema>.
+# Der Stand fuer den Reiter Test geht mit zustand.json hinaus.
+HAUS_STAND = {"wert": "", "zeit": 0}
+
+
+def hausereignis_wirksam(cfg):
+    """Geht haus/szene/kino hinaus? Nur mit Einstellung, Kino-Szene und MQTT."""
+    return (gemein.ja(cfg, "szene", "hausereignis")
+            and gemein.ja(cfg, "szene", "aktiv")
+            and gemein.ja(cfg, "heimkino", "mqtt"))
+
+
+def hausereignis_melden(aktion, cfg, melder, log):
+    """1 bei kino-an, 0 bei kino-aus - retained, beim Start der Szene."""
+    if not hausereignis_wirksam(cfg) or aktion not in ("kino-an", "kino-aus"):
+        return
+    wert = "1" if aktion == "kino-an" else "0"
+    if not melder.aktiv:
+        log.warning("Hausereignis %s = %s nicht gesendet: MQTT ist nicht "
+                    "eingerichtet (siehe Protokoll beim Start).", gemein.HAUS_KINO, wert)
+        return
+    angenommen = melder.sende_haus(gemein.HAUS_KINO, wert)
+    gemein.hausereignis_merken(wert)
+    HAUS_STAND.update(wert=wert, zeit=int(time.time()))
+    if angenommen:
+        log.info("Hausereignis %s = %s (retained) gesendet.", gemein.HAUS_KINO, wert)
+    else:
+        log.warning("Hausereignis %s = %s: der Broker ist gerade nicht verbunden - "
+                    "es geht beim naechsten Verbinden hinaus.", gemein.HAUS_KINO, wert)
+
+
+def hausereignis_abraeumen(log):
+    """Liegt der Merker, das Thema abraeumen (mit Nachlesen)."""
+    if gemein.hausereignis_gemerkt() is None:
+        return
+    erg = gemein.hausereignis_leeren()
+    HAUS_STAND.update(wert="", zeit=0)
+    if erg["rc"] == 0:
+        log.info("Hausereignis %s ist abgeschaltet: am Broker %s und nachgelesen.",
+                 gemein.HAUS_KINO, "geloescht" if erg["geleert"] else "stand nichts behalten")
+    else:
+        log.warning("Hausereignis %s ist abgeschaltet, liess sich am Broker aber nicht "
+                    "abraeumen (%s) - naechster Versuch beim naechsten Start.",
+                    gemein.HAUS_KINO,
+                    erg["grund"] or ("noch da: " + ", ".join(erg["rest"])))
+
+
+def hausereignis_start(cfg, log):
+    """Beim Start: wirksam -> den gemerkten Wert fuer das Verbinden vormerken;
+    sonst einen liegenden Merker abraeumen. Rueckgabe fuer Melder(haus=...)."""
+    if not hausereignis_wirksam(cfg):
+        hausereignis_abraeumen(log)
+        return {}
+    alt = gemein.hausereignis_gemerkt()
+    if alt in ("0", "1"):
+        HAUS_STAND.update(wert=alt, zeit=0)
+        return {gemein.HAUS_KINO: alt}
+    return {}
 
 
 # Ohne eingetragenes Ablaufdatum geht xbox/geheimnis_tage als 9999 hinaus
@@ -740,6 +802,9 @@ def hauptteil():
 
     cfg, lage = gemein.config_lesen(log)
     if not gemein.ja(cfg, "heimkino", "enabled"):
+        # Ein gesendetes Hausereignis bliebe sonst als "Kino laeuft" stehen
+        # (Kino-1). Nur mit Merker - sonst fragt der Start keinen Broker.
+        hausereignis_abraeumen(log)
         log.info("Das Plugin ist in den Einstellungen abgeschaltet - beende.")
         return 0
 
@@ -757,7 +822,8 @@ def hauptteil():
 
         praefix = gemein.wert(cfg, "heimkino", "themenpraefix", "heimkino") or "heimkino"
         takt = gemein.zahl(cfg, "heimkino", "intervall", 60, 10, 3600)
-        melder = gemein.Melder(praefix, log, gemein.ja(cfg, "heimkino", "mqtt"))
+        melder = gemein.Melder(praefix, log, gemein.ja(cfg, "heimkino", "mqtt"),
+                               haus=hausereignis_start(cfg, log))
         meldungen = {}
 
         fassung = gemein.version()
@@ -806,6 +872,11 @@ def hauptteil():
                 cfg, lage = gemein.config_lesen(log)
                 letzte_config = geaendert
                 takt = gemein.zahl(cfg, "heimkino", "intervall", 60, 10, 3600)
+                # Hausereignis abgeschaltet (Einstellung, Szene oder MQTT):
+                # nicht mehr wiederholen und ein gesendetes abraeumen (Kino-1).
+                if not hausereignis_wirksam(cfg):
+                    melder.haus_vergessen()
+                    hausereignis_abraeumen(log)
                 # Verglichen wird der GESAEUBERTE neue Wert mit dem
                 # gesaeuberten alten - sonst meldet der Dienst bei jeder
                 # Konfigurationsaenderung eine Umstellung, die keine ist.
@@ -813,6 +884,7 @@ def hauptteil():
                     gemein.wert(cfg, "heimkino", "themenpraefix", "heimkino"))
                 if melder.aktiv and neuer != melder.praefix:
                     alter_praefix = melder.praefix
+                    haus_werte = melder.haus_werte()
                     melder.schliessen()
                     # Das alte Praefix abraeumen und nachlesen (seit 1.3.14).
                     # Bis 1.3.13 blieben die behaltenen Werte dort stehen -
@@ -835,7 +907,8 @@ def hauptteil():
                                     alter_praefix, neuer, alter_praefix,
                                     leer["grund"] or ("noch da: " + ", ".join(leer["rest"])))
                     melder = gemein.Melder(neuer, log,
-                                           gemein.ja(cfg, "heimkino", "mqtt"))
+                                           gemein.ja(cfg, "heimkino", "mqtt"),
+                                           haus=haus_werte)
                     if melder.aktiv:
                         gemein.praefix_merken(melder.praefix)
                     entfernt_gemeldet = set()
@@ -894,6 +967,7 @@ def hauptteil():
                             "xbox_h": x_stunden, "xbox_heute": x_heute},
                 "auftrag_offen": bool(auftrag),
                 "takt": takt,
+                "hausereignis": dict(HAUS_STAND, wirksam=hausereignis_wirksam(cfg)),
             })
 
             melder.sende_viele(werte_fuer_versand(
@@ -971,6 +1045,18 @@ def mqtt_leeren():
                   "(%s)." % (len(erg["geleert"]), p, ", ".join(erg["geleert"])))
         else:
             print("<OK> MQTT: unter %s/ stand nichts behalten (nachgelesen)." % p)
+    # Hausereignis (Kino-1): nur, wenn es laut Merker gesendet wurde - ein
+    # fremder Absender desselben Themas bleibt sonst unberuehrt.
+    if gemein.hausereignis_gemerkt() is not None:
+        erg = gemein.hausereignis_leeren()
+        if erg["rc"] == 0:
+            print("<OK> MQTT: Hausereignis %s %s (nachgelesen)."
+                  % (gemein.HAUS_KINO, "geloescht" if erg["geleert"] else "stand nicht behalten"))
+        else:
+            print("<WARNING> MQTT: Hausereignis %s nicht abgeraeumt - %s. Von Hand: "
+                  "mosquitto_pub -r -n -t %s" % (gemein.HAUS_KINO, erg["grund"]
+                  or ("noch da: " + ", ".join(erg["rest"])), gemein.HAUS_KINO))
+            schlimmster = max(schlimmster, 1 if erg["rc"] == 1 else 2)
     return schlimmster
 
 

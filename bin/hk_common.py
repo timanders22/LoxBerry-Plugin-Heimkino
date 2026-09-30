@@ -159,6 +159,11 @@ def pfade():
         # Konfigordner, damit die Liste ein Update uebersteht (der Installer
         # raeumt config/plugins/<ordner>/ bei jedem Upgrade ab).
         "praefixe": os.path.join(basis, "config", "plugins", ORDNER + ".mqtt_praefixe"),
+        # Zuletzt gesendeter Wert des Hausereignisses haus/szene/kino
+        # (Verbesserungsbau 30.09.2026, Kino-1). Ebenfalls NEBEN dem
+        # Konfigordner: die Deinstallation raeumt das Thema nur ab, wenn
+        # sie weiss, dass es gesendet wurde.
+        "hausereignis": os.path.join(basis, "config", "plugins", ORDNER + ".hausereignis"),
         "vorgaben": os.path.join(eigen, "hk_vorgaben.json"),
         "themen": os.path.join(eigen, "hk_themen.json"),
     }
@@ -800,7 +805,7 @@ class Melder:
     als eines, das ohne Broker nur nicht meldet.
     """
 
-    def __init__(self, praefix, log, aktiv=True):
+    def __init__(self, praefix, log, aktiv=True, haus=None):
         self.praefix = praefix_saeubern(praefix)
         self.log = log
         self.aktiv = aktiv
@@ -808,6 +813,10 @@ class Melder:
         self._gemeldet = {}
         self._letzte = {}          # fuer das erneute Melden nach Wiederkehr
         self._fluechtig = set()    # Themen, deren letzter Wert ein Platzhalter war
+        # Hausereignisse (Kino-1): volle Themen AUSSERHALB des Praefixes,
+        # retained. Vor dem Verbinden gesetzt, damit schon das erste
+        # Verbinden sie wiederholt.
+        self._haus = dict(haus or {})
         if aktiv:
             self._verbinden()
 
@@ -905,6 +914,13 @@ class Melder:
                                qos=0, retain=(thema in behalten and thema not in self._fluechtig))
             except (OSError, ValueError):
                 pass
+        # Das Hausereignis ist ein Zustand: nach einem Neustart des Brokers
+        # waere es sonst bis zur naechsten Szene weg (Kino-1).
+        for thema, inhalt in list(self._haus.items()):
+            try:
+                client.publish(thema, inhalt, qos=0, retain=True)
+            except (OSError, ValueError):
+                pass
 
     def sende(self, thema, inhalt, behalten=None):
         if not self.aktiv or self.client is None:
@@ -965,6 +981,26 @@ class Melder:
                           "MQTT: Nachrichten werden verworfen (Code %s) - "
                           "die Verbindung zum Broker steht nicht." % rc,
                           self.log, "warning")
+
+    def sende_haus(self, thema, inhalt):
+        """Ein Hausereignis senden (Kino-1): volles Thema ohne Praefix,
+        retained, nie leer. Rueckgabe: True, wenn paho es angenommen hat."""
+        inhalt = str(inhalt)
+        if not self.aktiv or self.client is None or inhalt == "":
+            return False
+        self._haus[thema] = inhalt
+        try:
+            auskunft = self.client.publish(thema, inhalt, qos=0, retain=True)
+        except (OSError, ValueError) as fehler:
+            self.log.debug("MQTT-Versand %s fehlgeschlagen: %s", thema, fehler)
+            return False
+        return not getattr(auskunft, "rc", 0)
+
+    def haus_werte(self):
+        return dict(self._haus)
+
+    def haus_vergessen(self):
+        self._haus.clear()
 
     def sende_viele(self, paare, fluechtig=()):
         """fluechtig: Themen, deren Wert in DIESEM Durchgang ein Platzhalter
@@ -1222,6 +1258,73 @@ def praefix_merken(praefix):
 def praefix_vergessen(praefix):
     liste = [p for p in praefixe_lesen() if p != praefix]
     return praefixe_schreiben(liste)
+
+
+# --------------------------------------------------------------------------
+# Hausereignis Kino-Szene (Verbesserungsbau 30.09.2026, Kino-1)
+#
+# Hausvereinbarung: haus/szene/kino = 1 beim Start von kino-an, 0 beim Start
+# von kino-aus, retained. Ab Werk aus (szene.hausereignis). Der Merker haelt
+# den zuletzt gesendeten Wert; liegt er, wurde das Thema gesendet und wird
+# beim Abschalten und bei der Deinstallation abgeraeumt (mit Nachlesen).
+# --------------------------------------------------------------------------
+
+HAUS_KINO = "haus/szene/kino"
+
+
+def hausereignis_gemerkt():
+    """None = nie gesendet (kein Merker). Sonst "0"/"1" oder "" (Merker
+    unlesbar - dann wurde gesendet, der Wert ist unbekannt)."""
+    try:
+        with open(P["hausereignis"], "r", encoding="utf-8") as datei:
+            zeilen = [z.strip() for z in datei.read().splitlines()]
+    except OSError:
+        return None if not os.path.lexists(P["hausereignis"]) else ""
+    for z in zeilen:
+        if z in ("0", "1"):
+            return z
+    return ""
+
+
+def hausereignis_merken(wert):
+    ziel = P["hausereignis"]
+    text = ("# Heimkino: zuletzt gesendeter Wert von %s (retained).\n"
+            "# Solange diese Datei liegt, raeumen das Abschalten der Einstellung\n"
+            "# und die Deinstallation das Thema am Broker ab.\n%s\n" % (HAUS_KINO, wert))
+    os.makedirs(os.path.dirname(ziel), exist_ok=True)
+    vorlaeufig = "%s.%d.neu" % (ziel, os.getpid())
+    try:
+        kennung = os.open(vorlaeufig, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+        with os.fdopen(kennung, "w", encoding="utf-8") as datei:
+            datei.write(text)
+            datei.flush()
+            os.fsync(datei.fileno())
+        os.replace(vorlaeufig, ziel)
+        return True
+    except OSError:
+        try:
+            os.unlink(vorlaeufig)
+        except OSError:
+            pass
+        return False
+
+
+def hausereignis_vergessen():
+    try:
+        os.unlink(P["hausereignis"])
+    except OSError:
+        pass
+    return not os.path.lexists(P["hausereignis"])
+
+
+def hausereignis_leeren():
+    """haus/szene/kino am Broker loeschen und nachlesen (broker_leeren).
+    Den Merker nur bei Erfolg vergessen. Rueckgabe wie broker_leeren."""
+    vorn, _, name = HAUS_KINO.rpartition("/")
+    erg = broker_leeren(vorn, [name])
+    if erg["rc"] == 0:
+        hausereignis_vergessen()
+    return erg
 
 
 # --------------------------------------------------------------------------

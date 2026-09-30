@@ -13,6 +13,36 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.16
+
+Verbesserungen aus dem Durchgang vom 30.09.2026 (Verbesserungsliste
+`Pruefung-Durchgang-2026-09-29/VERBESSERUNGEN_OFFEN.md`). Gemessen an Attrappen
+für Beamer, Xbox-Cloud und Broker unter PHP 7.4, 8.3 und 8.5 sowie paho 1.6.1;
+nicht am Gerät.
+
+* **Ein falscher Keycode wird nicht mehr zufällig als gelesen gewertet.** Die
+  Prüfung einer Beamer-Antwort war zu locker: mit falschem Keycode galt eine
+  Zufallsantwort in 5,8 bis 11,6 % der Fälle als lesbar. Jetzt 0 von 20000;
+  der richtige Keycode wird weiter immer gelesen. `GET_IPCONTROL_STATE` muss
+  ON oder OFF sein, sonst gibt es einen Fehler statt eines stillen „aus“.
+  Am echten Beamer (LG HU710PW) am 30.09.2026 gemessen: er füllt seine
+  Antwort mit 13 × `0x0d` auf, die Prüfung nimmt `ON` an.
+* **Reiter Test: „Beamer-Verbindung prüfen“** ersetzt „Beamer erreichbar?“:
+  TCP-Verbindung plus eine verschlüsselte Leseanfrage, kein Schaltbefehl, mit
+  Zeit und Grund; belegt auch den Keycode.
+* **Neu, ab Werk aus: „Kino-Szene als Hausereignis melden“:** `haus/szene/kino`
+  = 1 beim Start der Kino-Szene, 0 beim Ende, zurückbehalten, ohne Präfix – für
+  Beschattungswächter und Licht. Abschalten (Einstellung, Szene, MQTT, Plugin)
+  und Deinstallation räumen das Thema ab.
+* Fehlermeldungen der Xbox-Anmeldung zeigen keine Token mehr (`***`).
+* **Bei einer Beanstandung wird nichts mehr gespeichert** – auch die übrigen
+  Felder nicht (bis 1.3.15 wurden sie übernommen). Die eingetippten Werte
+  stehen wieder im Formular, das beanstandete Feld ist markiert; Keycode,
+  Geheimnis und Code kommen nie zurück.
+* „Einstellungen sichern“ warnt gelb, wenn ein gespeicherter Wert das
+  Zurückspielen nicht bestünde. Sicherungen aus 1.3.15 werden weiter
+  angenommen.
+
 ## Neu in 1.3.15
 
 Durchgang vom 30.09.2026 mit vier Prüfern (Code, Oberfläche, Installer, MQTT).
@@ -765,7 +795,10 @@ oder Geräteidentität leer waren. Und der Themenpräfix wurde hart gefiltert:
 aus `wohnzimmer kino#1` wurde wortlos `wohnzimmerkino1`, was in einem Zug alle
 MQTT-Themen, das einzutragende Abo und alle Titel der virtuellen Eingänge
 ändert. Beides wird jetzt **abgewiesen und gemeldet**; alle übrigen Felder
-werden trotzdem gespeichert.
+werden trotzdem gespeichert. *(Berichtigt: seit dem Verbesserungsbau vom
+30.09.2026 wird bei einer Beanstandung **nichts** gespeichert, auch die übrigen
+Felder nicht; die eingetippten Werte stehen wieder im Formular, das beanstandete
+Feld ist rot umrandet.)*
 
 **Der Keycode wird nicht mehr stillschweigend großgeschrieben.** Aus genau
 diesen acht Zeichen leitet PBKDF2 den Schlüssel ab — eine Umschrift wäre eine
@@ -950,7 +983,7 @@ statt *Netzwerk*.
 | **Feste IP** | Fritz!Box | Wandert die Adresse, schlägt alles fehl, ohne dass die Ursache sichtbar würde. |
 
 Danach IP, MAC und Keycode im Reiter *Einstellungen* eintragen und im Reiter
-*Test* → *Beamer erreichbar?* und *Beamer: IP-Steuerung* prüfen.
+*Test* → *Beamer-Verbindung prüfen* und *Beamer: IP-Steuerung* prüfen.
 
 #### Zwei Automatiken, die Störungen vortäuschen
 
@@ -1160,6 +1193,33 @@ der Bildmodus heißt `filmMaker`, und ein Kleinschreiben zerstörte einen
 gültigen Wert.
 
 Ein virtueller Ausgangsbefehl feuert bei der Flanke 0→1, nicht dauerhaft.
+
+### Kino-Szene als Hausereignis — `haus/szene/kino` (Einstellung, ab Werk aus)
+
+Hausvereinbarung für das Zusammenspiel mit anderen Linien (Beschattungswächter,
+Licht) und mit Loxone: Ein festes Thema **ohne** Heimkino-Präfix sagt, ob gerade
+Kino ist.
+
+| Thema | Wert | retained | wann |
+|---|---|---|---|
+| `haus/szene/kino` | `1` | ja | beim Start der Szene `kino-an` |
+| `haus/szene/kino` | `0` | ja | beim Start der Szene `kino-aus` |
+
+- Einstellung *Kino-Szene als Hausereignis melden* im Reiter *Einstellungen*
+  (`[szene] hausereignis`), **ab Werk aus** — eine eingerichtete Anlage verhält
+  sich nach dem Update wie vorher.
+- Gesendet wird nur, wenn auch die Kino-Szene und MQTT eingeschaltet sind. Der
+  Wert ist ein Zustand und geht deshalb retained hinaus; nach einem Neustart des
+  Brokers wiederholt der Dienst den zuletzt gesendeten Wert.
+- Schaltet man die Einstellung (oder Kino-Szene, MQTT, das Plugin) ab, räumt der
+  Dienst das Thema am Broker ab und liest nach. Die Deinstallation räumt es
+  ebenso ab — aber nur, wenn das Plugin es laut seinem Merker
+  (`config/plugins/heimkino.hausereignis`) gesendet hat; ein anderer Absender
+  desselben Themas bleibt unberührt.
+- Abnehmer lesen das Thema selbst, über MQTT. Ob einer es liest, sieht dieses
+  Plugin nicht; der Reiter *Test* zeigt, was es zuletzt gesendet hat. Fehlt das
+  Heimkino oder schweigt es, kommt beim Abnehmer schlicht kein Wechsel an — er
+  bleibt bei seinem bisherigen Verhalten.
 
 ## Der Abfragetakt
 

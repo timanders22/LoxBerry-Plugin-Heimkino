@@ -31,6 +31,10 @@ if ($hk_p['home'] !== '' && file_exists($hk_p['home'] . '/libs/phplib/loxberry_s
 $hk_saved   = false;
 $hk_fehler  = array();   // alle Beanstandungen, nicht nur die letzte
 $hk_hinweis = array();
+// X-2 (Verbesserungsbau 30.09.2026): welches Formular, welche Felder
+// beanstandet wurden - daraus reisen die Eingaben mit der Einmalmeldung.
+$hk_eingaben_form = '';
+$hk_beanstandet   = array();
 
 /* ==================================================================
  * Beschaedigte Konfiguration - VOR dem Lesen und vor dem Token (seit 1.3.15)
@@ -173,18 +177,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['xbox_app'])) {
     // Eine GUID kann nicht die Spalte "Wert" sein. Lieber hier abweisen als
     // den Benutzer in ein invalid_client von Microsoft laufen lassen.
     //
-    // Beanstandet wird NUR diese eine Zeile: die gueltige Anwendungskennung
-    // und die Umleitungs-URI werden trotzdem gespeichert. Bis 1.2.11
-    // verhinderte eine Beanstandung das ganze Speichern.
+    // Bei einer Beanstandung wird NICHTS gespeichert, auch Anwendungskennung
+    // und Umleitungs-URI nicht (Entscheidung des Hausherrn 30.09.2026,
+    // Regeln/04): die Eingaben kommen ueber X-2 zurueck ins Formular. Bis zum
+    // Verbesserungsbau wurden die uebrigen Felder trotzdem gespeichert.
     if ($hk_geheim !== '' && hk_ist_guid($hk_geheim)) {
         $hk_fehler[] = hk_t('FEHLER.GEHEIMNIS_GUID');
         $hk_geheim = '';
+        $hk_eingaben_form = 'xbox_app';
+        $hk_beanstandet[] = 'client_secret';
     }
-    $hk_ok = hk_xbox_app_speichern(
+    $hk_ok = $hk_beanstandet ? null : hk_xbox_app_speichern(
         isset($_POST['client_id']) ? $_POST['client_id'] : '',
         $hk_geheim,
         isset($_POST['rueckleitung']) ? $_POST['rueckleitung'] : '');
-    if ($hk_ok) {
+    if ($hk_ok === null) {
+        // beanstandet: nichts gespeichert (Hinweis SET.EINGABEN_ZURUECK beim GET)
+    } elseif ($hk_ok) {
         $hk_hinweis[] = hk_t('MELD.KENNUNG_GESPEICHERT');
     } else {
         $hk_fehler[] = hk_tf('FEHLER.AUTH_SCHREIBEN', array('%1' => hk_e($hk_p['auth'])));
@@ -257,13 +266,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_mqtt'])) {
     // virtuellen Eingaenge, und der Bediener sah nur "gespeichert".
     if ($hk_praefix_roh === '') {
         $hk_fehler[] = hk_t('FEHLER.PRAEFIX_LEER');
+        $hk_eingaben_form = 'mqtt';
+        $hk_beanstandet[] = 'themenpraefix';
     } elseif (!hk_wert_pruefen('heimkino', 'themenpraefix', $hk_praefix_roh)[0]) {
         $hk_fehler[] = hk_t('FEHLER.PRAEFIX');
+        $hk_eingaben_form = 'mqtt';
+        $hk_beanstandet[] = 'themenpraefix';
     } else {
         $hk_neu['heimkino']['themenpraefix'] = $hk_praefix_roh;
     }
 
-    if (hk_config_write($hk_neu)) {
+    if ($hk_beanstandet) {
+        // Nichts gespeichert, auch der Haken nicht (Entscheidung 30.09.2026).
+    } elseif (hk_config_write($hk_neu)) {
         $hk_saved = true;
         $hk_cfg = hk_config_read();
         $hk_pid_neu = hk_dienst('restart');
@@ -323,6 +338,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
         }
         return (string) $n;
     };
+    // X-2: neue Beanstandungen seit dem letzten Merken gehoeren zu $feld.
+    // '' setzt nur den Zaehler (eine Meldung, die zu keinem Feld gehoert).
+    $hk_n0 = count($hk_fehler);
+    $hk_merk = function ($feld) use (&$hk_fehler, &$hk_beanstandet, &$hk_n0) {
+        if ($feld !== '' && count($hk_fehler) > $hk_n0) {
+            $hk_beanstandet[] = $feld;
+        }
+        $hk_n0 = count($hk_fehler);
+    };
 
     $hk_neu['heimkino']['enabled'] = isset($_POST['enabled']) ? '1' : '0';
     $hk_neu['heimkino']['nachfassen'] = isset($_POST['nachfassen']) ? '1' : '0';
@@ -330,6 +354,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
         isset($_POST['intervall']) ? $_POST['intervall'] : '',
         hk_cfg($hk_cfg, 'heimkino', 'intervall', '60'), 10, 3600,
         $hk_fehler, 'FEHLER.INTERVALL');
+    $hk_merk('intervall');
 
     // Token nur auf ausdruecklichen Wunsch neu wuerfeln - es steckt in den
     // Adressen im Miniserver.
@@ -341,6 +366,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
             $hk_fehler[] = hk_tf('FEHLER.KEIN_ZUFALL', array('%1' => hk_e($e->getMessage())));
         }
     }
+    $hk_merk('');
 
     /* --- Beamer --- */
     $hk_neu['beamer']['aktiv'] = isset($_POST['beamer_aktiv']) ? '1' : '0';
@@ -351,6 +377,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     } else {
         $hk_fehler[] = hk_t('FEHLER.BEAMER_IP');
     }
+    $hk_merk('beamer_ip');
 
     // Die MAC wird zur Anzeige in Zweiergruppen gesetzt - das ist eine
     // Darstellungsfrage und keine Umschrift des Wertes: Hexziffern sind
@@ -366,6 +393,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     } else {
         $hk_fehler[] = hk_t('FEHLER.BEAMER_MAC');
     }
+    $hk_merk('beamer_mac');
 
     // Der Keycode wird NICHT grossgeschrieben, sondern geprueft. Aus genau
     // diesen acht Zeichen leitet PBKDF2 den Schluessel ab; eine stille
@@ -377,15 +405,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     } else {
         $hk_fehler[] = hk_t('FEHLER.BEAMER_KEYCODE');
     }
+    $hk_merk('beamer_keycode');
 
     $hk_neu['beamer']['port'] = $hk_ganz(
         isset($_POST['beamer_port']) ? $_POST['beamer_port'] : '',
         hk_cfg($hk_cfg, 'beamer', 'port', '9761'), 1, 65535,
         $hk_fehler, 'FEHLER.BEAMER_PORT');
+    $hk_merk('beamer_port');
     $hk_neu['beamer']['zeitgrenze'] = $hk_ganz(
         isset($_POST['beamer_zeitgrenze']) ? $_POST['beamer_zeitgrenze'] : '',
         hk_cfg($hk_cfg, 'beamer', 'zeitgrenze', '5'), 1, 60,
         $hk_fehler, 'FEHLER.BEAMER_ZEITGRENZE');
+    $hk_merk('beamer_zeitgrenze');
     $hk_neu['beamer']['zusatzwerte'] = isset($_POST['beamer_zusatzwerte']) ? '1' : '0';
 
     /* --- Kino-Szene ---
@@ -398,6 +429,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
      * dann auch, statt eine Auswahl vorzutaeuschen, die sie nicht hat.
      */
     $hk_neu['szene']['aktiv'] = isset($_POST['szene_aktiv']) ? '1' : '0';
+    // Kino-1 (Verbesserungsbau 30.09.2026): Hausereignis haus/szene/kino.
+    $hk_neu['szene']['hausereignis'] = isset($_POST['szene_hausereignis']) ? '1' : '0';
     $hk_woerter_h = hk_woerter();
     $hk_pruefe_wort = function ($feld, $art, $schluessel) use (&$hk_fehler, $hk_woerter_h) {
         $w = isset($_POST[$feld]) && is_string($_POST[$feld]) ? trim((string) $_POST[$feld]) : '';
@@ -414,16 +447,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     };
     $hk_se = $hk_pruefe_wort('szene_eingang', 'eingang', 'FEHLER.SZENE_EINGANG');
     if ($hk_se !== null) { $hk_neu['szene']['eingang'] = $hk_se; }
+    $hk_merk('szene_eingang');
     $hk_sb = $hk_pruefe_wort('szene_bildmodus', 'bildmodus', 'FEHLER.SZENE_BILDMODUS');
     if ($hk_sb !== null) { $hk_neu['szene']['bildmodus'] = $hk_sb; }
+    $hk_merk('szene_bildmodus');
     $hk_neu['szene']['warten_beamer'] = $hk_ganz(
         isset($_POST['szene_warten_beamer']) ? $_POST['szene_warten_beamer'] : '',
         hk_cfg($hk_cfg, 'szene', 'warten_beamer', '120'), 10, 600,
         $hk_fehler, 'FEHLER.SZENE_WARTEN');
+    $hk_merk('szene_warten_beamer');
     $hk_neu['szene']['warten_xbox'] = $hk_ganz(
         isset($_POST['szene_warten_xbox']) ? $_POST['szene_warten_xbox'] : '',
         hk_cfg($hk_cfg, 'szene', 'warten_xbox', '90'), 10, 600,
         $hk_fehler, 'FEHLER.SZENE_WARTEN');
+    $hk_merk('szene_warten_xbox');
 
     /* --- Xbox --- */
     $hk_neu['xbox']['aktiv'] = isset($_POST['xbox_aktiv']) ? '1' : '0';
@@ -440,6 +477,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     } else {
         $hk_fehler[] = hk_t('FEHLER.XBOX_ID');
     }
+    $hk_merk('xbox_geraete_id');
 
     // Ablaufdatum. Leer ist erlaubt - dann warnt das Plugin nicht. Ein
     // unlesbares Datum wird abgewiesen, statt still eine Warnung zu
@@ -455,12 +493,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     } else {
         $hk_fehler[] = hk_t('FEHLER.FRIST');
     }
+    $hk_merk('xbox_geheimnis_ablauf');
+    if ($hk_beanstandet) {
+        $hk_eingaben_form = 'settings';
+    }
 
-    // Gespeichert wird IMMER, auch wenn eine Zeile beanstandet wurde: die
-    // beanstandete behaelt ihren alten Wert, alle uebrigen werden
-    // uebernommen. Wer alles verwirft, laesst den Bediener seine ganze
-    // Eingabe noch einmal machen.
-    if (hk_config_write($hk_neu)) {
+    // Bei einer Beanstandung wird NICHTS gespeichert (Entscheidung des
+    // Hausherrn 30.09.2026, Regeln/04 "Nach einer Beanstandung stehen die
+    // eingetippten Werte wieder im Formular"). Bis zum Verbesserungsbau
+    // wurden die uebrigen Felder trotzdem uebernommen, damit niemand alles
+    // neu tippen musste - das leistet jetzt X-2. Ein angekreuztes "neues
+    // Token" wird dann ebenfalls nicht erzeugt, und sein Hinweis entfaellt.
+    if ($hk_beanstandet) {
+        $hk_hinweis = array_values(array_diff($hk_hinweis, array(hk_t('MELD.TOKEN_NEU'))));
+    } elseif (hk_config_write($hk_neu)) {
         $hk_saved = true;
         $hk_cfg = hk_config_read();
         $hk_fmt = hk_formtoken($hk_cfg);   // wechselt mit dem Aktionstoken
@@ -484,7 +530,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
  * Argumente, und der Knopf endete unter 7.4 und 8.5 in HTTP 500 mit leerem
  * Rumpf (Befund code 1, oberflaeche 1). */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['hk_sichern'])) {
-    $hk_js = json_encode(hk_sicherung_bauen(),
+    // X-3 (Verbesserungsbau 30.09.2026): bestuende ein gespeicherter Wert das
+    // eigene Zurueckspielen nicht, sagt es der Kopf der Datei - mit den
+    // NAMEN, nie den Werten. Geliefert wird trotzdem, vollstaendig.
+    $hk_sich = hk_sicherung_bauen();
+    $hk_altw = hk_rueckspiel_altwerte($hk_sich);
+    if ($hk_altw) {
+        $hk_sich = array('_warnung' => hk_tf('SET.SICH_ALTWERT_KOPF',
+            array('%1' => implode(', ', $hk_altw)))) + $hk_sich;
+    }
+    $hk_js = json_encode($hk_sich,
         JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if ($hk_js !== false) {
         header('Content-Type: application/json; charset=utf-8');
@@ -573,6 +628,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'fehler'     => $hk_fehler,
             'test_titel' => $hk_test_titel,
             'test_text'  => $hk_test_text,
+            'eingaben'   => hk_eingaben_sammeln($hk_eingaben_form, $hk_beanstandet),
         ))) {
         header('Location: index.php?form=' . substr($hk_tab, 4), true, 303);
         exit;
@@ -594,6 +650,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             && is_string($hk_einmal['test_titel']) && is_string($hk_einmal['test_text'])) {
             $hk_test_titel = $hk_einmal['test_titel'];
             $hk_test_text = $hk_einmal['test_text'];
+        }
+        // X-2: nach einer Beanstandung die eingetippten Werte zeigen.
+        if (isset($hk_einmal['eingaben']) && is_array($hk_einmal['eingaben'])) {
+            hk_eingaben_setzen($hk_einmal['eingaben']);
+            if (hk_eingaben_aktiv() !== '') {
+                $hk_hinweis[] = hk_t('SET.EINGABEN_ZURUECK');
+            }
         }
     }
 }
@@ -719,6 +782,8 @@ if ($hk_frame) {
    sm-scheibe - runder Zustandspunkt vor einer Zeile, dazu die drei
                 Farbvarianten sm-gruen, sm-rot und sm-grau
    sm-log     - dunkler Protokollkasten
+   sm-beanstandet - rot umrandetes Feld nach einer Beanstandung (X-2,
+                Verbesserungsbau 30.09.2026)
    Umgekehrt fehlt aus der Vorlage nur sm-tabelle - die tote Klasse, die am
    19.08.2026 zurueckgenommen wurde. Gemessen mit dem Zweizeiler aus der
    Vorlage. */
@@ -727,6 +792,8 @@ if ($hk_frame) {
 .sm-wrap input[type=text], .sm-wrap input[type=password], .sm-wrap input[type=number], .sm-wrap input[type=date] {
   width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 0.95em; box-sizing: border-box; }
 .sm-reihe { display: flex; gap: 12px; flex-wrap: wrap; }
+.sm-wrap input.sm-beanstandet, .sm-wrap select.sm-beanstandet {
+  border: 2px solid #c62828 !important; background-color: #fff5f5; }
 .sm-reihe > div { flex: 1; min-width: 180px; }
 .sm-scheibe { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
 .sm-scheibe.sm-gruen { background: #6dac20; }
@@ -825,17 +892,17 @@ if ($hk_frame) {
 
 <h2><?= hk_te('SET.H_ALLGEMEIN') ?></h2>
 <label class="sm-check"><input data-role="none" type="checkbox" name="enabled" value="1"
-  <?php echo hk_an($hk_cfg, 'heimkino', 'enabled') ? 'checked' : ''; ?>>
+  <?php echo hk_eingabe_an('settings', 'enabled', hk_an($hk_cfg, 'heimkino', 'enabled')) ? 'checked' : ''; ?>>
   <?= hk_te('SET.EINGESCHALTET') ?></label>
 <label class="sm-check"><input data-role="none" type="checkbox" name="nachfassen" value="1"
-  <?php echo hk_an($hk_cfg, 'heimkino', 'nachfassen') ? 'checked' : ''; ?>>
+  <?php echo hk_eingabe_an('settings', 'nachfassen', hk_an($hk_cfg, 'heimkino', 'nachfassen')) ? 'checked' : ''; ?>>
   <?= hk_te('SET.NACHFASSEN') ?></label>
 <div class="sm-hilfe"><?php echo hk_t('SET.NACHFASSEN_HILFE'); ?></div>
 
 <div class="sm-feld">
   <label for="intervall"><?= hk_te('SET.INTERVALL') ?></label>
   <input data-role="none" type="number" id="intervall" name="intervall" min="10" max="3600"
-    value="<?= hk_e(hk_cfg($hk_cfg, 'heimkino', 'intervall', '60')) ?>">
+    value="<?= hk_e(hk_eingabe('settings', 'intervall', hk_cfg($hk_cfg, 'heimkino', 'intervall', '60'))) ?>"<?= hk_markierung('intervall') ?>>
   <div class="sm-hilfe"><?php echo hk_t('SET.INTERVALL_HILFE'); ?></div>
 </div>
 
@@ -843,18 +910,18 @@ if ($hk_frame) {
 <div class="sm-hinweis"><?php echo hk_t('BEAMER.EINRICHTUNG'); ?></div>
 
 <label class="sm-check"><input data-role="none" type="checkbox" name="beamer_aktiv" value="1"
-  <?php echo hk_an($hk_cfg, 'beamer', 'aktiv') ? 'checked' : ''; ?>>
+  <?php echo hk_eingabe_an('settings', 'beamer_aktiv', hk_an($hk_cfg, 'beamer', 'aktiv')) ? 'checked' : ''; ?>>
   <?= hk_te('SET.BEAMER_VERWENDEN') ?></label>
 <div class="sm-reihe">
   <div class="sm-feld">
     <label for="beamer_ip"><?= hk_te('FELD.BEAMER_IP') ?></label>
     <input data-role="none" type="text" id="beamer_ip" name="beamer_ip" placeholder="192.168.x.y"
-      value="<?= hk_e(hk_cfg($hk_cfg, 'beamer', 'ip', '')) ?>">
+      value="<?= hk_e(hk_eingabe('settings', 'beamer_ip', hk_cfg($hk_cfg, 'beamer', 'ip', ''))) ?>"<?= hk_markierung('beamer_ip') ?>>
   </div>
   <div class="sm-feld">
     <label for="beamer_mac"><?= hk_te('FELD.BEAMER_MAC') ?></label>
     <input data-role="none" type="text" id="beamer_mac" name="beamer_mac" placeholder="AA:BB:CC:DD:EE:FF"
-      value="<?= hk_e(hk_cfg($hk_cfg, 'beamer', 'mac', '')) ?>">
+      value="<?= hk_e(hk_eingabe('settings', 'beamer_mac', hk_cfg($hk_cfg, 'beamer', 'mac', ''))) ?>"<?= hk_markierung('beamer_mac') ?>>
     <div class="sm-hilfe"><?php echo hk_t('FELD.BEAMER_MAC_HILFE'); ?></div>
   </div>
 </div>
@@ -863,61 +930,65 @@ if ($hk_frame) {
     <label for="beamer_keycode"><?= hk_te('FELD.BEAMER_KEYCODE') ?></label>
     <input data-role="none" type="text" id="beamer_keycode" name="beamer_keycode" maxlength="8"
       placeholder="ABCD1234"
-      value="<?= hk_e(hk_cfg($hk_cfg, 'beamer', 'keycode', '')) ?>">
+      value="<?= hk_e(hk_cfg($hk_cfg, 'beamer', 'keycode', '')) ?>"<?= hk_markierung('beamer_keycode') ?>>
     <div class="sm-hilfe"><?php echo hk_t('FELD.BEAMER_KEYCODE_HILFE'); ?></div>
   </div>
   <div class="sm-feld">
     <label for="beamer_port"><?= hk_te('FELD.BEAMER_PORT') ?></label>
     <input data-role="none" type="number" id="beamer_port" name="beamer_port" min="1" max="65535"
-      value="<?= hk_e(hk_cfg($hk_cfg, 'beamer', 'port', '9761')) ?>">
+      value="<?= hk_e(hk_eingabe('settings', 'beamer_port', hk_cfg($hk_cfg, 'beamer', 'port', '9761'))) ?>"<?= hk_markierung('beamer_port') ?>>
   </div>
   <div class="sm-feld">
     <label for="beamer_zeitgrenze"><?= hk_te('FELD.BEAMER_ZEITGRENZE') ?></label>
     <input data-role="none" type="number" id="beamer_zeitgrenze" name="beamer_zeitgrenze" min="1" max="60"
-      value="<?= hk_e(hk_cfg($hk_cfg, 'beamer', 'zeitgrenze', '5')) ?>">
+      value="<?= hk_e(hk_eingabe('settings', 'beamer_zeitgrenze', hk_cfg($hk_cfg, 'beamer', 'zeitgrenze', '5'))) ?>"<?= hk_markierung('beamer_zeitgrenze') ?>>
   </div>
 </div>
 <label class="sm-check"><input data-role="none" type="checkbox" name="beamer_zusatzwerte" value="1"
-  <?php echo hk_an($hk_cfg, 'beamer', 'zusatzwerte') ? 'checked' : ''; ?>>
+  <?php echo hk_eingabe_an('settings', 'beamer_zusatzwerte', hk_an($hk_cfg, 'beamer', 'zusatzwerte')) ? 'checked' : ''; ?>>
   <?= hk_te('SET.ZUSATZWERTE') ?></label>
 <div class="sm-hilfe"><?php echo hk_t('SET.ZUSATZWERTE_HILFE'); ?></div>
 
 <h2><?= hk_te('SET.H_SZENE') ?></h2>
 <div class="sm-hinweis"><?php echo hk_t('SET.SZENE_HILFE'); ?></div>
 <label class="sm-check"><input data-role="none" type="checkbox" name="szene_aktiv" value="1"
-  <?php echo hk_an($hk_cfg, 'szene', 'aktiv') ? 'checked' : ''; ?>>
+  <?php echo hk_eingabe_an('settings', 'szene_aktiv', hk_an($hk_cfg, 'szene', 'aktiv')) ? 'checked' : ''; ?>>
   <?= hk_te('SET.SZENE_AKTIV') ?></label>
+<label class="sm-check"><input data-role="none" type="checkbox" name="szene_hausereignis" value="1"
+  <?php echo hk_eingabe_an('settings', 'szene_hausereignis', hk_an($hk_cfg, 'szene', 'hausereignis')) ? 'checked' : ''; ?>>
+  <?= hk_te('SET.SZENE_HAUSEREIGNIS') ?></label>
+<div class="sm-hilfe"><?php echo hk_t('SET.SZENE_HAUSEREIGNIS_HILFE'); ?></div>
 <?php $hk_w = hk_woerter(); ?>
 <div class="sm-reihe">
   <div class="sm-feld">
     <label for="szene_eingang"><?= hk_te('FELD.SZENE_EINGANG') ?></label>
 <?php if (!empty($hk_w['eingang'])) { ?>
-    <select data-role="none" id="szene_eingang" name="szene_eingang">
+    <select data-role="none" id="szene_eingang" name="szene_eingang"<?= hk_markierung('szene_eingang') ?>>
       <option value=""><?= hk_te('ALLGEMEIN.KEINE_AUSWAHL') ?></option>
 <?php   foreach ($hk_w['eingang'] as $hk_o) { ?>
       <option value="<?= hk_e($hk_o) ?>"<?php
-        echo hk_cfg($hk_cfg, 'szene', 'eingang', '') === $hk_o ? ' selected' : ''; ?>><?= hk_e($hk_o) ?></option>
+        echo hk_eingabe('settings', 'szene_eingang', hk_cfg($hk_cfg, 'szene', 'eingang', '')) === $hk_o ? ' selected' : ''; ?>><?= hk_e($hk_o) ?></option>
 <?php   } ?>
     </select>
 <?php } else { ?>
     <input data-role="none" type="text" id="szene_eingang" name="szene_eingang"
-      value="<?= hk_e(hk_cfg($hk_cfg, 'szene', 'eingang', '')) ?>">
+      value="<?= hk_e(hk_eingabe('settings', 'szene_eingang', hk_cfg($hk_cfg, 'szene', 'eingang', ''))) ?>"<?= hk_markierung('szene_eingang') ?>>
     <div class="sm-hilfe"><?php echo hk_t('FELD.SZENE_KEINE_WOERTER'); ?></div>
 <?php } ?>
   </div>
   <div class="sm-feld">
     <label for="szene_bildmodus"><?= hk_te('FELD.SZENE_BILDMODUS') ?></label>
 <?php if (!empty($hk_w['bildmodus'])) { ?>
-    <select data-role="none" id="szene_bildmodus" name="szene_bildmodus">
+    <select data-role="none" id="szene_bildmodus" name="szene_bildmodus"<?= hk_markierung('szene_bildmodus') ?>>
       <option value=""><?= hk_te('ALLGEMEIN.KEINE_AUSWAHL') ?></option>
 <?php   foreach ($hk_w['bildmodus'] as $hk_o) { ?>
       <option value="<?= hk_e($hk_o) ?>"<?php
-        echo hk_cfg($hk_cfg, 'szene', 'bildmodus', '') === $hk_o ? ' selected' : ''; ?>><?= hk_e($hk_o) ?></option>
+        echo hk_eingabe('settings', 'szene_bildmodus', hk_cfg($hk_cfg, 'szene', 'bildmodus', '')) === $hk_o ? ' selected' : ''; ?>><?= hk_e($hk_o) ?></option>
 <?php   } ?>
     </select>
 <?php } else { ?>
     <input data-role="none" type="text" id="szene_bildmodus" name="szene_bildmodus"
-      value="<?= hk_e(hk_cfg($hk_cfg, 'szene', 'bildmodus', '')) ?>">
+      value="<?= hk_e(hk_eingabe('settings', 'szene_bildmodus', hk_cfg($hk_cfg, 'szene', 'bildmodus', ''))) ?>"<?= hk_markierung('szene_bildmodus') ?>>
 <?php } ?>
   </div>
 </div>
@@ -925,12 +996,12 @@ if ($hk_frame) {
   <div class="sm-feld">
     <label for="szene_warten_beamer"><?= hk_te('FELD.SZENE_WARTEN_BEAMER') ?></label>
     <input data-role="none" type="number" id="szene_warten_beamer" name="szene_warten_beamer" min="10" max="600"
-      value="<?= hk_e(hk_cfg($hk_cfg, 'szene', 'warten_beamer', '120')) ?>">
+      value="<?= hk_e(hk_eingabe('settings', 'szene_warten_beamer', hk_cfg($hk_cfg, 'szene', 'warten_beamer', '120'))) ?>"<?= hk_markierung('szene_warten_beamer') ?>>
   </div>
   <div class="sm-feld">
     <label for="szene_warten_xbox"><?= hk_te('FELD.SZENE_WARTEN_XBOX') ?></label>
     <input data-role="none" type="number" id="szene_warten_xbox" name="szene_warten_xbox" min="10" max="600"
-      value="<?= hk_e(hk_cfg($hk_cfg, 'szene', 'warten_xbox', '90')) ?>">
+      value="<?= hk_e(hk_eingabe('settings', 'szene_warten_xbox', hk_cfg($hk_cfg, 'szene', 'warten_xbox', '90'))) ?>"<?= hk_markierung('szene_warten_xbox') ?>>
   </div>
 </div>
 
@@ -938,19 +1009,19 @@ if ($hk_frame) {
 <div class="sm-hinweis"><?php echo hk_t('XBOX.EINRICHTUNG'); ?></div>
 
 <label class="sm-check"><input data-role="none" type="checkbox" name="xbox_aktiv" value="1"
-  <?php echo hk_an($hk_cfg, 'xbox', 'aktiv') ? 'checked' : ''; ?>>
+  <?php echo hk_eingabe_an('settings', 'xbox_aktiv', hk_an($hk_cfg, 'xbox', 'aktiv')) ? 'checked' : ''; ?>>
   <?= hk_te('SET.XBOX_VERWENDEN') ?></label>
 <div class="sm-feld">
   <label for="xbox_geraete_id"><?= hk_te('FELD.XBOX_ID') ?></label>
   <input data-role="none" type="text" id="xbox_geraete_id" name="xbox_geraete_id"
-    value="<?= hk_e(hk_cfg($hk_cfg, 'xbox', 'geraete_id', '')) ?>">
+    value="<?= hk_e(hk_eingabe('settings', 'xbox_geraete_id', hk_cfg($hk_cfg, 'xbox', 'geraete_id', ''))) ?>"<?= hk_markierung('xbox_geraete_id') ?>>
   <div class="sm-hilfe"><?php echo hk_t('FELD.XBOX_ID_HILFE'); ?></div>
 </div>
 
 <div class="sm-feld">
   <label for="xbox_geheimnis_ablauf"><?= hk_te('FELD.FRIST') ?></label>
   <input data-role="none" type="date" id="xbox_geheimnis_ablauf" name="xbox_geheimnis_ablauf"
-    value="<?= hk_e($hk_ablauf) ?>">
+    value="<?= hk_e(hk_eingabe('settings', 'xbox_geheimnis_ablauf', $hk_ablauf)) ?>"<?= hk_markierung('xbox_geheimnis_ablauf') ?>>
   <div class="<?php echo in_array($hk_ablauf_art, array('abgelaufen', 'bald', 'unlesbar'), true)
       ? 'sm-warnung' : 'sm-hinweis'; ?>">
     <?php echo hk_t('FELD.FRIST_HILFE'); ?>
@@ -990,18 +1061,18 @@ if ($hk_frame) {
   <div class="sm-feld">
     <label for="client_id"><?= hk_te('FELD.CLIENT_ID') ?></label>
     <input data-role="none" type="text" id="client_id" name="client_id"
-      value="<?= hk_e($hk_xb['client_id']) ?>">
+      value="<?= hk_e(hk_eingabe('xbox_app', 'client_id', $hk_xb['client_id'])) ?>"<?= hk_markierung('client_id') ?>>
   </div>
   <div class="sm-feld">
     <label for="client_secret"><?= hk_te('FELD.CLIENT_SECRET') ?></label>
     <input data-role="none" type="password" id="client_secret" name="client_secret"
-      placeholder="<?php echo $hk_xb['geheim'] ? hk_te('FELD.CLIENT_SECRET_DA') : ''; ?>">
+      placeholder="<?php echo $hk_xb['geheim'] ? hk_te('FELD.CLIENT_SECRET_DA') : ''; ?>"<?= hk_markierung('client_secret') ?>>
   </div>
 </div>
 <div class="sm-feld">
   <label for="rueckleitung"><?= hk_te('FELD.RUECKLEITUNG') ?></label>
   <input data-role="none" type="text" id="rueckleitung" name="rueckleitung"
-    value="<?= hk_e($hk_xb['rueckleitung']) ?>">
+    value="<?= hk_e(hk_eingabe('xbox_app', 'rueckleitung', $hk_xb['rueckleitung'])) ?>"<?= hk_markierung('rueckleitung') ?>>
 </div>
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="xbox_app" value="1"><?= hk_te('ALLGEMEIN.K_KENNUNG_SPEICHERN') ?></button>
@@ -1048,6 +1119,10 @@ if ($hk_frame) {
 <h2><?= hk_t('SET.H_SICHERUNG') ?></h2>
 <div class="sm-hinweis"><?= hk_t('SET.SICH_ERKLAERUNG') ?></div>
 <div class="sm-warnung"><?= hk_t('SET.SICH_WARNUNG') ?></div>
+<?php $hk_altwerte = hk_rueckspiel_altwerte(); if ($hk_altwerte) { ?>
+<div class="sm-warnung"><?php echo hk_tf('SET.SICH_ALTWERT',
+    array('%1' => hk_e(implode(', ', $hk_altwerte)))); ?></div>
+<?php } ?>
 <div class="sm-knopfreihe">
   <!-- ZWEI GETRENNTE Formulare. Das Sichern schickt einen Download und ruft
        exit auf; das Zurueckspielen braucht enctype="multipart/form-data".
@@ -1079,12 +1154,12 @@ if ($hk_frame) {
 <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
 <input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
 <label class="sm-check"><input data-role="none" type="checkbox" name="mqtt" value="1"
-  <?php echo hk_an($hk_cfg, 'heimkino', 'mqtt') ? 'checked' : ''; ?>>
+  <?php echo hk_eingabe_an('mqtt', 'mqtt', hk_an($hk_cfg, 'heimkino', 'mqtt')) ? 'checked' : ''; ?>>
   <?= hk_te('MQTT.MELDEN') ?></label>
 <div class="sm-feld">
   <label for="themenpraefix"><?= hk_te('MQTT.PRAEFIX') ?></label>
   <input data-role="none" type="text" id="themenpraefix" name="themenpraefix"
-    value="<?= hk_e($hk_praefix) ?>">
+    value="<?= hk_e(hk_eingabe('mqtt', 'themenpraefix', $hk_praefix)) ?>"<?= hk_markierung('themenpraefix') ?>>
   <div class="sm-hilfe"><?php echo hk_t('MQTT.PRAEFIX_HILFE'); ?></div>
 </div>
 <div class="sm-knopfreihe">
@@ -1142,6 +1217,8 @@ if ($hk_gwf >= 2) { ?>
     <td><?= hk_e($hk_e_thema['text']) ?></td></tr>
 <?php } ?>
 </table>
+<p class="sm-hilfe"><?php echo hk_an($hk_cfg, 'szene', 'hausereignis')
+    ? hk_t('MQTT.HAUS_AN') : hk_t('MQTT.HAUS_AUS'); ?></p>
 </div>
 
 <!-- ========================= Einbindung in Loxone ========================= -->
@@ -1307,11 +1384,6 @@ if ($hk_gwf >= 2) { ?>
   <form method="post" action="index.php">
     <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
     <input data-role="none" type="hidden" name="activetab" value="tab-test">
-    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="test" value="beamer_erreichbar"><?= hk_te('TEST.K_ERREICHBAR') ?></button>
-  </form>
-  <form method="post" action="index.php">
-    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
-    <input data-role="none" type="hidden" name="activetab" value="tab-test">
     <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="test" value="beamer_status"><?= hk_te('TEST.K_STATUS') ?></button>
   </form>
   <form method="post" action="index.php">
@@ -1353,7 +1425,13 @@ if ($hk_gwf >= 2) { ?>
     <input data-role="none" type="hidden" name="activetab" value="tab-test">
     <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="test" value="xbox_roh"><?= hk_te('TEST.K_XBOX_ROH') ?></button>
   </form>
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="test" value="beamer_verbindung"><?= hk_te('TEST.K_VERBINDUNG') ?></button>
+  </form>
 </div>
+<p class="sm-hilfe"><?php echo hk_t('TEST.VERBINDUNG_HILFE'); ?></p>
 
 <h2><?= hk_te('TEST.H_SCHALTEN') ?></h2>
 <p class="sm-hilfe"><?= hk_te('TEST.SCHALTEN_HINWEIS') ?></p>

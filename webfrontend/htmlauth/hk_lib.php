@@ -1938,6 +1938,7 @@ function hk_wert_pruefen($abschnitt, $schluessel, $wert)
         case 'beamer.zusatzwerte':
         case 'xbox.aktiv':
         case 'szene.aktiv':
+        case 'szene.hausereignis':
             return $ja($s === '0' || $s === '1');
         case 'heimkino.intervall':
             return $ganz($s, 10, 3600);
@@ -1991,6 +1992,17 @@ function hk_wert_art($w)
 }
 
 /**
+ * Schluessel, die nach 1.3.15 dazukamen (Verbesserungsbau 30.09.2026). Fehlt
+ * einer davon in einer Sicherung, ist das eine Sicherung aus einer frueheren
+ * Fassung, kein Mangel: der geltende Wert bleibt. Sonst wiese diese Fassung
+ * jede Sicherung ihrer Vorgaengerin ab (Fehlerklasse 10, umgekehrt).
+ */
+function hk_sicherung_spaeter()
+{
+    return array('szene.hausereignis');
+}
+
+/**
  * Eine Sicherungsdatei pruefen (seit 1.3.15 je Wert, C2).
  *
  * Jeder Abschnitt muss ein Feld sein, jeder Schluessel bekannt und jeder
@@ -2002,9 +2014,11 @@ function hk_wert_art($w)
  * Rueckgabe: array(Konfiguration|null, Beanstandungen, Zahl der Werte,
  * Xbox-Anmeldung|null, Token leer?).
  */
-function hk_sicherung_lesen($roh)
+function hk_sicherung_lesen($roh, &$namen = null)
 {
     $mangel = array();
+    // X-3: die Namen der beanstandeten Schluessel, nie ihre Werte.
+    $namen = array();
     $daten = json_decode((string) $roh, true);
     if (!is_array($daten) || hk_ist_liste($daten)) {
         return array(null, array(hk_t('SET.SICH_KEIN_JSON')), 0, null, false);
@@ -2033,6 +2047,7 @@ function hk_sicherung_lesen($roh)
                 $ak = (string) $ak;
                 if (!in_array($ak, hk_sicherung_anmeldeschluessel(), true)) {
                     $mangel[] = sprintf(hk_t('SET.SICH_FREMD'), $e($k . '.' . $ak));
+                    $namen[] = $k . '.' . $ak;
                     continue;
                 }
                 $ok = is_string($av) && hk_wert_taugt($av);
@@ -2045,6 +2060,7 @@ function hk_sicherung_lesen($roh)
                 }
                 if (!$ok) {
                     $mangel[] = sprintf(hk_t('SET.SICH_WERT'), $e($k . '.' . $ak), hk_wert_art($av));
+                    $namen[] = $k . '.' . $ak;
                     continue;
                 }
                 $a[$ak] = $av;
@@ -2069,11 +2085,13 @@ function hk_sicherung_lesen($roh)
             $sk = (string) $sk;
             if (!array_key_exists($sk, $vg[$k])) {
                 $mangel[] = sprintf(hk_t('SET.SICH_FREMD'), $e($k . '.' . $sk));
+                $namen[] = $k . '.' . $sk;
                 continue;
             }
             list($ok, $norm) = hk_wert_pruefen($k, $sk, $sw);
             if (!$ok) {
                 $mangel[] = sprintf(hk_t('SET.SICH_WERT'), $e($k . '.' . $sk), hk_wert_art($sw));
+                $namen[] = $k . '.' . $sk;
                 continue;
             }
             if ($k === 'heimkino' && $sk === 'aktionstoken' && $norm === '') {
@@ -2084,7 +2102,8 @@ function hk_sicherung_lesen($roh)
             $anzahl++;
         }
         foreach (array_keys($vg[$k]) as $pflicht) {
-            if (!array_key_exists($pflicht, $w)) {
+            if (!array_key_exists($pflicht, $w)
+                && !in_array($k . '.' . $pflicht, hk_sicherung_spaeter(), true)) {
                 $fehlend[] = $k . '.' . $pflicht;
             }
         }
@@ -2095,6 +2114,7 @@ function hk_sicherung_lesen($roh)
         }
     }
     if ($fehlend) {
+        $namen = array_merge($namen, $fehlend);
         $mangel[] = sprintf(hk_t('SET.SICH_FEHLEND'), count($fehlend),
             htmlspecialchars(implode(', ', $fehlend), ENT_QUOTES, 'UTF-8'));
     }
@@ -2102,6 +2122,33 @@ function hk_sicherung_lesen($roh)
         $mangel[] = hk_t('SET.SICH_LEER');
     }
     return array($mangel ? null : $neu, $mangel, $anzahl, $mangel ? null : $auth, $token_leer);
+}
+
+/**
+ * X-3 (Verbesserungsbau 30.09.2026): Welche gespeicherten Werte bestuenden
+ * das eigene Zurueckspielen nicht? Die Sicherung wird gebaut und durch
+ * hk_sicherung_lesen() geschickt - dieselbe Pruefung wie beim Zurueckspielen.
+ * Rueckgabe: Liste der NAMEN (abschnitt.schluessel), nie der Werte; leer =
+ * die Sicherung liesse sich zurueckspielen.
+ * Der Name traegt bewusst kein "sicherung": Werkzeuge/sicherung_pruefen.py
+ * nimmt die erste Funktion *_sicherung* mit json_encode fuer die Ausfuhr und
+ * meldete an dieser Pruefung "baut nicht auf der vollen Konfiguration auf"
+ * (gemessen in der Kette am 30.09.2026, Scheinbefund).
+ */
+function hk_rueckspiel_altwerte($sicherung = null)
+{
+    $s = is_array($sicherung) ? $sicherung : hk_sicherung_bauen();
+    $js = json_encode($s, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($js === false) {
+        // Nicht kodierbar: der Knopf meldet das selbst (SET.SICH_SCHREIBFEHLER).
+        return array();
+    }
+    $namen = array();
+    list($neu) = hk_sicherung_lesen($js, $namen);
+    if ($neu !== null) {
+        return array();
+    }
+    return $namen ? array_values(array_unique($namen)) : array('?');
 }
 
 /**
@@ -2150,6 +2197,136 @@ function hk_einmal_schreiben($daten)
     $daten['zeit'] = time();
     $js = json_encode($daten, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     return $js !== false && hk_datei_ersetzen($datei, $js, 0600);
+}
+
+/* ==================================================================
+ * Eingaben nach einer Beanstandung (Verbesserungsbau 30.09.2026, X-2;
+ * Regeln/04 "Nach einer Beanstandung stehen die eingetippten Werte wieder
+ * im Formular")
+ *
+ * Nur nach einer Beanstandung, nur das eine Formular und nur seine Felder.
+ * Nie Geheimnisse: Keycode, Clientgeheimnis, Code und "neues Token" stehen
+ * in keiner Liste und reisen deshalb nie mit.
+ * ================================================================== */
+
+/** Die Felder je Formular: array(text => [...], haken => [...]). */
+function hk_eingabe_felder($form)
+{
+    $felder = array(
+        'settings' => array(
+            'text'  => array('intervall', 'beamer_ip', 'beamer_mac', 'beamer_port',
+                             'beamer_zeitgrenze', 'szene_eingang', 'szene_bildmodus',
+                             'szene_warten_beamer', 'szene_warten_xbox',
+                             'xbox_geraete_id', 'xbox_geheimnis_ablauf'),
+            'haken' => array('enabled', 'nachfassen', 'beamer_aktiv', 'beamer_zusatzwerte',
+                             'szene_aktiv', 'szene_hausereignis', 'xbox_aktiv'),
+        ),
+        'mqtt' => array(
+            'text'  => array('themenpraefix'),
+            'haken' => array('mqtt'),
+        ),
+        'xbox_app' => array(
+            'text'  => array('client_id', 'rueckleitung'),
+            'haken' => array(),
+        ),
+    );
+    return isset($felder[$form]) ? $felder[$form] : null;
+}
+
+/**
+ * Die eingetippten Werte eines Formulars aus $_POST, fuer die Einmalmeldung.
+ * Ein Wert, der kein gueltiges UTF-8 ist oder laenger als 256 Byte, reist
+ * nicht mit (sonst scheiterte json_encode und mit ihm die Umleitung) - das
+ * Feld zeigt dann den gespeicherten Stand.
+ */
+function hk_eingaben_sammeln($form, $beanstandet)
+{
+    $f = hk_eingabe_felder($form);
+    if ($f === null || !$beanstandet) {
+        return null;
+    }
+    $werte = array();
+    foreach ($f['text'] as $feld) {
+        if (isset($_POST[$feld]) && is_string($_POST[$feld]) && strlen($_POST[$feld]) <= 256
+            && preg_match('//u', $_POST[$feld]) === 1) {
+            $werte[$feld] = $_POST[$feld];
+        }
+    }
+    foreach ($f['haken'] as $feld) {
+        $werte[$feld] = isset($_POST[$feld]) ? '1' : '';
+    }
+    return array('form' => $form, 'werte' => $werte,
+                 'beanstandet' => array_values(array_unique(array_map('strval', $beanstandet))));
+}
+
+/** Die Eingaben aus der Einmalmeldung annehmen (nur bekannte Felder, nur Text). */
+function hk_eingaben_setzen($roh = null)
+{
+    static $ein = array('form' => '', 'werte' => array(), 'beanstandet' => array());
+    if ($roh === null) {
+        return $ein;
+    }
+    if (!is_array($roh) || !isset($roh['form']) || !is_string($roh['form'])
+        || hk_eingabe_felder($roh['form']) === null) {
+        return $ein;
+    }
+    $f = hk_eingabe_felder($roh['form']);
+    $erlaubt = array_merge($f['text'], $f['haken'], array('beamer_keycode', 'client_secret'));
+    $werte = array();
+    if (isset($roh['werte']) && is_array($roh['werte'])) {
+        foreach ($roh['werte'] as $k => $v) {
+            if (in_array((string) $k, array_merge($f['text'], $f['haken']), true) && is_string($v)) {
+                $werte[(string) $k] = $v;
+            }
+        }
+    }
+    $bean = array();
+    if (isset($roh['beanstandet']) && is_array($roh['beanstandet'])) {
+        foreach ($roh['beanstandet'] as $b) {
+            if (is_string($b) && in_array($b, $erlaubt, true)) {
+                $bean[] = $b;
+            }
+        }
+    }
+    if ($bean) {
+        $ein = array('form' => $roh['form'], 'werte' => $werte, 'beanstandet' => $bean);
+    }
+    return $ein;
+}
+
+/** Welches Formular zeigt gerade Eingaben ('' = keines)? */
+function hk_eingaben_aktiv()
+{
+    $ein = hk_eingaben_setzen();
+    return $ein['form'];
+}
+
+/** Wert eines Textfelds: die Eingabe nach einer Beanstandung, sonst der gespeicherte. */
+function hk_eingabe($form, $feld, $gespeichert)
+{
+    $ein = hk_eingaben_setzen();
+    if ($ein['form'] === $form && array_key_exists($feld, $ein['werte'])) {
+        return $ein['werte'][$feld];
+    }
+    return $gespeichert;
+}
+
+/** Haken: nach einer Beanstandung der abgeschickte Stand, sonst der gespeicherte. */
+function hk_eingabe_an($form, $feld, $gespeichert)
+{
+    $ein = hk_eingaben_setzen();
+    if ($ein['form'] === $form && array_key_exists($feld, $ein['werte'])) {
+        return $ein['werte'][$feld] === '1';
+    }
+    return (bool) $gespeichert;
+}
+
+/** Das beanstandete Feld wird rot umrandet (Klasse sm-beanstandet). */
+function hk_markierung($feld)
+{
+    $ein = hk_eingaben_setzen();
+    return in_array($feld, $ein['beanstandet'], true)
+        ? ' class="sm-beanstandet" aria-invalid="true"' : '';
 }
 
 function hk_einmal_lesen()

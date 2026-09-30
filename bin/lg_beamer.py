@@ -171,6 +171,33 @@ class LgBeamer:
         cbc = Cipher(algorithms.AES(self._schluessel), modes.CBC(iv)).encryptor()
         return iv_enc + cbc.update(daten) + cbc.finalize()
 
+    @staticmethod
+    def klartext(klar):
+        """Ist ein entschluesselter Block eine lesbare Antwort? Text oder None.
+
+        Nachtrag 2 zum Verbesserungsbau (30.09.2026): bis hierher genuegte
+        ein \n IRGENDWO im entschluesselten Block. Mit falschem Keycode ist
+        der Block Zufall, und in 5,8 % der Faelle (1168 von 20000, gemessen)
+        steckte darin ein \n - die Antwort galt als gelesen, und der Knopf
+        "Beamer-Verbindung pruefen" meldete "Keycode stimmt".
+        Jetzt: bis zum ersten \n nur druckbares ASCII (ein \r direkt davor
+        gilt als Zeilenende), danach nur Fuellbytes - 0x00 bis 0x10 (die
+        Fuellung aus auffuellen()) und das Leerzeichen, das auffuellen() bei
+        voller Blocklaenge voranstellt. Eine Antwort des Geraets ist genauso
+        gebaut wie eine Anfrage (Kopf dieser Datei, Punkt 5).
+        """
+        ende = klar.find(b"\n")
+        if ende < 0:
+            return None
+        kopf = klar[:ende]
+        if kopf.endswith(b"\r"):
+            kopf = kopf[:-1]
+        if any(z < 0x20 or z > 0x7E for z in kopf):
+            return None
+        if any(not (z <= 0x10 or z == 0x20) for z in klar[ende + 1:]):
+            return None
+        return kopf.decode("ascii")
+
     def dekodieren(self, roh, streng=True):
         """Antwort entschluesseln.
 
@@ -197,7 +224,15 @@ class LgBeamer:
             iv = ecb.update(roh[:BLOCK]) + ecb.finalize()
             cbc = Cipher(algorithms.AES(self._schluessel), modes.CBC(iv)).decryptor()
             klar = cbc.update(roh[BLOCK:]) + cbc.finalize()
-            text = klar.decode("latin-1")
+            text = self.klartext(klar)
+            if text is not None:
+                return text
+            if streng:
+                raise BeamerFehler(
+                    "Die Antwort liess sich nicht lesen. Der haeufigste Grund ist "
+                    "ein falscher Keycode - er wird am Gerät neu erzeugt und "
+                    "muss danach hier eingetragen werden.")
+            return None
         if ANTWORT_ENDE in text:
             return text.split(ANTWORT_ENDE)[0]
         if streng:
@@ -338,8 +373,28 @@ class LgBeamer:
     def aus(self):
         return self._ok("POWER off", "Ausschalten")
 
+    # Antwortmuster von GET_IPCONTROL_STATE (Nachtrag 2): ON oder OFF. Die
+    # Vorlage fragt den Zustand mit genau diesem Befehl ab und wertet "ON" aus
+    # (ip_steuerung); die Attrappe der Pruefstaende, gebaut auf der
+    # Originalfassung, antwortet "ON". Ein Geraet mit abgeschalteter
+    # IP-Steuerung nimmt gar keine Verbindung an.
+    IPCONTROL_ANTWORT = re.compile(r"^(ON|OFF)$", re.I)
+
+    def ip_steuerung_antwort(self):
+        """GET_IPCONTROL_STATE lesen und gegen ON|OFF halten - sonst Fehler.
+
+        Bis hierher galt jede andere lesbare Antwort als "aus": eine stille
+        Falschaussage, wenn in Wahrheit gar nicht geantwortet wurde.
+        """
+        antwort = self.befehl("GET_IPCONTROL_STATE").strip()
+        if not self.IPCONTROL_ANTWORT.match(antwort):
+            raise BeamerFehler(
+                "IP-Steuerung: unerwartete Antwort %r (erwartet wird ON oder OFF). "
+                "Haeufigster Grund ist ein falscher Keycode." % antwort[:40])
+        return antwort.upper()
+
     def ip_steuerung(self):
-        return self.befehl("GET_IPCONTROL_STATE").strip().upper() == "ON"
+        return self.ip_steuerung_antwort() == "ON"
 
     def aktuelle_app(self):
         """Laufende Anwendung oder None, wenn das Geraet aus ist.
@@ -633,6 +688,76 @@ def selbsttest():
         fehler += 1
     except BeamerFehler:
         print("ok     Ohne Keycode wird gemeldet statt unverschluesselt gesendet")
+
+    # Nachtrag 2: falscher Keycode darf nie zufaellig lesbar sein, der
+    # richtige muss es immer sein - je 2000 feste Startwerte, Antwort "ON".
+    fremd2 = LgBeamer("127.0.0.1", "WXYZ9876")
+    falsch = richtig = 0
+    for n in range(2000):
+        startwert = n.to_bytes(16, "big")
+        roh = geraet.kodieren("ON" + ANTWORT_ENDE, startwert)
+        if fremd2.dekodieren(roh, streng=False) is not None:
+            falsch += 1
+        if geraet.dekodieren(roh, streng=False) == "ON":
+            richtig += 1
+    faelle += 1
+    if falsch:
+        print("FEHLER Falscher Keycode %d von 2000 Mal als lesbar genommen" % falsch)
+        fehler += 1
+    else:
+        print("ok     Falscher Keycode 0 von 2000 Mal als lesbar genommen")
+    faelle += 1
+    if richtig != 2000:
+        print("FEHLER Richtiger Keycode nur %d von 2000 Mal gelesen" % richtig)
+        fehler += 1
+    else:
+        print("ok     Richtiger Keycode 2000 von 2000 Mal gelesen")
+    # Normale Antworten bleiben lesbar (Formen aus dieser Datei und der Attrappe),
+    # auch mit \r\n und bei voller Blocklaenge.
+    for text in ("OK", "ON", "OFF", "VOL:30", "MUTE:on", "APP:com.webos.app.hdmi1",
+                 "VOL:00000000000000000", "X" * 14, "X" * 15):
+        faelle += 1
+        if geraet.dekodieren(geraet.kodieren(text + ANTWORT_ENDE, iv)) != text:
+            print("FEHLER Antwort %r nicht mehr lesbar" % text)
+            fehler += 1
+        else:
+            print("ok     Antwort %r lesbar" % text)
+    faelle += 1
+    if LgBeamer.klartext(b"OK\r\n" + bytes([11] * 11)) != "OK":
+        print("FEHLER Antwort mit \\r\\n nicht lesbar")
+        fehler += 1
+    else:
+        print("ok     Antwort mit \\r\\n lesbar")
+    for name, block in (("Steuerzeichen vor dem Zeilenende", b"O\x07\n" + bytes([13] * 13)),
+                        ("Nicht-ASCII vor dem Zeilenende", b"O\xc4\n" + bytes([13] * 13)),
+                        ("Text nach dem Zeilenende", b"OK\nXY" + bytes([12] * 12)),
+                        ("kein Zeilenende", b"OK" + bytes([14] * 14))):
+        faelle += 1
+        if LgBeamer.klartext(block) is not None:
+            print("FEHLER angenommen: %s" % name)
+            fehler += 1
+        else:
+            print("ok     abgewiesen: %s" % name)
+    # GET_IPCONTROL_STATE gegen das Antwortmuster, ohne Netz.
+    class _Stumm(LgBeamer):
+        def __init__(self, antwort):
+            LgBeamer.__init__(self, "127.0.0.1", "ABCD1234")
+            self._antwort = antwort
+
+        def befehl(self, text):
+            return self._antwort
+    for antwort, erwartet in (("ON", True), ("off", False), ("OK", None), ("", None)):
+        faelle += 1
+        try:
+            ist = _Stumm(antwort).ip_steuerung()
+        except BeamerFehler:
+            ist = None
+        if ist is not erwartet:
+            print("FEHLER GET_IPCONTROL_STATE %r -> %r statt %r" % (antwort, ist, erwartet))
+            fehler += 1
+        else:
+            print("ok     GET_IPCONTROL_STATE %r -> %s"
+                  % (antwort, "Fehler" if erwartet is None else ("an" if erwartet else "aus")))
 
     print()
     weitere, fehl2 = _abweisungen(geraet)

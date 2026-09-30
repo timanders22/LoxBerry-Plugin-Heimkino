@@ -8,6 +8,7 @@ aus und liefert 0 bei Erfolg, sonst 1 - damit laesst sich das Ergebnis auch
 ohne Textauswertung erkennen.
 
   hk_cmd.py beamer-aus | beamer-wol | beamer-status | beamer-ipcontrol
+  hk_cmd.py beamer-verbindung              TCP und LG-Handshake, schaltet nichts
   hk_cmd.py beamer-taste <name>
   hk_cmd.py beamer-eingang <name>          dtv atv cadtv catv avav1
                                            component1 hdmi1..hdmi4
@@ -148,6 +149,55 @@ def hauptteil(argumente):
             print(text)
             if not da:
                 return 1
+
+        elif befehl == "beamer-verbindung":
+            # Verbesserungsbau 30.09.2026 (Heimkino-b1): Knopf "Beamer-
+            # Verbindung pruefen" im Reiter Test. Erst TCP, dann EINE
+            # verschluesselte LESEanfrage (GET_IPCONTROL_STATE) als Handshake:
+            # erst eine lesbare Antwort zeigt, dass IP-Steuerung und Keycode
+            # stimmen. Geschaltet wird nichts - kein POWER, keine Taste,
+            # kein Eingang. Beide Schritte nehmen die Geraetesperre.
+            from lg_beamer import BeamerFehler
+            ip = gemein.wert(cfg, "beamer", "ip")
+            port = gemein.zahl(cfg, "beamer", "port", 9761, 1, 65535)
+            print("Beamer-Verbindung %s:%d, geprueft am %s"
+                  % (ip or "(keine Adresse)", port,
+                     time.strftime("%d.%m.%Y %H:%M:%S")))
+            anfang = time.time()
+            da, grund, text = gemein.erreichbarkeit(
+                ip, port, gemein.zahl(cfg, "beamer", "zeitgrenze", 5, 1, 60),
+                P["sperre"], SPERRE_WARTEN)
+            if not da:
+                print("TCP: keine Verbindung nach %.0f ms (%s)"
+                      % ((time.time() - anfang) * 1000, grund))
+                print(text)
+                print("Ergebnis: keine Antwort (%s)" % grund)
+                print("Geschaltet wurde nichts.")
+                return 1
+            print("TCP: verbunden nach %.0f ms" % ((time.time() - anfang) * 1000))
+            if not gemein.wert(cfg, "beamer", "keycode"):
+                print("LG-Handshake: nicht moeglich - es ist kein Keycode eingetragen.")
+                print("Ergebnis: keine Antwort (kein Keycode, nur TCP geprueft)")
+                print("Geschaltet wurde nichts.")
+                return 1
+            anfang = time.time()
+            try:
+                # Nachtrag 2: lesbar UND nach dem Muster ON|OFF - erst dann
+                # ist der Keycode belegt (lg_beamer.ip_steuerung_antwort).
+                antwort = _beamer(cfg).ip_steuerung_antwort()
+            except BeamerFehler as fehler:
+                print("LG-Handshake: misslungen nach %.0f ms"
+                      % ((time.time() - anfang) * 1000))
+                print(str(fehler))
+                print("Ergebnis: keine Antwort (Handshake misslungen)")
+                print("Geschaltet wurde nichts.")
+                return 1
+            print("LG-Handshake: gelungen nach %.0f ms - die verschluesselte "
+                  "Leseanfrage GET_IPCONTROL_STATE wurde lesbar beantwortet (%s); "
+                  "IP-Steuerung und Keycode stimmen."
+                  % ((time.time() - anfang) * 1000, antwort or "leer"))
+            print("Ergebnis: erreichbar")
+            print("Geschaltet wurde nichts.")
 
         elif befehl == "beamer-status":
             print(_beamer(cfg).status())

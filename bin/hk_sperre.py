@@ -10,7 +10,8 @@ Beamer arbeiten aber drei voneinander unabhaengige Prozesse:
   hk_service.py   alle 60 s von selbst
   hk_cmd.py       je Aufruf frisch gestartet, aus dem Aktionsendpunkt
                   (Loxone) oder aus dem Reiter Test
-  hk_test.php     beim Klick auf "Beamer erreichbar?"
+  hk_test.php     beim Klick auf "Beamer-Verbindung pruefen" (bis zum
+                  Verbesserungsbau 30.09.2026: "Beamer erreichbar?")
 
 Die vorhandene Sperre in hk_common.pid_belegen() beantwortet eine andere
 Frage - naemlich, ob schon ein DIENST laeuft. Ueber hk_cmd sagt sie nichts.

@@ -206,6 +206,25 @@ function hk_test_zeilen($cfg, $voll = true)
                    . ($broker['autostart'] ? '' : ' - ' . hk_t('MQTT.AUTOSTART_NEIN')))
                 : hk_t('PRUEF.BROKER_KEIN'));
 
+    // --- Kino-Szene als Hausereignis (Verbesserungsbau 30.09.2026, Kino-1).
+    // Ob ein Abnehmer (Beschattungswaechter, Licht, Loxone) das Thema liest,
+    // sieht dieses Plugin nicht; gesagt wird, was es selbst sendet.
+    $hz = hk_zustand();
+    $hs = (is_array($hz) && isset($hz['hausereignis']) && is_array($hz['hausereignis']))
+        ? $hz['hausereignis'] : array();
+    if (!hk_an($cfg, 'szene', 'hausereignis')) {
+        $zeilen[] = array(2, hk_t('PRUEF.HAUS'), hk_t('PRUEF.HAUS_AUS'));
+    } elseif (!hk_an($cfg, 'szene', 'aktiv') || !hk_an($cfg, 'heimkino', 'mqtt')) {
+        $zeilen[] = array(0, hk_t('PRUEF.HAUS'), hk_t('PRUEF.HAUS_WIRKUNGSLOS'));
+    } elseif (isset($hs['wert']) && in_array((string) $hs['wert'], array('0', '1'), true)) {
+        $zeilen[] = array(1, hk_t('PRUEF.HAUS'), hk_tf('PRUEF.HAUS_ZULETZT', array(
+            '%1' => (string) $hs['wert'],
+            '%2' => !empty($hs['zeit']) ? date('d.m.Y H:i:s', (int) $hs['zeit'])
+                                        : hk_t('PRUEF.HAUS_VOR_START'))));
+    } else {
+        $zeilen[] = array(2, hk_t('PRUEF.HAUS'), hk_t('PRUEF.HAUS_NOCH_NICHT'));
+    }
+
     // --- Pflichtfelder je eingeschaltetem Geraet. Ueber eine leere Menge
     // wird nicht geurteilt: ist nichts eingeschaltet, gibt es nichts zu
     // pruefen, und das steht dann auch da.
@@ -298,21 +317,22 @@ function hk_test_ausfuehren($was)
                     ? '<div class="sm-hinweis">' . hk_t('TEST.KRYPTO_OK') . '</div>'
                     : '<div class="sm-warnung">' . hk_t('TEST.KRYPTO_ABW') . '</div>'));
 
-        case 'beamer_erreichbar':
-            // Ueber hk_cmd, NICHT mit einem eigenen fsockopen: dieser Griff
-            // geht an denselben Port 9761 und muss deshalb dieselbe
-            // Geraetesperre nehmen wie Dienst und Einzelbefehl. Bis 1.3.0
-            // war die Oberflaeche hier ein dritter Prozess am Geraet, von dem
-            // die beiden anderen nichts wussten.
+        case 'beamer_verbindung':
+            // Verbesserungsbau 30.09.2026 (Heimkino-b1): TCP und LG-Handshake
+            // (eine verschluesselte Leseanfrage), kein Schaltbefehl. Ueber
+            // hk_cmd, NICHT mit einem eigenen fsockopen: derselbe Port 9761,
+            // dieselbe Geraetesperre wie Dienst und Einzelbefehl. Ersetzt den
+            // Knopf "Beamer erreichbar?" (nur TCP; Entscheidung 30.09.2026).
             if (hk_cfg($cfg, 'beamer', 'ip', '') === '') {
-                return array(hk_t('TEST.T_ERREICHBAR'),
+                return array(hk_t('TEST.T_VERBINDUNG'),
                     '<div class="sm-warnung">' . hk_t('TEST.KEINE_IP') . '</div>');
             }
-            list($code, $aus) = hk_cmd(array('beamer-erreichbar'));
-            return array(hk_t('TEST.T_ERREICHBAR'), hk_block($aus)
-                . ($code === 0 ? ''
-                   : '<p class="sm-hilfe">' . hk_t('TEST.ANTWORTET_NICHT_GRUENDE')
-                     . '</p>'));
+            list($code, $aus) = hk_cmd(array('beamer-verbindung'));
+            return array(hk_t('TEST.T_VERBINDUNG'), hk_block($aus)
+                . ($code === 0
+                   ? '<div class="sm-hinweis">' . hk_t('TEST.VERBINDUNG_OK') . '</div>'
+                   : '<div class="sm-warnung">' . hk_t('TEST.VERBINDUNG_NEIN') . '</div>'
+                     . '<p class="sm-hilfe">' . hk_t('TEST.ANTWORTET_NICHT_GRUENDE') . '</p>'));
 
         case 'beamer_ipcontrol':
             list($code, $aus) = hk_cmd(array('beamer-ipcontrol'));

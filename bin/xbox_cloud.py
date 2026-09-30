@@ -28,6 +28,7 @@ Erneuerungstoken nicht mehr zieht - dann ist eine neue Anmeldung faellig.
 
 import json
 import os
+import re
 import time
 import urllib.parse
 
@@ -94,6 +95,50 @@ XERR_TEXT = {
                   "zugeordnet sein.",
 }
 
+# Token-Werte in zitierten Antworten schwaerzen (Verbesserungsbau 30.09.2026,
+# Heimkino-a1). Bis hierher wurde eine Antwort, die in eine Fehlermeldung
+# wanderte, nur GEKUERZT (str(inhalt)[:200]). Eine XSTS-Antwort ohne
+# DisplayClaims stand damit samt Token im Protokoll, in last_error, per MQTT
+# und in der Antwort des Endpunkts an den Miniserver (gemessen im Durchgang
+# 30.09.2026, Fall 1 der Xbox-Probe). Geschwaerzt wird VOR dem Kuerzen und
+# danach noch einmal: ein abgeschnittener Wert traegt seinen Schluessel nicht
+# mehr immer mit.
+_GEHEIM_SCHLUESSEL = (r"(?:access_token|refresh_token|id_token|xsts_token|token"
+                      r"|client_secret|authorization|rpsticket|usertokens)")
+# "Schluessel": "Wert" (JSON) und 'Schluessel': 'Wert' (Python-Darstellung
+# eines Woerterbuchs, str(inhalt)); der Wert darf auch eine Liste sein
+# (UserTokens) und darf am Schnitt offen enden.
+_GEHEIM_ZITAT = re.compile(
+    r"""(["']""" + _GEHEIM_SCHLUESSEL + r"""["']\s*:\s*)"""
+    r"""(\[[^\]]*\]?|"[^"]*"?|'[^']*'?|[^,}\s]+)""", re.I)
+# Formularfeld oder Kopfzeile: access_token=...&  Authorization: ...
+_GEHEIM_FELD = re.compile(
+    r"(\b" + _GEHEIM_SCHLUESSEL + r"\s*[=:]\s*)([^&\s\"',}]+)", re.I)
+_GEHEIM_FREI = (
+    re.compile(r"XBL3\.0 x=[^;\s\"']*;[^\s\"',}]+"),
+    re.compile(r"\bBearer\s+[^\s\"',}]+", re.I),
+    re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_.-]*"),
+)
+# Microsoft-Token sind lange Zeichenketten ohne Leerraum (EwA..., M.C5_...).
+# Ab 64 Zeichen wird geschwaerzt; Pfade einer Adresse ("//login...") nicht.
+_GEHEIM_LANG = re.compile(r"(?<![A-Za-z0-9_.!*$%~+/=-])[A-Za-z0-9_.!*$%~+/=-]{64,}")
+
+
+def _ohne_token(text, laenge=None):
+    """Token-Werte in einem zitierten Antworttext durch *** ersetzen und
+    danach auf <laenge> Zeichen kuerzen (Heimkino-a1)."""
+    def schwaerzen(t):
+        t = _GEHEIM_ZITAT.sub(lambda m: m.group(1) + "'***'", t)
+        for muster in _GEHEIM_FREI:
+            t = muster.sub("***", t)
+        t = _GEHEIM_FELD.sub(lambda m: m.group(1) + "***", t)
+        return _GEHEIM_LANG.sub(
+            lambda m: m.group(0) if m.group(0).startswith("//") else "***", t)
+    text = schwaerzen("" if text is None else str(text))
+    if laenge is not None and len(text) > laenge:
+        text = schwaerzen(text[:laenge])
+    return text
+
 
 def _kopf(*zusatz):
     """Kopfzeilen zusammensetzen: Grundlage plus das Uebergebene."""
@@ -132,7 +177,7 @@ def _fehlertext(antwort, was):
     for code, satz in XERR_TEXT.items():
         if code in text:
             return "%s (%d): %s (XErr %s)" % (was, antwort.status_code, satz, code)
-    return "%s (%d): %s" % (was, antwort.status_code, text[:300])
+    return "%s (%d): %s" % (was, antwort.status_code, _ohne_token(text, 300))
 
 
 def _requests():
@@ -180,11 +225,11 @@ def _ruf(methode, url, was, **argumente):
                      "erreicht keinen Namensdienst - haeufigste Ursache ist "
                      "eine fehlende Internetverbindung." % ziel)
         else:
-            grund = "Zu %s kam keine Verbindung zustande (%s)." % (ziel, text[:200])
+            grund = "Zu %s kam keine Verbindung zustande (%s)." % (ziel, _ohne_token(text, 200))
         raise XboxFehler("%s: %s" % (was, grund)) from fehler
     except requests.exceptions.RequestException as fehler:
         raise XboxFehler("%s: Anfrage an %s fehlgeschlagen (%s)."
-                         % (was, ziel, str(fehler)[:200])) from fehler
+                         % (was, ziel, _ohne_token(fehler, 200))) from fehler
 
 
 def _json_oder_fehler(antwort, was):
@@ -199,7 +244,7 @@ def _json_oder_fehler(antwort, was):
                 "Schnittstelle - davor sitzt ein Gateway. Die Anmeldung selbst "
                 "ist damit nicht das Problem." % was) from fehler
         raise XboxFehler("%s: Die Antwort war kein JSON (%s)."
-                         % (was, text[:200])) from fehler
+                         % (was, _ohne_token(text, 200))) from fehler
 
 
 class XboxCloud:
@@ -439,7 +484,7 @@ class XboxCloud:
 
     def _token_uebernehmen(self, antwort, vorher=None):
         if antwort.status_code != 200:
-            text = antwort.text[:400]
+            text = _ohne_token(antwort.text, 400)
             if "invalid_client" in text:
                 raise XboxFehler(
                     "Microsoft weist die Anwendung ab (invalid_client). Das "
@@ -472,7 +517,7 @@ class XboxCloud:
         inhalt = _json_oder_fehler(antwort, "Antwort von Microsoft")
         if "access_token" not in inhalt:
             raise XboxFehler("In der Antwort fehlt das Zugriffstoken: %s"
-                             % str(inhalt)[:300])
+                             % _ohne_token(inhalt, 300))
         zugriff = inhalt["access_token"]
         bis = time.time() + int(inhalt.get("expires_in", 3600)) - 120
         erneuerung = inhalt.get("refresh_token")
@@ -522,7 +567,7 @@ class XboxCloud:
         inhalt = _json_oder_fehler(benutzer, "Benutzertoken")
         if not isinstance(inhalt, dict) or not inhalt.get("Token"):
             raise XboxFehler("In der Antwort des Benutzertokens fehlt das Feld "
-                             "Token: %s" % str(inhalt)[:200])
+                             "Token: %s" % _ohne_token(inhalt, 200))
         benutzertoken = inhalt["Token"]
 
         xsts = _ruf(
@@ -547,7 +592,7 @@ class XboxCloud:
             raise XboxFehler(
                 "Die XSTS-Antwort hat nicht den erwarteten Aufbau - es fehlt "
                 "Token oder DisplayClaims.xui[0].uhs: %s"
-                % str(inhalt)[:200]) from fehler
+                % _ohne_token(inhalt, 200)) from fehler
         # Gueltigkeit steht in der Antwort, wird aber sicherheitshalber
         # auf hoechstens acht Stunden begrenzt.
         bis = time.time() + 8 * 3600
@@ -847,6 +892,28 @@ def selbsttest():
         pruefe("Sitzungskennung bleibt im selben Lauf gleich", eins == zwei)
         pruefe("Sitzungskennung ueberlebt den Prozess",
                XboxCloud(pfad)._sitzung() == eins)
+
+    # 6. Token-Werte in zitierten Antworten (Heimkino-a1). Die Werte sind
+    #    erfunden; geprueft wird, dass keiner davon in der Meldung steht.
+    jwt = "eyJhbGciOiJSUzI1NiJ9.eyJ4c3RzIjoiUHJ1ZWZ3ZXJ0In0.UFJVRUZXRVJU"
+    lang = "EwA" + "Q" * 80
+    for name, text in (
+            ("XSTS als Python-Darstellung", str({"Token": jwt, "DisplayClaims": {}})),
+            ("access_token als JSON", '{"access_token":"%s","x":1}' % lang),
+            ("refresh_token am Schnitt offen", '{"refresh_token":"M.C5_BAY.%s' % lang),
+            ("UserTokens als Liste", "{'UserTokens': ['%s']}" % lang),
+            ("Kopfzeile XBL3.0", "Authorization: XBL3.0 x=123;%s" % jwt),
+            ("Formularfeld", "client_secret=GEHEIMWERT123&grant_type=x")):
+        aus = _ohne_token(text, 200)
+        pruefe("geschwaerzt: %s" % name,
+               jwt not in aus and lang[:40] not in aus and "GEHEIMWERT123" not in aus
+               and "***" in aus, repr(aus))
+    pruefe("XErr-Zahl und Fehlerwort bleiben lesbar",
+           _ohne_token('{"XErr":2148916233,"error":"invalid_grant"}', 200)
+           == '{"XErr":2148916233,"error":"invalid_grant"}')
+    pruefe("Antwort ohne Token bleibt gleich", _ohne_token("Bad Request", 300) == "Bad Request")
+    nur = _fehlertext(_Antwort(400, '{"Token":"%s","Message":"kaputt"}' % jwt), "X")
+    pruefe("_fehlertext schwaerzt", jwt[:20] not in nur and "kaputt" in nur, nur)
 
     # Hausform, in beiden Ausgaengen.
     print("\n%d Faelle geprueft, %d Fehlschlaege." % (faelle, fehler))
