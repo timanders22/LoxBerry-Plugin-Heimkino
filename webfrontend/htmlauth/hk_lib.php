@@ -137,6 +137,10 @@ function hk_paths()
         'bremse'   => $basis . '/data/plugins/' . $ordner . '/protokoll_bremse.json',
         // Mindestabstand der Xbox-Befehle aus dem Endpunkt (C10).
         'xbox_befehl' => $basis . '/data/plugins/' . $ordner . '/xbox_befehl.json',
+        // Gleichwert-Unterdrueckung der Sollwert-Befehle (X-7, B-Nachzug 01.10.2026).
+        'gleichwert' => $basis . '/data/plugins/' . $ordner . '/befehl_gleichwert.json',
+        // Eigener Merker der Xbox (Nachtrag): ihr Cloud-Befehl haelt die Sperre bis 90 s.
+        'gleichwert_xbox' => $basis . '/data/plugins/' . $ordner . '/befehl_gleichwert_xbox.json',
         'cron'     => $home !== '' ? $home . '/system/cron' : '',
     );
     return $p;
@@ -1885,6 +1889,29 @@ function hk_wert_taugt($v)
     return strlen($s) <= 4096 && preg_match('/[\x00-\x1F\x7F]/', $s) !== 1;
 }
 
+/**
+ * Ein Wert der Xbox-Anmeldung (xbox_auth.json). EINE Pruefung fuer das
+ * Zurueckspielen einer Sicherung und fuer das Formular "Xbox-Anwendung"
+ * (Nr. 19, B-Nachzug 01.10.2026): bis 1.3.17 stand sie nur im Zurueckspielen,
+ * und das Formular speicherte Kennung und Umleitungs-URI ungeprueft.
+ */
+function hk_anmeldung_wert_gueltig($schluessel, $wert)
+{
+    if (!is_string($wert) || !hk_wert_taugt($wert)) {
+        return false;
+    }
+    if ($schluessel === 'dienst') {
+        return in_array(strtolower($wert), array('', 'live', 'v2'), true);
+    }
+    if ($schluessel === 'redirect_uri') {
+        return $wert === '' || preg_match('#^https?://[\x21-\x7E]{1,2000}\z#', $wert) === 1;
+    }
+    if ($schluessel === 'client_id') {
+        return $wert === '' || preg_match('/^[A-Za-z0-9{}._-]{1,128}\z/', $wert) === 1;
+    }
+    return true;
+}
+
 /** Ein Datum JJJJ-MM-TT, das es gibt (checkdate, seit 1.3.15, O2). */
 function hk_datum_gueltig($s)
 {
@@ -2050,14 +2077,7 @@ function hk_sicherung_lesen($roh, &$namen = null)
                     $namen[] = $k . '.' . $ak;
                     continue;
                 }
-                $ok = is_string($av) && hk_wert_taugt($av);
-                if ($ok && $ak === 'dienst') {
-                    $ok = in_array(strtolower($av), array('', 'live', 'v2'), true);
-                } elseif ($ok && $ak === 'redirect_uri') {
-                    $ok = ($av === '' || preg_match('#^https?://[\x21-\x7E]{1,2000}\z#', $av) === 1);
-                } elseif ($ok && $ak === 'client_id') {
-                    $ok = ($av === '' || preg_match('/^[A-Za-z0-9{}._-]{1,128}\z/', $av) === 1);
-                }
+                $ok = hk_anmeldung_wert_gueltig($ak, $av);
                 if (!$ok) {
                     $mangel[] = sprintf(hk_t('SET.SICH_WERT'), $e($k . '.' . $ak), hk_wert_art($av));
                     $namen[] = $k . '.' . $ak;
@@ -2487,4 +2507,170 @@ function hk_xbox_bremse($abstand = 10)
     @flock($fh, LOCK_UN);
     fclose($fh);
     return array(true, 0);
+}
+
+/* ==================================================================
+ * Gleichwert-Unterdrueckung des Aktionsendpunkts (X-7, B-Nachzug
+ * 01.10.2026, Entscheidung Nr. 19). Vorbild: EVCC 0.9.37
+ * (webfrontend/html/index.php, Befehlsbremse) und Marstek 1.1.19.
+ *
+ * Ein Sollwert-Befehl mit DEMSELBEN Wert geht innerhalb von 60 s nicht
+ * erneut hinaus (HTTP 200, UNVERAENDERT=1). Bis 1.3.17 schickte ein
+ * flatternder Loxone-Ausgang jeden Aufruf bis zum Beamer. Ein anderer Wert
+ * geht sofort hinaus - ein zusaetzliches 429 gibt es nicht.
+ * ================================================================== */
+
+/**
+ * Merkerschluessel eines Sollwert-Befehls, '' fuer alle anderen.
+ *
+ * Ein- und Ausschalten teilen sich einen Schluessel: der Sollwert ist der
+ * Zustand, nicht der Befehl - beamer-aus nach beamer-wol geht hinaus.
+ * Nicht dabei sind beamer-taste und beamer-app (Ereignisse, Nr. 19).
+ * Bild/Ton an/aus und die Xbox seit dem Nachtrag vom 01.10.2026; die Xbox
+ * behaelt zusaetzlich ihren Mindestabstand (hk_xbox_bremse).
+ * beamer-wol ist ausgenommen (Entscheidung Nr. 20): Wake-on-LAN hat keine
+ * Rueckmeldung, ein verlorenes Paket muss sofort wiederholt werden koennen.
+ * Es leert aber den Merker (hk_gleichwert_betrifft/_nachher).
+ */
+function hk_gleichwert_schluessel($aktion)
+{
+    $s = array(
+        'beamer-aus'         => 'beamer',
+        'kino-an'            => 'kino',
+        'kino-aus'           => 'kino',
+        'beamer-lautstaerke' => 'lautstaerke',
+        'beamer-eingang'     => 'eingang',
+        'beamer-bildmodus'   => 'bildmodus',
+        'beamer-energie'     => 'energie',
+        'beamer-bild-an'     => 'bild',
+        'beamer-bild-aus'    => 'bild',
+        'beamer-stumm-an'    => 'stumm',
+        'beamer-stumm-aus'   => 'stumm',
+        'xbox-an'            => 'xbox',
+        'xbox-aus'           => 'xbox',
+    );
+    return isset($s[$aktion]) ? $s[$aktion] : '';
+}
+
+/** Der verglichene Wert: bei Befehlen mit Wert der Wert selbst (Gross- und
+ * Kleinschreibung zaehlt, wie am Geraet), sonst der Befehl. */
+function hk_gleichwert_wert($aktion, $wert)
+{
+    return (string) $wert !== '' ? (string) $wert : (string) $aktion;
+}
+
+/** Befehle, nach denen der Merker nachgefuehrt wird: alle Sollwerte, dazu
+ * beamer-taste, beamer-app und beamer-wol (Nr. 20) - sie werden nie
+ * unterdrueckt, koennen aber einen gemerkten Sollwert am Geraet veraendern. */
+function hk_gleichwert_betrifft($aktion)
+{
+    return hk_gleichwert_schluessel($aktion) !== ''
+        || $aktion === 'beamer-taste' || $aktion === 'beamer-app'
+        || $aktion === 'beamer-wol';
+}
+
+/**
+ * Den Merker oeffnen und sperren. Rueckgabe: Dateizeiger oder false.
+ *
+ * Die Sperre bleibt waehrend des ganzen Befehls gehalten (wie EVCC): zwei
+ * gleichzeitige gleiche Aufrufe senden so nur einmal. Deshalb "e"
+ * (close-on-exec): ohne "e" erbte der Python-Prozess aus hk_cmd() die
+ * gesperrte Datei (Fehlerklasse 3, "Sperre vererbt sich an Kinder").
+ * Ohne Datenordner oder Sperre: false - der Endpunkt faellt dann
+ * geschlossen aus (503).
+ */
+function hk_gleichwert_oeffnen($aktion = '')
+{
+    // Die Xbox hat ihren eigenen Merker (Nachtrag 01.10.2026).
+    $datei = hk_paths()[hk_gleichwert_schluessel($aktion) === 'xbox' ? 'gleichwert_xbox' : 'gleichwert'];
+    if (!is_dir(dirname($datei))) {
+        return false;
+    }
+    $fh = @fopen($datei, 'c+e');
+    if ($fh === false) {
+        return false;
+    }
+    if (!@flock($fh, LOCK_EX)) {
+        fclose($fh);
+        return false;
+    }
+    return $fh;
+}
+
+/** Den gesperrten Merker lesen; Unlesbares gilt als leer (dann geht der
+ * Befehl hinaus - im Zweifel senden, nie still verschlucken). */
+function hk_gleichwert_lesen($fh)
+{
+    rewind($fh);
+    $d = json_decode((string) stream_get_contents($fh), true);
+    return is_array($d) ? $d : array();
+}
+
+/** Sekunden seit DEMSELBEN Wert, -1 wenn ein anderer Wert gemerkt ist oder
+ * der gemerkte aelter als das Fenster ist. */
+function hk_gleichwert_seit($merker, $schluessel, $wert, $fenster = 60)
+{
+    if ($schluessel === '' || !isset($merker[$schluessel]) || !is_array($merker[$schluessel])) {
+        return -1;
+    }
+    $e = $merker[$schluessel];
+    if (!isset($e['w'], $e['t']) || (string) $e['w'] !== (string) $wert) {
+        return -1;
+    }
+    $seit = time() - (int) $e['t'];
+    return ($seit >= 0 && $seit < $fenster) ? $seit : -1;
+}
+
+/**
+ * Der Merker nach einem ausgefuehrten Befehl.
+ *
+ * - Ein/Aus, Kino-Szene und Tasten koennen am Geraet alles aendern (die
+ *   Szene setzt Eingang und Bildmodus, eine Taste kann die Lautstaerke
+ *   stellen): der ganze Merker verfaellt.
+ * - beamer-app wechselt die Quelle: der gemerkte Eingang verfaellt.
+ * - Gelungen: der eigene Wert mit Zeit. Gescheitert: der eigene Eintrag
+ *   faellt weg - ein Wiederholen geht dann hinaus.
+ * - Eintraege ab 60 s werden nicht mitgeschleppt.
+ */
+function hk_gleichwert_nachher($merker, $aktion, $wert, $gelungen)
+{
+    if (in_array($aktion, array('beamer-wol', 'beamer-aus', 'kino-an', 'kino-aus', 'beamer-taste'), true)) {
+        $merker = array();
+    } elseif ($aktion === 'beamer-app') {
+        unset($merker['eingang']);
+    }
+    $jetzt = time();
+    foreach ($merker as $k => $e) {
+        if (!is_array($e) || !isset($e['t']) || ($jetzt - (int) $e['t']) >= 60 || ($jetzt - (int) $e['t']) < 0) {
+            unset($merker[$k]);
+        }
+    }
+    $schl = hk_gleichwert_schluessel($aktion);
+    if ($schl !== '') {
+        if ($gelungen) {
+            $merker[$schl] = array('w' => hk_gleichwert_wert($aktion, $wert), 't' => $jetzt);
+        } else {
+            unset($merker[$schl]);
+        }
+    }
+    return $merker;
+}
+
+/** Den Merker schreiben (ausser bei null), entsperren und schliessen.
+ * Erfolg nur bei vollstaendig geschriebenem Inhalt (Fehlerklasse 1). */
+function hk_gleichwert_schliessen($fh, $merker)
+{
+    $ok = true;
+    if ($merker !== null) {
+        $roh = (string) json_encode($merker);
+        $ok = ftruncate($fh, 0) && rewind($fh) && fwrite($fh, $roh) === strlen($roh) && fflush($fh);
+        if (!$ok) {
+            hk_log_gebremst('gleichwert_schreiben', 'Endpunkt: die Merkerdatei der Gleichwert-Unterdrueckung ('
+                . hk_paths()['gleichwert'] . ') liess sich nicht schreiben - ein gleicher Befehl geht dann '
+                . 'erneut hinaus. Pruefen: Platz und Eigentuemer (loxberry).', 'WARNING', 3600);
+        }
+    }
+    @flock($fh, LOCK_UN);
+    fclose($fh);
+    return $ok;
 }

@@ -173,7 +173,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['test'])
 
 /* ============ Xbox: Anwendungskennung ============ */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['xbox_app'])) {
-    $hk_geheim = isset($_POST['client_secret']) ? trim((string) $_POST['client_secret']) : '';
+    $hk_geheim_roh = isset($_POST['client_secret']) ? $_POST['client_secret'] : '';
+    $hk_geheim = is_string($hk_geheim_roh) ? trim($hk_geheim_roh) : '';
+    // Nr. 19 (B-Nachzug 01.10.2026): Anwendungskennung und Umleitungs-URI
+    // werden mit derselben Pruefung wie beim Zurueckspielen gehalten
+    // (hk_anmeldung_wert_gueltig). Bis 1.3.17 wurden sie ungeprueft
+    // gespeichert, ein Feld statt einer Zeichenkette wurde zu "Array", und
+    // eine leere Umleitungs-URI wurde still auf die Vorgabe gesetzt. Nur der
+    // Rand wird still beschnitten; ein leeres Geheimnis heisst "unveraendert".
+    $hk_cid = isset($_POST['client_id']) ? $_POST['client_id'] : '';
+    $hk_cid = is_string($hk_cid) ? trim($hk_cid) : $hk_cid;
+    if (!hk_anmeldung_wert_gueltig('client_id', $hk_cid)) {
+        $hk_fehler[] = hk_t('FEHLER.CLIENT_ID');
+        $hk_eingaben_form = 'xbox_app';
+        $hk_beanstandet[] = 'client_id';
+    }
+    $hk_rl = isset($_POST['rueckleitung']) ? $_POST['rueckleitung'] : '';
+    $hk_rl = is_string($hk_rl) ? trim($hk_rl) : $hk_rl;
+    if ($hk_rl === '' || !hk_anmeldung_wert_gueltig('redirect_uri', $hk_rl)) {
+        $hk_fehler[] = hk_tf('FEHLER.RUECKLEITUNG', array('%1' => hk_e(HK_RUECKLEITUNG)));
+        $hk_eingaben_form = 'xbox_app';
+        $hk_beanstandet[] = 'rueckleitung';
+    }
+    if (!is_string($hk_geheim_roh) || !hk_anmeldung_wert_gueltig('client_secret', $hk_geheim)) {
+        $hk_fehler[] = hk_t('FEHLER.CLIENT_SECRET');
+        $hk_geheim = '';
+        $hk_eingaben_form = 'xbox_app';
+        $hk_beanstandet[] = 'client_secret';
+    }
     // Eine GUID kann nicht die Spalte "Wert" sein. Lieber hier abweisen als
     // den Benutzer in ein invalid_client von Microsoft laufen lassen.
     //
@@ -181,16 +208,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['xbox_app'])) {
     // und Umleitungs-URI nicht (Entscheidung des Hausherrn 30.09.2026,
     // Regeln/04): die Eingaben kommen ueber X-2 zurueck ins Formular. Bis zum
     // Verbesserungsbau wurden die uebrigen Felder trotzdem gespeichert.
-    if ($hk_geheim !== '' && hk_ist_guid($hk_geheim)) {
+    if (!in_array('client_secret', $hk_beanstandet, true) && $hk_geheim !== '' && hk_ist_guid($hk_geheim)) {
         $hk_fehler[] = hk_t('FEHLER.GEHEIMNIS_GUID');
         $hk_geheim = '';
         $hk_eingaben_form = 'xbox_app';
         $hk_beanstandet[] = 'client_secret';
     }
-    $hk_ok = $hk_beanstandet ? null : hk_xbox_app_speichern(
-        isset($_POST['client_id']) ? $_POST['client_id'] : '',
-        $hk_geheim,
-        isset($_POST['rueckleitung']) ? $_POST['rueckleitung'] : '');
+    $hk_ok = $hk_beanstandet ? null : hk_xbox_app_speichern($hk_cid, $hk_geheim, $hk_rl);
     if ($hk_ok === null) {
         // beanstandet: nichts gespeichert (Hinweis SET.EINGABEN_ZURUECK beim GET)
     } elseif ($hk_ok) {
@@ -326,7 +350,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
         return trim($s);
     };
     $hk_ganz = function ($wert, $vorgabe, $min, $max, &$fehler, $schluessel) {
-        if (!is_string($wert) && !is_numeric($wert)) { return (string) $vorgabe; }
+        // Nr. 19 (B-Nachzug 01.10.2026): ein Feld statt einer Zeichenkette
+        // behielt bis 1.3.17 STILL den alten Wert - jetzt beanstandet.
+        if (!is_string($wert) && !is_numeric($wert)) {
+            $fehler[] = hk_t($schluessel);
+            return (string) $vorgabe;
+        }
         if (!preg_match('/^-?[0-9]+\z/', trim((string) $wert))) {
             $fehler[] = hk_t($schluessel);
             return (string) $vorgabe;
@@ -433,9 +462,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     $hk_neu['szene']['hausereignis'] = isset($_POST['szene_hausereignis']) ? '1' : '0';
     $hk_woerter_h = hk_woerter();
     $hk_pruefe_wort = function ($feld, $art, $schluessel) use (&$hk_fehler, $hk_woerter_h) {
-        $w = isset($_POST[$feld]) && is_string($_POST[$feld]) ? trim((string) $_POST[$feld]) : '';
-        if ($w === '') { return ''; }
         $liste = isset($hk_woerter_h[$art]) ? $hk_woerter_h[$art] : array();
+        // Nr. 19 (B-Nachzug 01.10.2026): ein Feld statt einer Zeichenkette
+        // wurde bis 1.3.17 still zu "" (Schritt ueberspringen) und gespeichert.
+        if (isset($_POST[$feld]) && !is_string($_POST[$feld])) {
+            $hk_fehler[] = hk_tf($schluessel, array('%1' => '[]', '%2' => hk_e(implode(', ', $liste))));
+            return null;
+        }
+        $w = isset($_POST[$feld]) ? trim((string) $_POST[$feld]) : '';
+        if ($w === '') { return ''; }
         if ($liste) {
             if (in_array($w, $liste, true)) { return $w; }
         } elseif (preg_match('/^[A-Za-z0-9_]{1,32}\z/', $w)) {
@@ -482,9 +517,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     // Ablaufdatum. Leer ist erlaubt - dann warnt das Plugin nicht. Ein
     // unlesbares Datum wird abgewiesen, statt still eine Warnung zu
     // verschlucken, die in zwei Jahren gebraucht wird.
-    $hk_frist = isset($_POST['xbox_geheimnis_ablauf']) && is_string($_POST['xbox_geheimnis_ablauf'])
-        ? trim((string) $_POST['xbox_geheimnis_ablauf']) : '';
-    if ($hk_frist === '') {
+    // Nr. 19 (B-Nachzug 01.10.2026): ein Feld statt einer Zeichenkette wurde
+    // bis 1.3.17 still zu "" und loeschte das gespeicherte Datum.
+    $hk_frist_roh = isset($_POST['xbox_geheimnis_ablauf']) ? $_POST['xbox_geheimnis_ablauf'] : '';
+    $hk_frist = is_string($hk_frist_roh) ? trim($hk_frist_roh) : '';
+    if (!is_string($hk_frist_roh)) {
+        $hk_fehler[] = hk_t('FEHLER.FRIST');
+    } elseif ($hk_frist === '') {
         $hk_neu['xbox']['geheimnis_ablauf'] = '';
     } elseif (hk_datum_gueltig($hk_frist)) {
         // checkdate seit 1.3.15 (O2): bis 1.3.14 genuegte strtotime(), und
@@ -1292,6 +1331,7 @@ if ($hk_gwf >= 2) { ?>
 </table>
 </div>
 <div class="sm-hinweis"><?php echo hk_t('LOX.FLANKE'); ?></div>
+<div class="sm-hinweis"><?php echo hk_t('LOX.BREMSE'); ?></div>
 <?php if (hk_an($hk_cfg, 'szene', 'aktiv')) { ?>
 <div class="sm-hinweis"><?php echo hk_t('LOX.SZENE'); ?></div>
 <?php } ?>

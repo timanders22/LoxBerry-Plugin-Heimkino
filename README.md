@@ -13,6 +13,24 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.17
+
+Verbesserungen aus dem Durchgang (Verbesserungsliste
+`Pruefung-Durchgang-2026-09-29/VERBESSERUNGEN_OFFEN.md`, Entscheidungen 16, 19 und 20). Gemessen an
+Attrappen für Beamer, Xbox und Broker unter PHP 7.4, 8.3 und 8.5; nicht am Gerät.
+
+* **Derselbe Sollwert geht höchstens einmal je Minute hinaus:** beamer-aus,
+  kino-an/-aus, Lautstärke, Eingang, Bildmodus, Energie, Bild an/aus, Ton
+  stumm/laut und Xbox an/aus. Die Antwort ist dann `UNVERAENDERT=1`, gesendet wird
+  nichts; ein anderer Wert geht sofort hinaus. `beamer-wol` (Einschalten) geht
+  immer hinaus – ein verlorenes Wake-on-LAN-Paket lässt sich sofort wiederholen.
+  Tasten und Apps gehen immer hinaus, die Xbox weiter höchstens alle 10 s.
+* Ohne Datenordner antworten Sollwert-Befehle mit 503 statt ungebremst zu senden.
+* Felder, die nicht als Text ankommen, und eine leere Umleitungs-URI der
+  Xbox-Anwendung werden beanstandet statt still umgeschrieben; gespeichert wird
+  dann nichts. Kennung und URI der Xbox-Anwendung werden geprüft wie beim
+  Zurückspielen.
+
 ## Neu in 1.3.16
 
 Verbesserungen aus dem Durchgang vom 30.09.2026 (Verbesserungsliste
@@ -1193,6 +1211,30 @@ der Bildmodus heißt `filmMaker`, und ein Kleinschreiben zerstörte einen
 gültigen Wert.
 
 Ein virtueller Ausgangsbefehl feuert bei der Flanke 0→1, nicht dauerhaft.
+
+**Derselbe Sollwert geht höchstens einmal je Minute hinaus.** Für
+`beamer-aus`, `kino-an`/`kino-aus`, `beamer-lautstaerke`,
+`beamer-eingang`, `beamer-bildmodus`, `beamer-energie`, `beamer-bild-an`/`-aus`,
+`beamer-stumm-an`/`-aus` und `xbox-an`/`xbox-aus` gilt: Kommt derselbe
+Befehl mit demselben Wert innerhalb von 60 s noch einmal, antwortet der Endpunkt
+mit HTTP 200 und `UNVERAENDERT=1;AKTION=…;SEIT_S=…` und sendet nichts. Ein
+anderer Wert geht sofort hinaus; ein 429 gibt es dafür nicht.
+
+- Ein- und Ausschalten zählen als ein Sollwert: `kino-aus` nach `kino-an` geht
+  hinaus, ebenso `xbox-aus` nach `xbox-an` (sofern 10 s vergangen sind).
+- `beamer-wol` ist ausgenommen und geht immer hinaus: Wake-on-LAN hat keine
+  Rückmeldung, ein verlorenes Paket muss sofort wiederholt werden können. Es
+  zählt aber als Einschalten, `beamer-aus` danach geht also hinaus.
+- Nach einem Ein- oder Ausschalten, einer Kino-Szene oder einer Taste gilt nichts
+  mehr als gemerkt, nach `beamer-app` der Eingang nicht mehr. Ein gescheiterter
+  Befehl wird nicht gemerkt; ein Wiederholen geht hinaus.
+- `beamer-taste` und `beamer-app` sind Ereignisse und gehen immer hinaus.
+- Für die Xbox gilt zusätzlich der Mindestabstand: ein *anderer* Wert geht
+  höchstens alle 10 s hinaus (sonst 429). Nach einer Kino-Szene gilt auch für
+  die Xbox nichts mehr als gemerkt.
+- Der Merker liegt in `data/plugins/heimkino/befehl_gleichwert.json`, für die
+  Xbox in `befehl_gleichwert_xbox.json`. Fehlt der
+  Datenordner, antworten die Sollwert-Befehle mit 503 und senden nichts.
 
 ### Kino-Szene als Hausereignis — `haus/szene/kino` (Einstellung, ab Werk aus)
 
