@@ -185,6 +185,45 @@ if [ "$INSTALLIERT" != "1" ] && [ "$AUSDRUECKLICH" = "1" ]; then
 fi
 CFG="$PCONFIG/heimkino.cfg"
 
+# Startsperre (Verbesserungsbau Heimkino-C, 02.10.2026).
+#
+# Bis 1.3.18 lag zwischen "laeuft schon einer?" (dienste()) und dem Start
+# (nohup) nichts, was einen zweiten Aufrufer haette aufhalten koennen. Zwei
+# Waechter derselben Sekunde - cron holt nach einem Uhrsprung beim Booten
+# verpasste Minuten nach und startet cron.01min zweimal - oder Waechter und
+# Startknopf fanden beide "laeuft nicht" und starteten je einen Dienst. Der
+# Dienst sperrt selbst (hk_common.pid_belegen(), flock auf der PID-Datei),
+# der zweite beendet sich also wieder - aber erst nachdem beide Startskripte
+# ihre Startdatei gekappt und ihr Ergebnis gemeldet haben.
+#
+# Gesperrt wird auf dieses Skript selbst (flock auf Deskriptor 8), mit
+# Warten bis 15 s: der zweite Aufrufer wartet, bis der erste seinen Start
+# samt Nachsehen hinter sich hat, und fragt DANACH, ob schon einer laeuft.
+# readlink -f, weil LoxBerry das Skript auch ueber einen Verweis unter
+# system/daemons/plugins/ aufruft - gesperrt wird immer dieselbe Datei.
+# Ein zweites "exec 8<" im selben Lauf wuerde den Deskriptor neu oeffnen
+# und die Sperre dabei freigeben - daher der Merker HK_SPERRE_GEHALTEN
+# (Waechter und restart sperren und rufen dann starten()).
+# Der Dienst erbt den Deskriptor NICHT (8<&- beim Start): sonst hielte er
+# die Sperre, solange er laeuft, und jeder spaetere Start wartete 15 s und
+# gaebe dann auf (so gemessen an der Einspeisebremse 0.9.26, dort mit einer
+# Sperre im PHP-Dienst, die sich an Kindprozesse vererbte).
+# Ohne flock (kein util-linux) bleibt es beim Verhalten bis 1.3.18.
+# Bauart: Bewaesserung 0.9.35, Sprachsteuerung 0.11.13 (startsperre_nehmen).
+HK_SPERRE_GEHALTEN=0
+startsperre_nehmen() {
+    [ "$HK_SPERRE_GEHALTEN" = "1" ] && return 0
+    command -v flock >/dev/null 2>&1 || return 0
+    HK_SPERRDATEI=$(readlink -f "$0" 2>/dev/null)
+    [ -n "$HK_SPERRDATEI" ] && [ -r "$HK_SPERRDATEI" ] || return 0
+    exec 8<"$HK_SPERRDATEI"
+    if flock -w 15 8; then
+        HK_SPERRE_GEHALTEN=1
+        return 0
+    fi
+    return 1
+}
+
 # Angelegt wird erst beim START, nicht bei jedem Aufruf.
 #
 # Bis 1.3.12 stand hier "mkdir -p" auf oberster Ebene - auch "status" und
@@ -308,6 +347,10 @@ marke_gilt() {
 
 starten() {
     vollzug_erlaubt || return 1
+    if ! startsperre_nehmen; then
+        echo "Ein anderer Start dieses Plugins laeuft seit ueber 15 Sekunden - jetzt wird nichts gestartet."
+        return 0
+    fi
     # Auch eine Waise ohne PID-Datei zaehlt als laufender Dienst - sonst
     # liefen danach zwei (seit 1.3.14, siehe dienste()).
     HK_LAUFEND=$(dienste | tr '\n' ' ')
@@ -346,7 +389,8 @@ starten() {
     # dort schreibt allein der Handler des Programms. Beim Start gekappt, damit
     # sie nur die Ausgabe EINES Laufes sammelt und nicht unbegrenzt waechst.
     : > "$STARTLOG"
-    nohup python3 "$SKRIPT" >> "$STARTLOG" 2>&1 &
+    # 8<&-: der Dienst erbt die Startsperre nicht (siehe startsperre_nehmen).
+    nohup python3 "$SKRIPT" >> "$STARTLOG" 2>&1 8<&- &
     sleep 1
     if laeuft; then
         touch "$SOLL"
@@ -422,6 +466,12 @@ haengt() {
 
 anhalten() {
     vollzug_erlaubt || return 1
+    # Unter der Startsperre (Heimkino-C): sonst faende ein stop, der waehrend
+    # eines Starts kommt, noch keinen Dienst, und der eben gestartete liefe
+    # danach weiter, obwohl der Anwender ihn angehalten hat.
+    if ! startsperre_nehmen; then
+        echo "WARNUNG: ein anderer Start dieses Plugins haelt die Sperre seit ueber 15 Sekunden - es wird trotzdem angehalten."
+    fi
     rm -f "$SOLL" "$FEHLSTART"
     prozesse_beenden
 }
@@ -471,6 +521,13 @@ case "$1" in
         # "anhalten" an und entfernte ihn - ein gescheiterter Neustart haette
         # jetzt (C8) keinen Merker mehr, und der Dienst bliebe aus.
         vollzug_erlaubt || exit 1
+        # Anhalten und Starten unter EINER Sperre (Heimkino-C): sonst koennte
+        # ein Waechter zwischen beiden einen Dienst starten und restart
+        # danach einen zweiten.
+        if ! startsperre_nehmen; then
+            echo "Ein anderer Start dieses Plugins laeuft seit ueber 15 Sekunden - jetzt wird nichts neu gestartet."
+            exit 1
+        fi
         prozesse_beenden || exit 1
         sleep 1
         starten || { [ -f "$SOLL" ] && fehlstart_merken; exit 1; }
@@ -502,6 +559,15 @@ case "$1" in
         # angehalten.
         vollzug_erlaubt >&2 || exit 1
         [ -f "$SOLL" ] && eingeschaltet || exit 0
+        # Die ganze Frage "laeuft er? sonst starten" steht unter der
+        # Startsperre (Heimkino-C). Zwei Waechter derselben Sekunde laufen
+        # damit nacheinander, und der zweite findet den Dienst des ersten.
+        # Bekommt ein Waechter die Sperre in 15 s nicht, tut er nichts -
+        # der naechste kommt in einer Minute. Der Sollmerker wird unter der
+        # Sperre noch einmal geprueft: ein stop, der waehrenddessen kam,
+        # hat ihn entfernt.
+        startsperre_nehmen || exit 0
+        [ -f "$SOLL" ] || exit 0
         if [ -n "$(dienste)" ]; then
             # Laeuft er, arbeitet er auch? (seit 1.3.15, C11) Ein Neustart
             # wegen Haengens hoechstens alle 15 min, mit einer Protokollzeile.

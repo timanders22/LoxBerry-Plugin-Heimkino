@@ -179,11 +179,32 @@ netz_zurueck() {   # $1 Datei, $2 Art (cfg|json), $3 Rechte, $4 Pruefsumme der V
 }
 # Die Pruefsumme ist die der MITGELIEFERTEN config/heimkino.cfg. Sie wird
 # beim Anheben der Fassung nachgezogen, wenn sich die Vorgabedatei aendert.
-netz_zurueck "heimkino.cfg" cfg 0600 \
-    "279a0e0f89591b0823f655ac9cafcc366d177d056035cfa066edd163db4701d0"
-# xbox_auth.json liefert das Archiv nie mit - es gibt also keine Vorgabe,
-# mit der man vergleichen koennte. Der leere vierte Wert sagt das aus.
-netz_zurueck "xbox_auth.json" json 0600 ""
+#
+# Nur bei einer Aktualisierung (Entscheidung Nr. 1, Nachtrag Heimkino-C,
+# 02.10.2026): die Marke data/plugins/<ordner>.upgrade_laeuft aus
+# preupgrade.sh liegt - ohne Altersvergleich. Bei einer Neuinstallation legt
+# preinstall.sh liegengebliebene Zweitschriften nach .alt; scheitert dort das
+# Verschieben, meldet preinstall "werden NICHT eingespielt". Bis 1.3.18
+# spielte postinstall sie dann trotzdem ein. Jetzt bleibt es dabei, und die
+# liegenden Zweitschriften werden genannt. Bauart: Robonect 1.1.14,
+# VolkswagenID 0.9.27.
+if [ -f "$NETZ_BASE/data/plugins/$NETZ_PDIR.upgrade_laeuft" ]; then
+    netz_zurueck "heimkino.cfg" cfg 0600 \
+        "279a0e0f89591b0823f655ac9cafcc366d177d056035cfa066edd163db4701d0"
+    # xbox_auth.json liefert das Archiv nie mit - es gibt also keine Vorgabe,
+    # mit der man vergleichen koennte. Der leere vierte Wert sagt das aus.
+    netz_zurueck "xbox_auth.json" json 0600 ""
+else
+    hk_liegt=""
+    for hk_z in "$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.heimkino.cfg" \
+                "$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.xbox_auth.json"; do
+        [ -e "$hk_z" ] && hk_liegt="$hk_liegt $hk_z"
+    done
+    if [ -n "$hk_liegt" ]; then
+        echo "<WARNING> Neuinstallation: Zweitschriften einer frueheren Installation werden NICHT"
+        echo "<WARNING> eingespielt; bitte von Hand entfernen:$hk_liegt"
+    fi
+fi
 
 # ---------- Erstanleitung nur, wenn noch nichts eingerichtet ist ----------
 #

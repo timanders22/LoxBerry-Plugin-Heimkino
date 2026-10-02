@@ -13,6 +13,16 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.18
+
+Startsperre und keine Altlast bei Neuinstallation (Verbesserungsliste Heimkino-C, Heimkino-F).
+Gemessen in WSL mit einer Dienst-Attrappe; nicht am Gerät, nicht am echten Beamer.
+
+* **Startsperre:** Starten, Neustarten, Anhalten und der minütliche Wächter laufen jetzt nacheinander statt gleichzeitig. Dafür sorgt eine Sperre auf `bin/dienst.sh`, die höchstens 15 s wartet. Zwei Starts in derselben Sekunde starten nur noch einen Dienst; das passiert etwa, wenn cron nach einem Uhrsprung beim Booten verpasste Minuten nachholt. Bisher lief ein zweiter an und beendete sich erst über die Sperre des Dienstes selbst wieder.
+* **Anhalten während eines Wächter-Starts:** „Anhalten“ hält jetzt auch den eben gestarteten Dienst an. Bisher lief er in 3 von 5 Proben weiter, und „Anhalten“ meldete „läuft nicht“.
+* **Sperre wird nicht vererbt:** Der Dienst übernimmt die Sperre nicht. Anhalten und Starten müssen danach nicht warten.
+* **Neuinstallation spielt keine alte Zweitschrift mehr ein,** auch wenn sie sich nicht beiseitelegen lässt, etwa weil sie schreibgeschützt ist. Bisher meldete die Installation „werden NICHT eingespielt“ und übernahm Keycode und Beamer-Adresse dann doch. Jetzt bleibt es dabei, und die liegende Datei wird zum Entfernen genannt. Aktualisierungen spielen die Zweitschrift wie bisher zurück.
+
 ## Neu in 1.3.17
 
 Verbesserungen aus dem Durchgang (Verbesserungsliste
