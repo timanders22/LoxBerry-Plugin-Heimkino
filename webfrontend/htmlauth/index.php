@@ -897,6 +897,7 @@ if ($hk_frame) {
 
 <!-- ============================ Einstellungen ============================ -->
 <div class="sm-seite<?= $hk_tab === 'tab-settings' ? ' sm-active' : '' ?>" id="tab-settings">
+<div class="sm-hinweis"><?= hk_t('SET.WAS_IST_DAS') ?></div>
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-lesen"></i> <?= hk_te('LEGENDE.LESEN') ?></span>
 <span><i class="sm-punkt sm-b-aktion"></i> <?= hk_te('LEGENDE.AKTION') ?></span>
