@@ -1369,7 +1369,7 @@ if ($hk_gwf >= 2) { ?>
 <tr><td>11</td><td><?= hk_te('LOX.VO') ?></td><td>Heimkino</td><td>http://<?= hk_e($hk_host) ?></td><td><span class="sm-mono">beamer-wol</span>, <span class="sm-mono">xbox-an</span> &larr; #9; <span class="sm-mono">beamer-aus</span>, <span class="sm-mono">xbox-aus</span> &larr; #10</td></tr>
 <tr><td>12</td><td><?= hk_te('LOX.EINSCHALTVERZ') ?></td><td><?= hk_te('LOX.N_BEAMER_NICHT_HOCH') ?></td><td>90 s</td><td>#8 <?= hk_te('LOX.UND_NICHT') ?> #1</td></tr>
 <tr><td>13</td><td><?= hk_te('LOX.SCHWELLWERT') ?></td><td><?= hk_te('LOX.N_XBOX_GEHEIMNIS') ?></td><td><?= hk_te('LOX.P_SCHWELLE') ?></td><td>#5</td></tr>
-<tr><td>14</td><td><?= hk_te('LOX.MELDUNG') ?></td><td><?= hk_te('LOX.N_XBOX_ERNEUERN') ?></td><td>&mdash;</td><td>&larr; #13</td></tr>
+<tr><td>14</td><td><?= hk_te('LOX.MELDUNG') ?></td><td><?= hk_te('LOX.N_XBOX_ERNEUERN') ?></td><td>&mdash;</td><td>#13</td></tr>
 <tr><td>15</td><td><?= hk_te('LOX.STATUS') ?></td><td>Heimkino</td><td><?= hk_te('LOX.P_VISU') ?></td><td>v1 = #1, v2 = #3</td></tr>
 </table>
 </div>
