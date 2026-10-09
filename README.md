@@ -13,6 +13,26 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.21
+
+Reiter „Einbindung in Loxone“ zeigt ein Bild der Bausteine aus dem gemeinsamen Musterprojekt und
+verlinkt die Projektdatei; die Baustein-Liste ist die dort in Loxone Config gebaute.
+
+* Unter der Baustein-Liste (Schritt 7) steht das Bild der Seite „Heimkino“ aus dem
+  [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt); das Bild liegt im Plugin,
+  nachgeladen wird nichts. Config kürzt lange Bausteinnamen, die vollen Namen stehen in der Tabelle.
+* **Baustein-Liste neu (13 statt 15 Zeilen):** eine Zeile = ein Baustein, nur die Hauptvariante,
+  so wie im Musterprojekt gebaut und verbunden. Aus der Vorlage „Heimkino (LoxBerry-Plugin)“ stehen
+  nur noch die drei Eingänge in der Liste, an denen etwas hängt (`beamer_an`, `xbox_an`,
+  `xbox_geheimnis_tage`). Der Kino-Modus ist ein virtueller Eingang (Schalter) statt eines Merkers;
+  eine Flankenerkennung (#5) schickt über ihre beiden Ausgänge die Befehle „Kino-Szene: einschalten“
+  und „Kino-Szene: ausschalten“ der Vorlage „Heimkino steuern (LoxBerry-Plugin)“ (#6, #7) – bisher
+  zwei Flankenbausteine und vier Einzelbefehle. Das UND „Kino an, Beamer aus“ (#8) steht als eigene
+  Zeile vor der Einschaltverzögerung, die Benachrichtigung „Beamer startet nicht“ (#10) ist neu.
+  Unter der Tabelle zwei neue Hinweise: was der Kino-Modus ist und was die Flankenerkennung schickt,
+  und dass die Vorlage „Heimkino steuern“ das Aktionstoken enthält.
+* Gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
+
 ## Neu in 1.3.20
 
 Baustein-Liste in der Schreibweise des Leitungswerkzeugs.
@@ -1163,6 +1183,10 @@ schiefging. Sie war bereits erfolgreich, sonst wäre der Aufruf nie so weit
 gekommen.
 
 ## Einbindung in Loxone
+
+Die Bausteine der Baustein-Liste aus dem Reiter *Einbindung in Loxone* stehen fertig verbunden auf
+der Seite „Heimkino“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
+einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen.
 
 ### Zustand lesen — MQTT
 

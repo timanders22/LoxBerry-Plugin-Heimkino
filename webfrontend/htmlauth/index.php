@@ -840,6 +840,10 @@ if ($hk_frame) {
 .sm-scheibe.sm-grau  { background: #9e9e9e; }
 .sm-log { background: #1e1e1e; color: #d4d4d4; font-family: Consolas, "Courier New", monospace;
     font-size: 0.82em; padding: 12px; border-radius: 8px; max-height: 480px; overflow: auto; white-space: pre-wrap; }
+/* Ergaenzung (Welle Bild, Entscheidung 45): Bild der Bausteine aus dem gemeinsamen Musterprojekt. */
+.sm-bild { margin: 12px 0; }
+.sm-bild img { max-width: 100%; height: auto; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
+.sm-bild figcaption { font-size: .9em; color: #555; margin-top: 4px; }
 </style>
 
 <div class="sm-wrap">
@@ -1356,24 +1360,34 @@ if ($hk_gwf >= 2) { ?>
 <div class="sm-breit">
 <table class="sm-tbl">
 <tr><th>#</th><th><?= hk_te('LOX.SP_BAUSTEIN') ?></th><th><?= hk_te('LOX.SP_NAME') ?></th><th><?= hk_te('LOX.SP_PARAMETER') ?></th><th><?= hk_te('LOX.SP_VERBINDEN') ?></th></tr>
-<tr><td>1</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e(hk_vi_name($hk_praefix, 'beamer/an')) ?></td><td><?= hk_te('ART.DIGITAL') ?></td><td>&mdash;</td></tr>
-<tr><td>2</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e(hk_vi_name($hk_praefix, 'beamer/erreichbar')) ?></td><td><?= hk_te('ART.DIGITAL') ?></td><td>&mdash;</td></tr>
-<tr><td>3</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e(hk_vi_name($hk_praefix, 'xbox/an')) ?></td><td><?= hk_te('ART.DIGITAL') ?></td><td>&mdash;</td></tr>
-<tr><td>4</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e(hk_vi_name($hk_praefix, 'xbox/angemeldet')) ?></td><td><?= hk_te('ART.DIGITAL') ?></td><td>&mdash;</td></tr>
-<tr><td>5</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e(hk_vi_name($hk_praefix, 'xbox/geheimnis_tage')) ?></td><td><?= hk_te('ART.ANALOG') ?>, MinVal -10000, MaxVal 9999</td><td>&mdash;</td></tr>
-<tr><td>6</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e(hk_vi_name($hk_praefix, 'service/online')) ?></td><td><?= hk_te('ART.DIGITAL') ?></td><td>&mdash;</td></tr>
-<tr><td>7</td><td><?= hk_te('LOX.VI') ?></td><td class="sm-mono"><?= hk_e(hk_vi_name($hk_praefix, 'service/zeitstempel')) ?></td><td><?= hk_te('ART.ANALOG') ?></td><td>&mdash;</td></tr>
-<tr><td>8</td><td><?= hk_te('LOX.MERKER') ?></td><td><?= hk_te('LOX.N_KINO_MODUS') ?></td><td><?= hk_te('LOX.P_VISU') ?></td><td>&mdash;</td></tr>
-<tr><td>9</td><td><?= hk_te('LOX.FLANKE_AUF') ?></td><td><?= hk_te('LOX.N_KINO_STARTET') ?></td><td>&mdash;</td><td>#8</td></tr>
-<tr><td>10</td><td><?= hk_te('LOX.FLANKE_AB') ?></td><td><?= hk_te('LOX.N_KINO_ENDET') ?></td><td>&mdash;</td><td>#8</td></tr>
-<tr><td>11</td><td><?= hk_te('LOX.VO') ?></td><td>Heimkino</td><td>http://<?= hk_e($hk_host) ?></td><td><span class="sm-mono">beamer-wol</span>, <span class="sm-mono">xbox-an</span> &larr; #9; <span class="sm-mono">beamer-aus</span>, <span class="sm-mono">xbox-aus</span> &larr; #10</td></tr>
-<tr><td>12</td><td><?= hk_te('LOX.EINSCHALTVERZ') ?></td><td><?= hk_te('LOX.N_BEAMER_NICHT_HOCH') ?></td><td>90 s</td><td>#8 <?= hk_te('LOX.UND_NICHT') ?> #1</td></tr>
-<tr><td>13</td><td><?= hk_te('LOX.SCHWELLWERT') ?></td><td><?= hk_te('LOX.N_XBOX_GEHEIMNIS') ?></td><td><?= hk_te('LOX.P_SCHWELLE') ?></td><td>#5</td></tr>
-<tr><td>14</td><td><?= hk_te('LOX.MELDUNG') ?></td><td><?= hk_te('LOX.N_XBOX_ERNEUERN') ?></td><td>&mdash;</td><td>#13</td></tr>
-<tr><td>15</td><td><?= hk_te('LOX.STATUS') ?></td><td>Heimkino</td><td><?= hk_te('LOX.P_VISU') ?></td><td>v1 = #1, v2 = #3</td></tr>
+<?php /* Welle Bild 5 (1.3.21, Entscheidung A): die Liste ist die im LoxBerry-Plugins
+         Musterprojekt in Loxone Config gebaute und mit leitungen_setzen.py verbundene
+         (Musterprojekt/baustein_listen.txt, Abschnitt Heimkino) - eine Zeile = ein Baustein,
+         nur die Hauptvariante. Namen #1 bis #3 wie in hk_vorlage(), #6/#7 aus [AKTION] wie
+         in hk_vo_vorlage(); die uebrigen Bausteinnamen in beiden Sprachen wie im Musterprojekt. */ ?>
+<tr><td>1</td><td><?= hk_te('BAUSTEIN.B1_TYP') ?></td><td class="sm-mono"><?= hk_e(hk_vi_name($hk_praefix, 'beamer/an')) ?></td><td><?= hk_te('BAUSTEIN.B1_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B1_VERB') ?></td></tr>
+<tr><td>2</td><td><?= hk_te('BAUSTEIN.B2_TYP') ?></td><td class="sm-mono"><?= hk_e(hk_vi_name($hk_praefix, 'xbox/an')) ?></td><td><?= hk_te('BAUSTEIN.B2_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B2_VERB') ?></td></tr>
+<tr><td>3</td><td><?= hk_te('BAUSTEIN.B3_TYP') ?></td><td class="sm-mono"><?= hk_e(hk_vi_name($hk_praefix, 'xbox/geheimnis_tage')) ?></td><td><?= hk_te('BAUSTEIN.B3_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B3_VERB') ?></td></tr>
+<tr><td>4</td><td><?= hk_te('BAUSTEIN.B4_TYP') ?></td><td><?= hk_te('BAUSTEIN.B4_NAME') ?></td><td><?= hk_te('BAUSTEIN.B4_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B4_VERB') ?></td></tr>
+<tr><td>5</td><td><?= hk_te('BAUSTEIN.B5_TYP') ?></td><td><?= hk_te('BAUSTEIN.B5_NAME') ?></td><td><?= hk_te('BAUSTEIN.B5_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B5_VERB') ?></td></tr>
+<tr><td>6</td><td><?= hk_te('BAUSTEIN.B6_TYP') ?></td><td><?= hk_te('AKTION.KINO_AN') ?></td><td><?= hk_te('BAUSTEIN.B6_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B6_VERB') ?></td></tr>
+<tr><td>7</td><td><?= hk_te('BAUSTEIN.B7_TYP') ?></td><td><?= hk_te('AKTION.KINO_AUS') ?></td><td><?= hk_te('BAUSTEIN.B7_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B7_VERB') ?></td></tr>
+<tr><td>8</td><td><?= hk_te('BAUSTEIN.B8_TYP') ?></td><td><?= hk_te('BAUSTEIN.B8_NAME') ?></td><td><?= hk_te('BAUSTEIN.B8_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B8_VERB') ?></td></tr>
+<tr><td>9</td><td><?= hk_te('BAUSTEIN.B9_TYP') ?></td><td><?= hk_te('BAUSTEIN.B9_NAME') ?></td><td><?= hk_te('BAUSTEIN.B9_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B9_VERB') ?></td></tr>
+<tr><td>10</td><td><?= hk_te('BAUSTEIN.B10_TYP') ?></td><td><?= hk_te('BAUSTEIN.B10_NAME') ?></td><td><?= hk_te('BAUSTEIN.B10_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B10_VERB') ?></td></tr>
+<tr><td>11</td><td><?= hk_te('BAUSTEIN.B11_TYP') ?></td><td><?= hk_te('BAUSTEIN.B11_NAME') ?></td><td><?= hk_te('BAUSTEIN.B11_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B11_VERB') ?></td></tr>
+<tr><td>12</td><td><?= hk_te('BAUSTEIN.B12_TYP') ?></td><td><?= hk_te('BAUSTEIN.B12_NAME') ?></td><td><?= hk_te('BAUSTEIN.B12_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B12_VERB') ?></td></tr>
+<tr><td>13</td><td><?= hk_te('BAUSTEIN.B13_TYP') ?></td><td><?= hk_te('BAUSTEIN.B13_NAME') ?></td><td><?= hk_te('BAUSTEIN.B13_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B13_VERB') ?></td></tr>
 </table>
 </div>
-<div class="sm-hinweis"><?php echo hk_t('LOX.BAUSTEINE_HINWEISE'); ?></div>
+<div class="sm-hinweis"><?php echo hk_t('LOX.BAUSTEINE_HINWEISE'); ?><br>
+<?php echo hk_tf('LOX.BAUSTEINE_KINOMODUS', array('%1' => hk_te('AKTION.KINO_AN'), '%2' => hk_te('AKTION.KINO_AUS'))); ?><br>
+<?php echo hk_t('LOX.BAUSTEINE_TOKEN'); ?></div>
+<figure class="sm-bild">
+<img src="einbindung_loxone.png" alt="<?= hk_te('LOX.BILD_ALT') ?>" loading="lazy">
+<figcaption><?= hk_te('LOX.BILD_UNTERSCHRIFT') ?></figcaption>
+</figure>
+<p class="sm-hilfe"><?php echo hk_t('LOX.MUSTERPROJEKT'); ?></p>
 
 <h2><?= hk_te('LOX.H_SCHRITT8') ?></h2>
 <p class="sm-hilfe"><?php echo hk_tf('LOX.GEGENPROBE', array('%1' => hk_e($hk_praefix))); ?></p>
