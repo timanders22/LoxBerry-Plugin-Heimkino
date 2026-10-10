@@ -13,6 +13,13 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.24
+
+Die Texte zum Ausfall sind richtiggestellt (seit 1.3.15 geht im Ausfall nichts hinaus, ein
+abgeschaltetes Gerät bekommt einmal die Platzhalter), die Themen-Tabelle unter „Zustand lesen —
+MQTT“ ist wieder vollständig, und der Reiter *Test* hat die neue Prüfzeile „Wertebereich der
+Vorlage“.
+
 ## Neu in 1.3.23
 
 Bei abgeschalteter Xbox geht `xbox/geheimnis_datum_bekannt` als 0 statt -1 hinaus – ein
@@ -1216,28 +1223,30 @@ es je Thema.
 | `last_error` | Text | letzte Fehlermeldung mit vorangestellter Quelle, sonst ein Bindestrich |
 | `beamer/aktiv` | digital | 1 = der Beamer ist in den Einstellungen eingeschaltet |
 | `beamer/erreichbar` | digital | 1 = der Beamer antwortet auf seinem Steuerport |
-| `beamer/grund` | Text | warum der Beamer nicht antwortet: ok, aus, abgewiesen, kein_weg, zeitueberschreitung, name_unbekannt, keine_adresse |
-| `beamer/status` | Text | an, aus oder unbekannt |
-| `beamer/an` | digital | 1 = der Beamer läuft |
-| `beamer/app` | Text | laufende Quelle, zum Beispiel hdmi1 |
-| `beamer/lautstaerke` | analog | Lautstärke 0 bis 100; -1 = nicht gelesen. Nur wenn die Zusatzwerte eingeschaltet sind und das Gerät den Befehl kennt. |
-| `beamer/stumm` | analog | 1 = stumm, 0 = nicht stumm, -1 = nicht gelesen |
-| `beamer/betriebsstunden` | analog | geschätzte Betriebsstunden seit dem ersten Lauf dieser Fassung. Aus dem Abfragetakt hochgerechnet, keine Angabe des Geräts. |
+| `beamer/grund` | Text | warum der Beamer nicht antwortet: ok, aus, abgewiesen, kein_weg, zeitueberschreitung, name_unbekannt, keine_adresse, besetzt |
+| `beamer/status` | Text | an oder aus. Bleibt bei einem Ausfall stehen - dann gilt beamer/erreichbar = 0. - = Beamer in den Einstellungen abgeschaltet. |
+| `beamer/an` | digital | 1 = der Beamer läuft. Bleibt bei einem Ausfall stehen - nur zusammen mit beamer/erreichbar = 1 gültig. Beamer abgeschaltet: 0 (das zeigt beamer/aktiv = 0). |
+| `beamer/app` | Text | laufende Quelle, zum Beispiel hdmi1. Bleibt bei einem Ausfall stehen. - = keine Quelle oder Beamer abgeschaltet. |
+| `beamer/lautstaerke` | analog | Lautstärke 0 bis 100; -1 = nicht gelesen (Beamer aus, Zusatzwerte aus oder Befehl unbekannt) oder Beamer abgeschaltet. |
+| `beamer/stumm` | analog | 1 = stumm, 0 = nicht stumm, -1 = nicht gelesen oder Beamer abgeschaltet |
+| `beamer/betriebsstunden` | analog | geschätzte Betriebsstunden seit dem ersten Lauf dieser Fassung. Aus dem Abfragetakt hochgerechnet, keine Angabe des Geräts. -1 = Beamer abgeschaltet. |
 | `beamer/laufzeit_heute` | analog | geschätzte Laufzeit des heutigen Tages in Minuten |
 | `beamer/letzte_aktion` | Text | Ergebnis des letzten Schaltbefehls am Beamer, zum Beispiel beamer-aus gewirkt nach 14 s |
 | `xbox/aktiv` | digital | 1 = die Xbox ist in den Einstellungen eingeschaltet |
-| `xbox/status` | Text | Zustandstext der Cloud, zum Beispiel On oder ConnectedStandby |
-| `xbox/an` | digital | 1 = die Konsole läuft |
-| `xbox/name` | Text | Name der Konsole, wie ihn das Microsoft-Konto führt |
+| `xbox/status` | Text | Zustandstext der Cloud, zum Beispiel On oder ConnectedStandby. Bleibt bei einem Ausfall stehen - dann gilt xbox/erreichbar = 0. - = Xbox abgeschaltet. |
+| `xbox/an` | digital | 1 = die Konsole läuft. Bleibt bei einem Ausfall stehen - nur zusammen mit xbox/erreichbar = 1 gültig. Xbox abgeschaltet: 0 (das zeigt xbox/aktiv = 0). |
+| `xbox/name` | Text | Name der Konsole, wie ihn das Microsoft-Konto führt; - = nicht geliefert oder Xbox abgeschaltet |
 | `xbox/angemeldet` | digital | 1 = die Anmeldung bei Microsoft trägt noch |
-| `xbox/betriebsstunden` | analog | geschätzte Betriebsstunden der Konsole seit dem ersten Lauf dieser Fassung |
+| `xbox/betriebsstunden` | analog | geschätzte Betriebsstunden der Konsole seit dem ersten Lauf dieser Fassung; -1 = Xbox abgeschaltet |
 | `xbox/laufzeit_heute` | analog | geschätzte Laufzeit der Konsole am heutigen Tag in Minuten |
 | `xbox/letzte_aktion` | Text | Ergebnis des letzten Schaltbefehls an der Konsole |
-| `xbox/geheimnis_ablauf` | Text | Ablaufdatum des Clientgeheimnisses, JJJJ-MM-TT |
-| `xbox/geheimnis_tage` | analog | Tage bis zum Ablauf des Clientgeheimnisses; negativ = abgelaufen |
+| `xbox/geheimnis_ablauf` | Text | Ablaufdatum des Clientgeheimnisses, JJJJ-MM-TT; - = kein Datum eingetragen oder Xbox abgeschaltet |
+| `xbox/geheimnis_tage` | analog | Tage bis zum Ablauf des Clientgeheimnisses; negativ = abgelaufen; 9999 = kein Datum eingetragen (siehe xbox/geheimnis_datum_bekannt) |
 | `szene/laeuft` | digital | 1 = eine Kino-Szene läuft gerade ab |
 | `szene/schritt` | Text | der Schritt, bei dem die Szene gerade steht |
 | `szene/ergebnis` | Text | Ergebnis der zuletzt gelaufenen Szene samt Dauer |
+| `xbox/erreichbar` | digital | 1 = die letzte Abfrage bei der Xbox-Cloud ist gelungen; 0 = Ausfall, nicht angemeldet oder keine Geräteidentität. Die Xbox-Zustände gelten nur mit 1. |
+| `xbox/geheimnis_datum_bekannt` | digital | 1 = ein Ablaufdatum des Clientgeheimnisses ist eingetragen, 0 = keines (dann steht xbox/geheimnis_tage auf 9999). Xbox abgeschaltet: 0 (das zeigt xbox/aktiv = 0). |
 
 Der Reiter *Einbindung in Loxone* liefert eine Vorlage für die virtuellen
 Eingänge zum Einlesen in Loxone Config. **Die Textthemen bleiben in der

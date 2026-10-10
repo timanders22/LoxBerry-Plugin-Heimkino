@@ -29,6 +29,8 @@ Aufrufe von aussen:
   hk_service.py --vorgaben    Vorgabeliste als JSON (fuer die Selbstpruefung)
   hk_service.py --themen      gesendete Themen als JSON (fuer die Selbstpruefung)
   hk_service.py --protokoll   Lage der Protokolldatei als JSON
+  hk_service.py --sendewerte  Werte, die der Dienst senden kann, als JSON (seit 1.3.24,
+                              fuer die Pruefzeile "Wertebereich der Vorlage")
 """
 
 import datetime
@@ -770,6 +772,36 @@ def _alle_themen():
                   + list(EREIGNIS_THEMEN))
 
 
+def sendewerte():
+    """Die Werte, die der Dienst senden kann - fuer die Pruefzeile
+    "Wertebereich der Vorlage" im Reiter Test (seit 1.3.24, Regeln/03
+    "kleinster Sendewert gegen MinVal").
+
+    entfernt: die Platzhalter fuer ein abgeschaltetes Geraet (ENTFERNT),
+    so wie sie hinausgehen. stand: liegt eine Zustandsdatei, die Werte des
+    letzten Durchgangs - gebildet mit denselben Funktionen wie in der
+    Hauptschleife (mqtt_werte, werte_fuer_versand), sonst None. Gefragt
+    wird der Dienst, nicht eine zweite Liste in der Oberflaeche - wie bei
+    --themen und --vorgaben. Sendet nichts, schreibt nichts.
+    """
+    z = gemein.zustand_lesen()
+    stand = None
+    if (isinstance(z, dict) and isinstance(z.get("beamer"), dict)
+            and isinstance(z.get("xbox"), dict)):
+        betrieb = z.get("betrieb") if isinstance(z.get("betrieb"), dict) else {}
+        try:
+            stand = werte_fuer_versand(
+                mqtt_werte(z["beamer"], z["xbox"], z.get("geheimnis_ablauf", ""),
+                           z.get("geheimnis_tage", ""), z.get("zeit", 0),
+                           betrieb.get("beamer_h", 0), betrieb.get("beamer_heute", 0),
+                           betrieb.get("xbox_h", 0), betrieb.get("xbox_heute", 0)),
+                z["beamer"], z["xbox"], set())
+        except (KeyError, TypeError, ValueError):
+            stand = None
+    return {"entfernt": ENTFERNT, "stand": stand,
+            "stand_zeit": z.get("zeit") if stand is not None else None}
+
+
 def keycode_nachziehen(cfg, log):
     """Einen kleingeschriebenen Keycode EINMAL gross in die Datei schreiben.
 
@@ -1095,6 +1127,12 @@ if __name__ == "__main__":
         # zum Sendecode passt.
         print(json.dumps(_alle_themen(), ensure_ascii=False, indent=1))
         sys.exit(0)
+    if sys.argv[1:] == ["--sendewerte"]:
+        # Fuer die Pruefzeile "Wertebereich der Vorlage" (seit 1.3.24): die
+        # Platzhalter und der letzte Stand aus dem Sendecode, nicht aus einer
+        # Abschrift. Startet keinen Dienst, sendet nichts.
+        print(json.dumps(sendewerte(), ensure_ascii=True))
+        sys.exit(0)
     # Ein unbekannter Schalter startet KEINEN Dienst (seit 1.3.14). Ein Dienst
     # hat genau zwei Argumente - so erkennen ihn dienst.sh, postupgrade.sh und
     # uninstall. Ein Vertipper wie "--mqtt-leren" liefe sonst als Dienst, den
@@ -1102,6 +1140,6 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         sys.stderr.write("hk_service.py: unbekannter Aufruf %r - erlaubt sind "
                          "kein Argument (Dienst), --vorgaben, --protokoll, "
-                         "--themen, --mqtt-leeren.\n" % sys.argv[1:])
+                         "--themen, --sendewerte, --mqtt-leeren.\n" % sys.argv[1:])
         sys.exit(2)
     sys.exit(hauptteil())

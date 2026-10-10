@@ -958,6 +958,11 @@ class Melder:
         # im Broker nicht (Muster 12 der Nachlese, Bauart KODI-NG 1.2.10).
         # Hochstufen kann der Aufrufer nichts: was die Tabelle nicht
         # retained nennt, bleibt fluechtig.
+        # Seit 1.3.15 (Entscheidung 8) setzt der Dienst keine solchen
+        # Platzhalter mehr: im Ausfall gehen die Zustaende gar nicht hinaus
+        # (hk_service.ausfall_themen), nur <geraet>/erreichbar geht auf 0.
+        # Der Schalter behalten=False bleibt, wird vom Dienst aber nicht
+        # mehr gerufen.
         mit_retain = (thema in retain_themen()) and behalten is not False
         if behalten is False:
             self._fluechtig.add(thema)

@@ -199,6 +199,36 @@ function hk_test_zeilen($cfg, $voll = true)
         : ($zu === 2 ? hk_t('PRUEF.NICHT_MESSBAR')
                      : hk_tf('PRUEF.VORLAGEN_KAPUTT', array('%1' => $tx))));
 
+    // --- Wertebereich der Vorlage (seit 1.3.24, Regeln/03): liegt jeder
+    // Wert, den der Dienst senden kann, in [MinVal, MaxVal], und bekommt ein
+    // digitaler Eingang nur 0/1? Startet einen Python-Prozess, deshalb nur
+    // bei offenem Reiter Test. Sendet nichts, schaltet nichts.
+    if (!$voll) {
+        $zeilen[] = array(2, hk_t('PRUEF.WERTEBEREICH'), $nur_test);
+    } else {
+        list($zu, $wb) = hk_wertebereich_probe();
+        if ($zu === 1) {
+            $tx = hk_tf('PRUEF.WERTEBEREICH_OK', array(
+                '%1' => (string) $wb[0], '%2' => (string) $wb[1],
+                '%3' => $wb[2] > 0
+                    ? hk_tf('PRUEF.WERTEBEREICH_STAND', array('%1' => date('d.m.Y H:i:s', $wb[2])))
+                    : hk_t('PRUEF.WERTEBEREICH_OHNE_STAND')));
+        } elseif ($zu === 0) {
+            $teile = array();
+            foreach ($wb as $b) {
+                $quelle = hk_t($b[5] === 'aus' ? 'PRUEF.WERTEBEREICH_AUS' : 'PRUEF.WERTEBEREICH_LETZTE');
+                $teile[] = $b[4]
+                    ? hk_tf('PRUEF.WERTEBEREICH_WERT_DIGITAL', array('%1' => $b[0], '%2' => $b[1], '%3' => $quelle))
+                    : hk_tf('PRUEF.WERTEBEREICH_WERT', array('%1' => $b[0], '%2' => $b[1],
+                          '%3' => (string) $b[2], '%4' => (string) $b[3], '%5' => $quelle));
+            }
+            $tx = hk_tf('PRUEF.WERTEBEREICH_ABW', array('%1' => implode('; ', $teile)));
+        } else {
+            $tx = hk_t('PRUEF.NICHT_MESSBAR');
+        }
+        $zeilen[] = array($zu, hk_t('PRUEF.WERTEBEREICH'), $tx);
+    }
+
     // --- Zustand des MQTT-Gateways.
     $broker = hk_mqtt_broker();
     $zeilen[] = array($broker ? 1 : 0, hk_t('PRUEF.BROKER'),

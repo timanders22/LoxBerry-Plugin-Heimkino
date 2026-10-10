@@ -1684,6 +1684,74 @@ function hk_vorlagen_probe($cfg)
 }
 
 /**
+ * Wertebereich der Vorlage (seit 1.3.24; Regeln/03 "kleinster Sendewert gegen
+ * MinVal"): liegt jeder Wert, den der Dienst an einen Eingang der Vorlage senden
+ * kann, in [MinVal, MaxVal] - und bekommt ein digitaler Eingang (Analog false)
+ * nur 0 oder 1? Ein digitaler Eingang liest jeden Wert ungleich 0 als "Ein";
+ * so ging bis 1.3.22 bei abgeschaltetem Beamer beamer/an = -1 hinaus und Loxone
+ * meldete "ausserhalb des Wertebereichs".
+ *
+ * Die Werte liefert der DIENST (hk_service.py --sendewerte): die Platzhalter aus
+ * ENTFERNT und, wenn eine Zustandsdatei liegt, die Werte des letzten Durchgangs.
+ * Eine zweite, von Hand gefuehrte Liste hier liefe auseinander. Die Grenzen
+ * kommen aus hk_themen() - daraus entsteht auch die Vorlage (hk_vorlage).
+ * Sendet nichts, schaltet nichts.
+ *
+ * Rueckgabe: array(zustand, daten). 1: array(werte, eingaenge, zeit des
+ * Stands oder 0); 0: Liste von array(thema, wert, min, max, digital, quelle);
+ * 2: nicht feststellbar.
+ */
+function hk_wertebereich_probe()
+{
+    list($code, $aus) = hk_cmd_python('hk_service.py', array('--sendewerte'));
+    $j = $code === 0 ? json_decode($aus, true) : null;
+    if (!is_array($j) || !isset($j['entfernt']) || !is_array($j['entfernt'])) {
+        return array(2, array());
+    }
+    $quellen = array();
+    foreach ($j['entfernt'] as $werte) {
+        if (is_array($werte)) { $quellen[] = array('aus', $werte); }
+    }
+    $stand = (isset($j['stand']) && is_array($j['stand'])) ? $j['stand'] : null;
+    if ($stand !== null) { $quellen[] = array('stand', $stand); }
+    $themen = hk_themen();
+    $gesehen = array();
+    $eingaenge = array();
+    $befunde = array();
+    foreach ($quellen as $q) {
+        foreach ($q[1] as $thema => $wert) {
+            $thema = (string) $thema;
+            if (!isset($themen[$thema]) || $themen[$thema]['art'] === 'text') { continue; }
+            // Wie Melder.sende: ein Wahrheitswert geht als 1/0 hinaus.
+            if (is_bool($wert)) { $wert = $wert ? 1 : 0; }
+            $text = is_scalar($wert) ? (string) $wert : ($wert === null ? '-' : json_encode($wert));
+            if (isset($gesehen[$thema . '=' . $text])) { continue; }
+            $gesehen[$thema . '=' . $text] = true;
+            $eingaenge[$thema] = true;
+            $e = $themen[$thema];
+            $digital = ($e['art'] === 'digital');
+            $ok = is_int($wert) || is_float($wert) || (is_string($wert) && is_numeric($wert));
+            if ($ok) {
+                $z = (float) $wert;
+                $ok = $z >= $e['min'] && $z <= $e['max']
+                      && (!$digital || $z === 0.0 || $z === 1.0);
+            }
+            if (!$ok) {
+                $befunde[] = array($thema, $text, $e['min'], $e['max'], $digital, $q[0]);
+            }
+        }
+    }
+    if (!$gesehen) {
+        return array(2, array());
+    }
+    if ($befunde) {
+        return array(0, $befunde);
+    }
+    return array(1, array(count($gesehen), count($eingaenge),
+        $stand !== null && isset($j['stand_zeit']) ? (int) $j['stand_zeit'] : 0));
+}
+
+/**
  * fsockopen, ohne dass ein gesetzter Fehlerbehandler etwas zu sehen bekommt.
  *
  * Ein @ unterdrueckt nur die AUSGABE. Wer einen eigenen Fehlerbehandler
