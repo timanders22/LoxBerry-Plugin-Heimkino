@@ -49,6 +49,9 @@
     "beamer/aktiv bzw. xbox/aktiv = 0. beamer/betriebsstunden und",
     "xbox/betriebsstunden haben dafuer min -1. Vorher meldete Loxone",
     "'ausserhalb des Wertebereichs' und setzte auf den Standardwert 0.",
+    "Seit 1.3.23 (Entscheidung 11.10.2026) ebenso xbox/geheimnis_datum_bekannt:",
+    "0 statt -1, min 0 - auch ein digitaler Eingang; -1 lag im Wertebereich,",
+    "wurde von Loxone aber als 'Ein' = 'Datum eingetragen' gelesen.",
     "kurz_de/kurz_en (seit 1.3.15): hoechstens 40 Zeichen, Comment der",
     "Loxone-Vorlage - er wird beim Import zum Namen der Kachel."
   ],
@@ -371,11 +374,11 @@
       "thema": "xbox/geheimnis_datum_bekannt",
       "art": "digital",
       "retain": true,
-      "min": -1,
+      "min": 0,
       "max": 1,
       "einheit": "",
-      "de": "1 = ein Ablaufdatum des Clientgeheimnisses ist eingetragen, 0 = keines (dann steht xbox/geheimnis_tage auf 9999); -1 = Xbox abgeschaltet",
-      "en": "1 = an expiry date of the client secret is entered, 0 = none (then xbox/geheimnis_tage is 9999); -1 = Xbox disabled",
+      "de": "1 = ein Ablaufdatum des Clientgeheimnisses ist eingetragen, 0 = keines (dann steht xbox/geheimnis_tage auf 9999). Xbox abgeschaltet: 0 (das zeigt xbox/aktiv = 0).",
+      "en": "1 = an expiry date of the client secret is entered, 0 = none (then xbox/geheimnis_tage is 9999). Xbox disabled: 0 (shown by xbox/aktiv = 0).",
       "kurz_de": "Xbox-Geheimnis: Ablauf eingetragen",
       "kurz_en": "Xbox secret: expiry entered"
     }

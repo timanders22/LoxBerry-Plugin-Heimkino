@@ -646,6 +646,10 @@ GEHEIMNIS_OHNE_DATUM = 9999
 # auf 0 zurueck, und ein digitaler Eingang wertet jeden Wert ungleich 0 als
 # "Ein". Dass das Geraet abgeschaltet ist, zeigt <geraet>/aktiv = 0. Die
 # Betriebsstunden bleiben -1; dafuer steht ihr min in hk_themen.json auf -1.
+# Ebenso seit 1.3.23 (Entscheidung 11.10.2026): xbox/geheimnis_datum_bekannt
+# geht als 0 hinaus. Auch das ist in der Vorlage ein digitaler Eingang; -1
+# lag zwar im Wertebereich (min war -1), Loxone wertete es aber als "Ein" =
+# "Datum eingetragen". Sein min in hk_themen.json ist jetzt 0.
 ENTFERNT = {
     "beamer": {"beamer/status": "-",
                "beamer/an": 0,  # digitaler Eingang (Min 0), Entscheidung 10.10.2026
@@ -656,7 +660,8 @@ ENTFERNT = {
              "xbox/an": 0,  # digitaler Eingang (Min 0), Entscheidung 10.10.2026
              "xbox/name": "-",
              "xbox/betriebsstunden": -1, "xbox/geheimnis_ablauf": "-",
-             "xbox/geheimnis_datum_bekannt": -1},
+             # digitaler Eingang (Min 0), Entscheidung 11.10.2026
+             "xbox/geheimnis_datum_bekannt": 0},
 }
 
 

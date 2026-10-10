@@ -13,6 +13,12 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.23
+
+Bei abgeschalteter Xbox geht `xbox/geheimnis_datum_bekannt` als 0 statt -1 hinaus – ein
+digitaler Eingang hätte -1 als ‚Datum eingetragen‘ gelesen. Wer die Vorlage schon eingelesen
+hat: bei diesem Eingang Min auf 0 stellen oder die Vorlage neu einlesen.
+
 ## Neu in 1.3.22
 
 Bei abgeschaltetem Beamer bzw. abgeschalteter Xbox geht `…/an` als 0 statt -1 hinaus, die
