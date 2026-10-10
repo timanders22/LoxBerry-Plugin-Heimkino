@@ -640,11 +640,21 @@ GEHEIMNIS_OHNE_DATUM = 9999
 # Einmal "-" (Text) bzw. -1 (Zahl) retained fuer die Zustaende eines
 # abgeschalteten Geraets (Entscheidung 5 und 8, seit 1.3.15, M4). Danach
 # gehen fuer dieses Geraet keine Themen mehr hinaus ausser <geraet>/aktiv.
+# Ausnahme seit 1.3.22 (Entscheidung 10.10.2026): beamer/an und xbox/an
+# gehen als 0 hinaus. Beide sind in der Vorlage digitale Eingaenge (Min 0,
+# Max 1); Loxone meldete -1 als "ausserhalb des Wertebereichs" und setzte
+# auf 0 zurueck, und ein digitaler Eingang wertet jeden Wert ungleich 0 als
+# "Ein". Dass das Geraet abgeschaltet ist, zeigt <geraet>/aktiv = 0. Die
+# Betriebsstunden bleiben -1; dafuer steht ihr min in hk_themen.json auf -1.
 ENTFERNT = {
-    "beamer": {"beamer/status": "-", "beamer/an": -1, "beamer/app": "-",
+    "beamer": {"beamer/status": "-",
+               "beamer/an": 0,  # digitaler Eingang (Min 0), Entscheidung 10.10.2026
+               "beamer/app": "-",
                "beamer/lautstaerke": -1, "beamer/stumm": -1,
                "beamer/betriebsstunden": -1},
-    "xbox": {"xbox/status": "-", "xbox/an": -1, "xbox/name": "-",
+    "xbox": {"xbox/status": "-",
+             "xbox/an": 0,  # digitaler Eingang (Min 0), Entscheidung 10.10.2026
+             "xbox/name": "-",
              "xbox/betriebsstunden": -1, "xbox/geheimnis_ablauf": "-",
              "xbox/geheimnis_datum_bekannt": -1},
 }
@@ -680,7 +690,7 @@ def ausfall_themen(beamer, xbox):
 def werte_fuer_versand(werte, beamer, xbox, entfernt_gemeldet):
     """Aus den Werten eines Durchgangs das machen, was hinausgeht.
 
-    entfernt_gemeldet: Menge der Geraete, fuer die "-"/-1 schon gesendet ist
+    entfernt_gemeldet: Menge der Geraete, fuer die ENTFERNT schon gesendet ist
     (sie lebt im Dienst; nach einem Neustart geht es genau einmal wieder).
     """
     aus = dict(werte)

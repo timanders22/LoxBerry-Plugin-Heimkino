@@ -13,6 +13,13 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.22
+
+Bei abgeschaltetem Beamer bzw. abgeschalteter Xbox geht `…/an` als 0 statt -1 hinaus, die
+Betriebsstunden dürfen -1 sein – Loxone meldete sonst ‚außerhalb des Wertebereichs‘. Wer die
+Vorlage schon eingelesen hat: bei den beiden Betriebsstunden Min auf -1 stellen oder die Vorlage
+neu einlesen.
+
 ## Neu in 1.3.21
 
 Reiter „Einbindung in Loxone“ zeigt ein Bild der Bausteine aus dem gemeinsamen Musterprojekt und
