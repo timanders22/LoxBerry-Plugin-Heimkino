@@ -13,6 +13,11 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.25
+
+Die Aufzählung der Themen ohne Retain (unter „Zustand lesen — MQTT“ und im Reiter *MQTT*) ist
+an die Themenliste `bin/hk_themen.json` angeglichen; dazu gehört jetzt auch `xbox/erreichbar`.
+
 ## Neu in 1.3.24
 
 Die Texte zum Ausfall sind richtiggestellt (seit 1.3.15 geht im Ausfall nichts hinaus, ein
@@ -1211,10 +1216,16 @@ einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen.
 ### Zustand lesen — MQTT
 
 Alle Themen liegen unter dem eingestellten Präfix (Vorgabe `heimkino`).
-**Zustände sind retained**; ohne Retain gehen seit 1.3.11 das Lebenszeichen
-`service/zeitstempel` sowie `beamer/laufzeit_heute`, `xbox/laufzeit_heute`
-und `xbox/geheimnis_tage` hinaus. Die Spalte *retained* im Reiter MQTT zeigt
-es je Thema.
+**Zustände sind retained.** Ohne Retain gehen nur die Themen hinaus, die in
+`bin/hk_themen.json` `"retain": false` tragen: das Lebenszeichen
+`service/zeitstempel`, die Werte, die von selbst altern (`beamer/laufzeit_heute`,
+`xbox/laufzeit_heute`, `xbox/geheimnis_tage`), und alles, was der Dienst über
+sich selbst sagt – der letzte Fehler `last_error`, Erreichbarkeit und Anmeldung
+(`beamer/erreichbar`, `beamer/grund`, `xbox/erreichbar`, `xbox/angemeldet`),
+die Ergebnisse der Befehle (`beamer/letzte_aktion`, `xbox/letzte_aktion`) und
+der Ablauf der Szene (`szene/laeuft`, `szene/schritt`, `szene/ergebnis`). Ein
+alter Wert sähe sonst frisch aus. Die Spalte *retained* im Reiter MQTT zeigt es
+je Thema.
 
 | Thema | Art | Bedeutung |
 |---|---|---|
