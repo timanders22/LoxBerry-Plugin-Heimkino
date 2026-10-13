@@ -1183,8 +1183,9 @@ function hk_vorlage($cfg)
             'unit'    => $e['einheit'] !== '' ? $e['einheit'] : '<v.1>',
         );
     }
-    return array('VI_Heimkino.xml', hk_xml_virtual_in_http(array(
-        'title'   => 'Heimkino (LoxBerry-Plugin)',
+    $n = hk_vorlagen_namen();
+    return array($n['vi'][0], hk_xml_virtual_in_http(array(
+        'title'   => $n['vi'][1],
         'address' => 'http://' . hk_hostname(),
         'polling' => '604800',
         'comment' => hk_tf('LOX.VORLAGE_KOMMENTAR', array('%1' => date('d.m.Y'))),
@@ -1197,20 +1198,114 @@ function hk_vo_vorlage($cfg)
     $host = hk_hostname();
     $ordner = hk_paths()['plugin'];
     $tok = hk_cfg($cfg, 'heimkino', 'aktionstoken', '');
+    $n = hk_vorlagen_namen();
+    $titel = hk_vo_titel();
     $crlf = "\r\n";
     $o = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
-    $o .= '<VirtualOut HintText="" Title="Heimkino steuern (LoxBerry-Plugin)" '
+    $o .= '<VirtualOut HintText="" Title="' . hk_x($n['vo'][1]) . '" '
         . 'Comment="' . hk_x(hk_t('LOX.VO_KOMMENTAR')) . '" '
         . 'Address="http://' . hk_x($host) . '" CmdInit="" CloseAfterSend="true" CmdSep="">' . $crlf;
     $o .= "\t" . '<Info templateType="3" minVersion="17010727"/>' . $crlf;
     foreach (hk_aktionen() as $aktion => $schluessel) {
-        $o .= "\t" . '<VirtualOutCmd Title="' . hk_x(hk_t($schluessel)) . '" Comment="" CmdOnMethod="GET" CmdOffMethod="GET" ';
+        // Titel fest deutsch (seit 1.3.26, Sprachregel 13.10.2026); [AKTION] nur, falls eine Aktion
+        // ohne festen Titel dazukaeme.
+        $t = isset($titel[$aktion]) ? $titel[$aktion] : hk_t($schluessel);
+        $o .= "\t" . '<VirtualOutCmd Title="' . hk_x($t) . '" Comment="" CmdOnMethod="GET" CmdOffMethod="GET" ';
         $o .= 'CmdOn="' . hk_x(hk_aktionsadresse($cfg, $aktion)) . '" ';
         $o .= 'CmdOnHTTP="" CmdOnPost="" CmdOff="" CmdOffHTTP="" CmdOffPost="" CmdAnswer="" ';
         $o .= 'Analog="false" Repeat="0" RepeatRate="0" HintText=""/>' . $crlf;
     }
     $o .= '</VirtualOut>' . $crlf;
-    return array('VQ_Heimkino.xml', $o);
+    return array($n['vo'][0], $o);
+}
+
+/**
+ * Dateiname und Titel der drei Loxone-Vorlagen - EINE Stelle fuer die Erzeuger, den Reiter
+ * "Einbindung in Loxone" und die Baustein-Listen (seit 1.3.26, Welle Bild 12 VOLL). Die Titel
+ * stehen fest im Code und werden nie uebersetzt (Regeln/07, Sprachregel 13.10.2026): sie werden in
+ * Config zu Namen und muessen zum Musterprojekt und zur Baustein-Liste passen.
+ */
+function hk_vorlagen_namen()
+{
+    return array(
+        'vi' => array('VI_Heimkino.xml', 'Heimkino (LoxBerry-Plugin)'),
+        'vo' => array('VQ_Heimkino.xml', 'Heimkino steuern (LoxBerry-Plugin)'),
+        'bt' => array('VQ_Heimkino_Bild_und_Ton.xml', 'Heimkino Bild und Ton (LoxBerry-Plugin)'),
+    );
+}
+
+/**
+ * Befehlstitel der Vorlage "Heimkino steuern" - fest deutsch (seit 1.3.26, Sprachregel
+ * 13.10.2026). Bis 1.3.25 kamen sie aus [AKTION] der Sprachdatei; unter englischer Oberflaeche
+ * hiessen die Befehle in Config dann anders als im Musterprojekt und in der Baustein-Liste. Die
+ * Texte sind die bisherigen deutschen; die Beschriftungen der Oberflaeche ([AKTION]) bleiben
+ * uebersetzt. Schluessel wie hk_aktionen().
+ */
+function hk_vo_titel()
+{
+    return array(
+        'beamer-aus'       => 'Beamer ausschalten',
+        'beamer-wol'       => 'Beamer einschalten (Wake-on-LAN)',
+        'beamer-bild-aus'  => 'Bild ausblenden (Gerät bleibt an)',
+        'beamer-bild-an'   => 'Bild wieder einblenden',
+        'beamer-stumm-an'  => 'Ton stumm schalten',
+        'beamer-stumm-aus' => 'Ton wieder einschalten',
+        'xbox-an'          => 'Xbox wecken',
+        'xbox-aus'         => 'Xbox ausschalten',
+        'kino-an'          => 'Kino-Szene: einschalten',
+        'kino-aus'         => 'Kino-Szene: ausschalten',
+    );
+}
+
+/**
+ * Befehle der Vorlage "Heimkino Bild und Ton" (seit 1.3.26, Hausherr 13.10.2026): Titel (fest
+ * deutsch), Aktion aus hk_aktionen_mit_wert(), Wert aus den Wortlisten von bin/lg_beamer.py
+ * (EINGAENGE, BILDMODI); null = Analogbefehl mit dem Wert des Reglers (<v.0>). Reihenfolge wie
+ * Musterprojekt/vorlagen/VQ_Heimkino_Bild_und_Ton.xml. Der Endpunkt nahm diese Aktionen schon
+ * vorher an - neu ist nur die Vorlage.
+ */
+function hk_bt_befehle()
+{
+    return array(
+        array('Lautstärke setzen', 'beamer-lautstaerke', null),
+        array('Eingang HDMI 1', 'beamer-eingang', 'hdmi1'),
+        array('Eingang HDMI 2', 'beamer-eingang', 'hdmi2'),
+        array('Eingang HDMI 3', 'beamer-eingang', 'hdmi3'),
+        array('Eingang HDMI 4', 'beamer-eingang', 'hdmi4'),
+        array('Bildmodus Kino', 'beamer-bildmodus', 'cinema'),
+        array('Bildmodus Filmmaker', 'beamer-bildmodus', 'filmMaker'),
+        array('Bildmodus Spiel', 'beamer-bildmodus', 'game'),
+        array('Bildmodus Normal', 'beamer-bildmodus', 'normal'),
+        array('Bildmodus Sport', 'beamer-bildmodus', 'sports'),
+        array('Bildmodus Lebhaft', 'beamer-bildmodus', 'vivid'),
+        array('Bildmodus Eco', 'beamer-bildmodus', 'eco'),
+    );
+}
+
+/** Vorlage "Heimkino Bild und Ton" (Virtueller Ausgang, seit 1.3.26). Rueckgabe: array(dateiname, inhalt).
+ * Bauart wie hk_vo_vorlage(): eigene Datei, damit eine schon eingelesene Vorlage "Heimkino steuern"
+ * beim Neueinlesen kein zweites Geraet ergibt. */
+function hk_bt_vorlage($cfg)
+{
+    $n = hk_vorlagen_namen();
+    $crlf = "\r\n";
+    $o = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
+    $o .= '<VirtualOut HintText="" Title="' . hk_x($n['bt'][1]) . '" '
+        . 'Comment="' . hk_x(hk_t('LOX.BT_KOMMENTAR')) . '" '
+        . 'Address="http://' . hk_x(hk_hostname()) . '" CmdInit="" CloseAfterSend="true" CmdSep="">' . $crlf;
+    $o .= "\t" . '<Info templateType="3" minVersion="17010727"/>' . $crlf;
+    foreach (hk_bt_befehle() as $b) {
+        // Analogbefehl: <v.0> setzt Loxone beim Senden ein; es darf nicht durch rawurlencode laufen.
+        $adresse = $b[2] === null
+            ? hk_aktionsadresse($cfg, $b[1]) . '&wert=<v.0>'
+            : hk_aktionsadresse($cfg, $b[1], $b[2]);
+        $o .= "\t" . '<VirtualOutCmd Title="' . hk_x($b[0]) . '" Comment="" CmdOnMethod="GET" CmdOffMethod="GET" ';
+        $o .= 'CmdOn="' . hk_x($adresse) . '" ';
+        $o .= 'CmdOnHTTP="" CmdOnPost="" CmdOff="" CmdOffHTTP="" CmdOffPost="" CmdAnswer="" ';
+        $o .= 'Analog="' . ($b[2] === null ? 'true' : 'false') . '" Repeat="0" RepeatRate="0" HintText=""/>' . $crlf;
+    }
+    $o .= '</VirtualOut>' . $crlf;
+    return array($n['bt'][0], $o);
 }
 
 /** Vollstaendige Aufrufadresse einer Aktion, wie sie in Loxone gehoert. */
@@ -1670,7 +1765,7 @@ function hk_vorlagen_probe($cfg)
         return array(2, '0');
     }
     $zahl = 0;
-    foreach (array(hk_vorlage($cfg), hk_vo_vorlage($cfg)) as $paar) {
+    foreach (array(hk_vorlage($cfg), hk_vo_vorlage($cfg), hk_bt_vorlage($cfg)) as $paar) {
         $zahl++;
         $vorher = libxml_use_internal_errors(true);
         $ok = simplexml_load_string($paar[1]);

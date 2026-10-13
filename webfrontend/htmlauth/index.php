@@ -149,9 +149,15 @@ if (isset($_POST['activetab']) && is_string($_POST['activetab'])
  * ================================================================== */
 /* ============ Loxone-Vorlage herunterladen ============ */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['download'])) {
-    list($hk_dname, $hk_dinhalt) = $_POST['download'] === 'vo'
-        ? hk_vo_vorlage($hk_cfg)
-        : hk_vorlage($hk_cfg);
+    // Seit 1.3.26 dazu 'bt' (Vorlage "Heimkino Bild und Ton"); jeder andere Wert wie bisher die
+    // Eingangsvorlage.
+    if ($_POST['download'] === 'vo') {
+        list($hk_dname, $hk_dinhalt) = hk_vo_vorlage($hk_cfg);
+    } elseif ($_POST['download'] === 'bt') {
+        list($hk_dname, $hk_dinhalt) = hk_bt_vorlage($hk_cfg);
+    } else {
+        list($hk_dname, $hk_dinhalt) = hk_vorlage($hk_cfg);
+    }
     header('Content-Type: application/x-download');
     // Die Anfuehrungszeichen um den Dateinamen sind Pflicht: ohne sie
     // bricht jeder Name, der ein Leerzeichen enthaelt.
@@ -844,6 +850,11 @@ if ($hk_frame) {
 .sm-bild { margin: 12px 0; }
 .sm-bild img { max-width: 100%; height: auto; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
 .sm-bild figcaption { font-size: .9em; color: #555; margin-top: 4px; }
+/* Welle Bild 12 VOLL (1.3.26): Abschnitte, Schritte und Hinweise je Baustein-Liste. */
+.sm-wrap h4.sm-h4 { color: #4f7d17; font-size: 0.98em; font-weight: 700; margin: 22px 0 4px;
+    padding-top: 10px; border-top: 1px solid #e0e0e0; }
+.sm-schritte { margin: 6px 0 0 18px; padding: 0; }
+.sm-schritte li { margin: 3px 0; }
 </style>
 
 <div class="sm-wrap">
@@ -1320,13 +1331,16 @@ if ($hk_gwf >= 2) { ?>
     <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
     <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
     <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="download" value="vo"><?= hk_te('ALLGEMEIN.K_VORLAGE_VO') ?></button>
+    <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="download" value="bt"><?= hk_te('ALLGEMEIN.K_VORLAGE_BT') ?></button>
   </form>
 </div>
+<p class="sm-hilfe"><?php echo hk_t('LOX.BT_HINWEIS'); ?></p>
 <div class="sm-breit">
 <table class="sm-tbl">
 <tr><th style="width:26%"><?= hk_te('LOX.SP_BEFEHL') ?></th><th><?= hk_te('LOX.SP_EIN') ?></th></tr>
+<?php $hk_vot = hk_vo_titel(); /* seit 1.3.26: Name in Config = fester Titel */ ?>
 <?php foreach (hk_aktionen() as $hk_a => $hk_s) { ?>
-<tr><td><?= hk_te($hk_s) ?></td>
+<tr><td><?= isset($hk_vot[$hk_a]) ? hk_e($hk_vot[$hk_a]) : hk_te($hk_s) ?></td>
     <td class="sm-mono"><?= hk_e(hk_aktionsadresse($hk_cfg, $hk_a)) ?></td></tr>
 <?php } ?>
 <?php foreach (hk_aktionen_mit_wert() as $hk_a => $hk_s) { ?>
@@ -1357,37 +1371,266 @@ if ($hk_gwf >= 2) { ?>
 
 <h2><?= hk_te('LOX.H_SCHRITT7') ?></h2>
 <p class="sm-hilfe"><?php echo hk_t('LOX.BAUSTEINE_EINLEITUNG'); ?></p>
+<?php /* Welle Bild 12 VOLL (1.3.26, Hausherr 11.10.2026: Vollausstattung, ein absoluter Laie soll
+ * das Maximum leicht uebernehmen koennen): vier Seiten aus dem LoxBerry-Plugins Musterprojekt, dort
+ * in Loxone Config gebaut und mit leitungen_setzen.py verbunden (Musterprojekt/baustein_listen.txt,
+ * Abschnitte "Heimkino" 31, "Heimkino Steuerung" 24, "Heimkino Geraete" 26, "Heimkino Bild und
+ * Ton" 24 Zeilen). Je Seite: Ueberschrift, Kasten "So uebernehmen Sie diese Seite", Tabelle,
+ * Hinweise, Bild, Link - alle immer sichtbar. Bis 1.3.25 stand hier eine Seite mit 13 Zeilen.
+ * Namen der Eingaenge und Texteingaenge wie in hk_vorlage(): hk_vi_name() mit dem Praefix des
+ * Anwenders (= Name, den das MQTT-Gateway vergibt); Befehlsnamen aus hk_vo_titel() bzw.
+ * hk_bt_befehle(), Vorlagentitel aus hk_vorlagen_namen() - dieselben Quellen wie die Knoepfe.
+ * Texte aus [BAUSTEIN]; jede Zelle ist fertiges, maskiertes HTML.
+ * Zeile: array(Nr, Typ, Name, Parameter, Eingaenge). */
+$hk_bs_vn = hk_vorlagen_namen();
+$hk_bs_vot = hk_vo_titel();
+$hk_bs_btb = hk_bt_befehle();
+$hk_bs_gw = function ($thema) use ($hk_praefix) { return hk_vi_name($hk_praefix, $thema); };
+$hk_bs_vo = function ($aktion) use ($hk_bs_vot) {
+    return isset($hk_bs_vot[$aktion]) ? $hk_bs_vot[$aktion] : '{' . $aktion . '}';
+};
+/* Erst vsprintf auf den Sprachtext, dann maskieren: eingesetzte Namen kommen nie roh heraus. */
+/* Texte ohne Platzhalter; jede Stelle MIT Platzhalter steht woertlich als sprintf(hk_t(...), ...) da
+ * (erst einsetzen, dann maskieren: eingesetzte Namen kommen nie roh heraus). */
+$hk_bs_k = function ($schluessel) { return hk_te('BAUSTEIN.' . $schluessel); };
+$hk_bs_m = '&mdash;';
+$hk_bs_mono = function ($s) { return '<span class="sm-mono">' . hk_e($s) . '</span>'; };
+$hk_bs_ein = function ($nr) { return hk_e(sprintf(hk_t('BAUSTEIN.E_EIN'), $nr)); };
+$hk_bs_aus = function ($pin, $nr) { return hk_e(sprintf(hk_t('BAUSTEIN.E_AUSGANG'), $pin, $nr)); };
+$hk_bs_einaus = function ($pin, $nr) { return hk_e(sprintf(hk_t('BAUSTEIN.E_EIN_AUSGANG'), $pin, $nr)); };
+$hk_bs_typ = array('vi' => hk_e(sprintf(hk_t('BAUSTEIN.TYP_VI'), $hk_bs_vn['vi'][1])),
+                   'vo' => hk_e(sprintf(hk_t('BAUSTEIN.TYP_VO'), $hk_bs_vn['vo'][1])),
+                   'bt' => hk_e(sprintf(hk_t('BAUSTEIN.TYP_VO'), $hk_bs_vn['bt'][1])));
+$hk_bs_p = function ($param) use ($hk_bs_k, $hk_bs_m) { return $param === '' ? $hk_bs_m : $hk_bs_k($param); };
+/* Eingang aus der Vorlage "Heimkino (LoxBerry-Plugin)": Typ mit Vorlagentitel, Name wie die Vorlage. */
+$hk_bs_vi_z = function ($nr, $thema, $param) use ($hk_bs_typ, $hk_bs_gw, $hk_bs_mono, $hk_bs_m, $hk_bs_p) {
+    return array($nr, $hk_bs_typ['vi'], $hk_bs_mono($hk_bs_gw($thema)),
+                 $hk_bs_p($param), $hk_bs_m);
+};
+/* Virtueller Texteingang (keine Vorlage, Regeln/07): Name = Gateway-Name des Themas. */
+$hk_bs_tx_z = function ($nr, $thema, $param) use ($hk_bs_k, $hk_bs_gw, $hk_bs_mono, $hk_bs_m, $hk_bs_p) {
+    return array($nr, $hk_bs_k('T_TEXTEIN'), $hk_bs_mono($hk_bs_gw($thema)), $hk_bs_p($param), $hk_bs_m);
+};
+/* Befehl aus der Vorlage "Heimkino steuern": Name = fester Titel aus hk_vo_titel(). */
+$hk_bs_vo_z = function ($nr, $aktion, $param, $verb) use ($hk_bs_typ, $hk_bs_vo, $hk_bs_p) {
+    return array($nr, $hk_bs_typ['vo'], hk_e($hk_bs_vo($aktion)),
+                 $hk_bs_p($param), $verb);
+};
+/* Befehl aus der Vorlage "Heimkino Bild und Ton": Name = Titel aus hk_bt_befehle(). */
+$hk_bs_bt_z = function ($nr, $i, $param, $verb) use ($hk_bs_typ, $hk_bs_btb, $hk_bs_p) {
+    $t = isset($hk_bs_btb[$i]) ? $hk_bs_btb[$i][0] : '{' . $i . '}';
+    return array($nr, $hk_bs_typ['bt'], hk_e($t), $hk_bs_p($param), $verb);
+};
+/* Uebriger Baustein: Typ-Schluessel, Name <S>_NAME, Parameter <S>_PARAM. */
+$hk_bs_zl = function ($nr, $typ, $s, $param, $verb) use ($hk_bs_k, $hk_bs_p) {
+    return array($nr, $hk_bs_k($typ), $hk_bs_k($s . '_NAME'), $hk_bs_p($param), $verb);
+};
+$hk_bs_seiten = array(
+    array('kopf' => 'BL_KINO', 'seite' => 'Heimkino', 'bild' => 'einbindung_loxone.png', 'zeilen' => array(
+        $hk_bs_vi_z(1, 'beamer/an', 'S1_01_PARAM'),
+        $hk_bs_vi_z(2, 'xbox/an', 'S1_02_PARAM'),
+        $hk_bs_vi_z(3, 'xbox/geheimnis_tage', 'S1_03_PARAM'),
+        $hk_bs_zl(4, 'T_VSCHALTER', 'S1_04', 'S1_04_PARAM', $hk_bs_m),
+        $hk_bs_zl(5, 'T_FLANKE', 'S1_05', '', $hk_bs_ein(4)),
+        $hk_bs_vo_z(6, 'kino-an', '', $hk_bs_einaus('On', 5)),
+        $hk_bs_vo_z(7, 'kino-aus', '', $hk_bs_einaus('Off', 5)),
+        $hk_bs_zl(8, 'T_UND', 'S1_08', '', 'I1 = #4, I2 = #1' . $hk_bs_k('E_NEGIERT')),
+        $hk_bs_zl(9, 'T_EVZ', 'S1_09', 'S1_09_PARAM', $hk_bs_ein(8)),
+        $hk_bs_zl(10, 'T_BENACHR', 'S1_10', 'S1_10_PARAM', $hk_bs_ein(9)),
+        $hk_bs_zl(11, 'T_SCHWELLE', 'S1_11', 'S1_11_PARAM', $hk_bs_ein(3)),
+        $hk_bs_zl(12, 'T_BENACHR', 'S1_12', 'S1_12_PARAM', $hk_bs_ein(11)),
+        $hk_bs_zl(13, 'T_STATUS', 'S1_13', 'S1_13_PARAM', 'V1 = #1, V2 = #2'),
+        $hk_bs_vi_z(14, 'service/online', 'S1_14_PARAM'),
+        $hk_bs_vi_z(15, 'service/zeitstempel', 'S1_15_PARAM'),
+        $hk_bs_tx_z(16, 'last_error', 'S1_16_PARAM'),
+        $hk_bs_zl(17, 'T_KONSTANTE', 'S1_17', 'S1_17_PARAM', $hk_bs_m),
+        $hk_bs_zl(18, 'T_VALID', 'S1_18', 'S1_18_PARAM', 'V = #15, En = #17'),
+        $hk_bs_zl(19, 'T_NICHT', 'S1_19', '', 'I = #14'),
+        $hk_bs_zl(20, 'T_ODER', 'S1_20', '', 'I1 = ' . $hk_bs_aus('E', 18) . ', I2 = #19'),
+        $hk_bs_zl(21, 'T_EVZ', 'S1_21', 'S1_21_PARAM', $hk_bs_ein(20)),
+        $hk_bs_zl(22, 'T_BENACHR', 'S1_22', 'S1_22_PARAM', $hk_bs_ein(21)),
+        $hk_bs_zl(23, 'T_STATUS', 'S1_23', 'S1_23_PARAM', 'V1 = #14, V2 = #21, V3 = #15, V4 = #16'),
+        $hk_bs_vi_z(24, 'szene/laeuft', 'S1_24_PARAM'),
+        $hk_bs_tx_z(25, 'szene/schritt', 'S1_25_PARAM'),
+        $hk_bs_tx_z(26, 'szene/ergebnis', 'S1_26_PARAM'),
+        $hk_bs_zl(27, 'T_STATUS', 'S1_27', 'S1_27_PARAM', 'V1 = #24, V2 = #25, V3 = #26'),
+        $hk_bs_zl(28, 'T_BENACHR', 'S1_28', 'S1_28_PARAM', $hk_bs_einaus('AQ', 27)),
+        $hk_bs_vi_z(29, 'xbox/geheimnis_datum_bekannt', 'S1_29_PARAM'),
+        $hk_bs_tx_z(30, 'xbox/geheimnis_ablauf', 'S1_30_PARAM'),
+        $hk_bs_zl(31, 'T_STATUS', 'S1_31', 'S1_31_PARAM', 'V1 = #29, V2 = #3, V3 = #30'),
+        ),
+        'schritte' => array(
+            hk_e(sprintf(hk_t('BAUSTEIN.S1_SCHRITT1'), hk_t('REITER.EINSTELLUNGEN'), hk_t('FELD.BEAMER_IP'), hk_t('FELD.BEAMER_MAC'), hk_t('FELD.XBOX_ID'), hk_t('FELD.FRIST'), hk_t('SET.SZENE_AKTIV'))),
+            hk_e(sprintf(hk_t('BAUSTEIN.S1_SCHRITT2'), $hk_praefix . '/#')),
+            hk_e(sprintf(hk_t('BAUSTEIN.S1_SCHRITT3'), hk_t('ALLGEMEIN.K_VORLAGE_EINGAENGE'), hk_t('ALLGEMEIN.K_VORLAGE_VO'))),
+            hk_e(sprintf(hk_t('BAUSTEIN.S1_SCHRITT4'), $hk_bs_vn['vi'][0], $hk_bs_vn['vo'][0])),
+            hk_e(sprintf(hk_t('BAUSTEIN.S1_SCHRITT5'), $hk_bs_vn['vi'][1], implode(', ', array_map($hk_bs_gw, array('beamer/an', 'xbox/an', 'xbox/geheimnis_tage', 'service/online', 'service/zeitstempel', 'szene/laeuft', 'xbox/geheimnis_datum_bekannt'))), $hk_bs_vn['vo'][1], $hk_bs_vo('kino-an'), $hk_bs_vo('kino-aus'))),
+            hk_e(sprintf(hk_t('BAUSTEIN.S1_SCHRITT6'), implode(', ', array_map($hk_bs_gw, array('last_error', 'szene/schritt', 'szene/ergebnis', 'xbox/geheimnis_ablauf'))))),
+            hk_te('BAUSTEIN.S1_SCHRITT7'),
+            hk_te('BAUSTEIN.S1_SCHRITT8'),
+            hk_e(sprintf(hk_t('BAUSTEIN.S1_SCHRITT9'), hk_t('LOX.SP_VERBINDEN'), hk_t('LOX.SP_PARAMETER'))),
+            hk_te('BAUSTEIN.S1_SCHRITT10'),
+        ),
+        'hinweise' => array(
+            hk_te('BAUSTEIN.S1_H1'),
+            hk_e(sprintf(hk_t('BAUSTEIN.S1_H2'), $hk_bs_vo('kino-an'), $hk_bs_vo('kino-aus'), hk_t('REITER.EINSTELLUNGEN'), hk_t('SET.SZENE_AKTIV'))),
+            hk_te('BAUSTEIN.S1_H3'),
+            hk_te('BAUSTEIN.S1_H4'),
+            hk_e(sprintf(hk_t('BAUSTEIN.S1_H5'), hk_t('SET.SZENE_AKTIV'))),
+            hk_te('BAUSTEIN.S1_H6'),
+            hk_te('BAUSTEIN.S1_H7'),
+            hk_te('BAUSTEIN.S1_H8'),
+            hk_e(sprintf(hk_t('BAUSTEIN.S1_H9'), hk_t('SET.SZENE_HAUSEREIGNIS'))),
+            hk_e(sprintf(hk_t('BAUSTEIN.S1_H10'), $hk_bs_vn['vo'][1])),
+        )),
+    array('kopf' => 'BL_STEUERUNG', 'seite' => 'Heimkino Steuerung', 'bild' => 'einbindung_loxone_steuerung.png', 'zeilen' => array(
+        $hk_bs_zl(1, 'T_VTASTE', 'S2_01', 'S2_01_PARAM', $hk_bs_m),
+        $hk_bs_vo_z(2, 'beamer-wol', 'S2_02_PARAM', $hk_bs_ein(1)),
+        $hk_bs_zl(3, 'T_VTASTE', 'S2_03', 'S2_03_PARAM', $hk_bs_m),
+        $hk_bs_vo_z(4, 'beamer-aus', 'S2_04_PARAM', $hk_bs_ein(3)),
+        $hk_bs_zl(5, 'T_VTASTE', 'S2_05', 'S2_05_PARAM', $hk_bs_m),
+        $hk_bs_zl(6, 'T_VTASTE', 'S2_06', 'S2_06_PARAM', $hk_bs_m),
+        $hk_bs_vi_z(7, 'beamer/an', 'S2_07_PARAM'),
+        $hk_bs_zl(8, 'T_UND', 'S2_08', 'S2_08_PARAM', 'I1 = #6, I2 = #7'),
+        $hk_bs_zl(9, 'T_ODER', 'S2_09', 'S2_09_PARAM', 'I1 = #5, I2 = #8'),
+        $hk_bs_vo_z(10, 'beamer-bild-aus', 'S2_10_PARAM', $hk_bs_ein(9)),
+        $hk_bs_zl(11, 'T_VTASTE', 'S2_11', 'S2_11_PARAM', $hk_bs_m),
+        $hk_bs_vo_z(12, 'beamer-bild-an', '', $hk_bs_ein(11)),
+        $hk_bs_zl(13, 'T_VTASTE', 'S2_13', 'S2_13_PARAM', $hk_bs_m),
+        $hk_bs_vo_z(14, 'beamer-stumm-an', '', $hk_bs_ein(13)),
+        $hk_bs_zl(15, 'T_VTASTE', 'S2_15', 'S2_15_PARAM', $hk_bs_m),
+        $hk_bs_vo_z(16, 'beamer-stumm-aus', '', $hk_bs_ein(15)),
+        $hk_bs_zl(17, 'T_VTASTE', 'S2_17', 'S2_17_PARAM', $hk_bs_m),
+        $hk_bs_vo_z(18, 'xbox-an', '', $hk_bs_ein(17)),
+        $hk_bs_zl(19, 'T_VTASTE', 'S2_19', 'S2_19_PARAM', $hk_bs_m),
+        $hk_bs_vo_z(20, 'xbox-aus', '', $hk_bs_ein(19)),
+        $hk_bs_tx_z(21, 'beamer/letzte_aktion', 'S2_21_PARAM'),
+        $hk_bs_tx_z(22, 'xbox/letzte_aktion', 'S2_22_PARAM'),
+        $hk_bs_zl(23, 'T_STATUS', 'S2_23', 'S2_23_PARAM', 'V1 = #21, V2 = #22'),
+        $hk_bs_zl(24, 'T_BENACHR', 'S2_24', 'S2_24_PARAM', $hk_bs_einaus('AQ', 23)),
+        ),
+        'schritte' => array(
+            hk_te('BAUSTEIN.S2_SCHRITT1'),
+            hk_e(sprintf(hk_t('BAUSTEIN.S2_SCHRITT2'), $hk_bs_vn['vo'][1], implode(', ', array_map($hk_bs_vo, array('beamer-wol', 'beamer-aus', 'beamer-bild-aus', 'beamer-bild-an', 'beamer-stumm-an', 'beamer-stumm-aus', 'xbox-an', 'xbox-aus'))))),
+            hk_te('BAUSTEIN.S2_SCHRITT3'),
+            hk_e(sprintf(hk_t('BAUSTEIN.S2_SCHRITT4'), $hk_bs_gw('beamer/an'))),
+            hk_e(sprintf(hk_t('BAUSTEIN.S2_SCHRITT5'), implode(', ', array_map($hk_bs_gw, array('beamer/letzte_aktion', 'xbox/letzte_aktion'))))),
+            hk_e(sprintf(hk_t('BAUSTEIN.S2_SCHRITT6'), hk_t('LOX.SP_VERBINDEN'), hk_t('LOX.SP_PARAMETER'))),
+            hk_te('BAUSTEIN.S2_SCHRITT7'),
+        ),
+        'hinweise' => array(
+            hk_te('BAUSTEIN.S2_H1'),
+            hk_te('BAUSTEIN.S2_H2'),
+            hk_e(sprintf(hk_t('BAUSTEIN.S2_H3'), hk_t('REITER.TEST'), hk_t('TEST.K_MAC'))),
+            hk_e(sprintf(hk_t('BAUSTEIN.S2_H4'), hk_t('SET.NACHFASSEN'))),
+        )),
+    array('kopf' => 'BL_GERAETE', 'seite' => 'Heimkino Geräte', 'bild' => 'einbindung_loxone_geraete.png', 'zeilen' => array(
+        $hk_bs_vi_z(1, 'beamer/aktiv', 'S3_01_PARAM'),
+        $hk_bs_vi_z(2, 'beamer/erreichbar', 'S3_02_PARAM'),
+        $hk_bs_tx_z(3, 'beamer/grund', 'S3_03_PARAM'),
+        $hk_bs_zl(4, 'T_STATUS', 'S3_04', 'S3_04_PARAM', 'V1 = #3, V2 = #1, V3 = #2'),
+        $hk_bs_zl(5, 'T_EVZ', 'S3_05', 'S3_05_PARAM', $hk_bs_einaus('AQ', 4)),
+        $hk_bs_zl(6, 'T_BENACHR', 'S3_06', 'S3_06_PARAM', $hk_bs_ein(5)),
+        $hk_bs_vi_z(7, 'beamer/an', 'S3_07_PARAM'),
+        $hk_bs_tx_z(8, 'beamer/app', 'S3_08_PARAM'),
+        $hk_bs_vi_z(9, 'beamer/lautstaerke', 'S3_09_PARAM'),
+        $hk_bs_vi_z(10, 'beamer/stumm', 'S3_10_PARAM'),
+        $hk_bs_zl(11, 'T_STATUS', 'S3_11', 'S3_11_PARAM', 'V1 = #7, V2 = #8, V3 = #9, V4 = #10'),
+        $hk_bs_vi_z(12, 'beamer/betriebsstunden', 'S3_12_PARAM'),
+        $hk_bs_vi_z(13, 'beamer/laufzeit_heute', 'S3_13_PARAM'),
+        $hk_bs_vi_z(14, 'xbox/aktiv', 'S3_14_PARAM'),
+        $hk_bs_vi_z(15, 'xbox/angemeldet', 'S3_15_PARAM'),
+        $hk_bs_vi_z(16, 'xbox/erreichbar', 'S3_16_PARAM'),
+        $hk_bs_tx_z(17, 'xbox/status', 'S3_17_PARAM'),
+        $hk_bs_zl(18, 'T_STATUS', 'S3_18', 'S3_18_PARAM', 'V1 = #14, V2 = #15, V3 = #16, V4 = #17'),
+        $hk_bs_zl(19, 'T_EVZ', 'S3_19', 'S3_19_PARAM', $hk_bs_einaus('AQ', 18)),
+        $hk_bs_zl(20, 'T_BENACHR', 'S3_20', 'S3_20_PARAM', $hk_bs_ein(19)),
+        $hk_bs_vi_z(21, 'xbox/an', 'S3_21_PARAM'),
+        $hk_bs_tx_z(22, 'xbox/name', 'S3_22_PARAM'),
+        $hk_bs_vi_z(23, 'xbox/betriebsstunden', 'S3_23_PARAM'),
+        $hk_bs_vi_z(24, 'xbox/laufzeit_heute', 'S3_24_PARAM'),
+        $hk_bs_zl(25, 'T_STATUS', 'S3_25', 'S3_25_PARAM', 'V1 = #12, V2 = #13, V3 = #23, V4 = #24'),
+        $hk_bs_zl(26, 'T_STATUS', 'S3_26', 'S3_26_PARAM', 'V1 = #21, V2 = #22, V3 = #17'),
+        ),
+        'schritte' => array(
+            hk_te('BAUSTEIN.S3_SCHRITT1'),
+            hk_e(sprintf(hk_t('BAUSTEIN.S3_SCHRITT2'), $hk_bs_vn['vi'][1], $hk_bs_gw('beamer/an'), $hk_bs_gw('xbox/an'), $hk_bs_gw('beamer/laufzeit_heute'), $hk_bs_gw('xbox/laufzeit_heute'))),
+            hk_e(sprintf(hk_t('BAUSTEIN.S3_SCHRITT3'), implode(', ', array_map($hk_bs_gw, array('beamer/grund', 'beamer/app', 'xbox/status', 'xbox/name'))))),
+            hk_te('BAUSTEIN.S3_SCHRITT4'),
+            hk_e(sprintf(hk_t('BAUSTEIN.S3_SCHRITT5'), hk_t('LOX.SP_VERBINDEN'), hk_t('LOX.SP_PARAMETER'))),
+            hk_te('BAUSTEIN.S3_SCHRITT6'),
+        ),
+        'hinweise' => array(
+            hk_te('BAUSTEIN.S3_H1'),
+            hk_e(sprintf(hk_t('BAUSTEIN.S3_H2'), hk_t('SET.ZUSATZWERTE'))),
+            hk_te('BAUSTEIN.S3_H3'),
+        )),
+    array('kopf' => 'BL_BILDTON', 'seite' => 'Heimkino Bild und Ton', 'bild' => 'einbindung_loxone_bild_und_ton.png', 'zeilen' => array(
+        $hk_bs_zl(1, 'T_VREGLER', 'S4_01', 'S4_01_PARAM', $hk_bs_m),
+        $hk_bs_bt_z(2, 0, 'S4_02_PARAM', $hk_bs_ein(1)),
+        $hk_bs_zl(3, 'T_VTASTE', 'S4_03', 'S4_03_PARAM', $hk_bs_m),
+        $hk_bs_bt_z(4, 1, '', $hk_bs_ein(3)),
+        $hk_bs_zl(5, 'T_VTASTE', 'S4_05', 'S4_05_PARAM', $hk_bs_m),
+        $hk_bs_bt_z(6, 2, '', $hk_bs_ein(5)),
+        $hk_bs_zl(7, 'T_VTASTE', 'S4_07', 'S4_07_PARAM', $hk_bs_m),
+        $hk_bs_bt_z(8, 3, '', $hk_bs_ein(7)),
+        $hk_bs_zl(9, 'T_VTASTE', 'S4_09', 'S4_09_PARAM', $hk_bs_m),
+        $hk_bs_bt_z(10, 4, '', $hk_bs_ein(9)),
+        $hk_bs_zl(11, 'T_VTASTE', 'S4_11', 'S4_11_PARAM', $hk_bs_m),
+        $hk_bs_bt_z(12, 5, 'S4_12_PARAM', $hk_bs_ein(11)),
+        $hk_bs_zl(13, 'T_VTASTE', 'S4_13', 'S4_13_PARAM', $hk_bs_m),
+        $hk_bs_bt_z(14, 6, 'S4_14_PARAM', $hk_bs_ein(13)),
+        $hk_bs_zl(15, 'T_VTASTE', 'S4_15', 'S4_15_PARAM', $hk_bs_m),
+        $hk_bs_bt_z(16, 7, 'S4_16_PARAM', $hk_bs_ein(15)),
+        $hk_bs_zl(17, 'T_VTASTE', 'S4_17', 'S4_17_PARAM', $hk_bs_m),
+        $hk_bs_bt_z(18, 8, 'S4_18_PARAM', $hk_bs_ein(17)),
+        $hk_bs_zl(19, 'T_VTASTE', 'S4_19', 'S4_19_PARAM', $hk_bs_m),
+        $hk_bs_bt_z(20, 9, 'S4_20_PARAM', $hk_bs_ein(19)),
+        $hk_bs_zl(21, 'T_VTASTE', 'S4_21', 'S4_21_PARAM', $hk_bs_m),
+        $hk_bs_bt_z(22, 10, 'S4_22_PARAM', $hk_bs_ein(21)),
+        $hk_bs_zl(23, 'T_VTASTE', 'S4_23', 'S4_23_PARAM', $hk_bs_m),
+        $hk_bs_bt_z(24, 11, 'S4_24_PARAM', $hk_bs_ein(23)),
+        ),
+        'schritte' => array(
+            hk_e(sprintf(hk_t('BAUSTEIN.S4_SCHRITT1'), hk_t('ALLGEMEIN.K_VORLAGE_BT'), $hk_bs_vn['bt'][0], $hk_bs_vn['vo'][1])),
+            hk_e(sprintf(hk_t('BAUSTEIN.S4_SCHRITT2'), $hk_bs_vn['bt'][1], hk_t('LOX.SP_VERBINDEN'))),
+            hk_te('BAUSTEIN.S4_SCHRITT3'),
+        ),
+        'hinweise' => array(
+            hk_te('BAUSTEIN.S4_H1'),
+            hk_e(sprintf(hk_t('BAUSTEIN.S4_H2'), hk_t('REITER.EINSTELLUNGEN'), hk_t('FELD.SZENE_BILDMODUS'))),
+            hk_te('BAUSTEIN.S4_H3'),
+        )),
+);
+?>
+<?php foreach ($hk_bs_seiten as $hk_bs_s) { ?>
+<h4 class="sm-h4"><?= hk_te('LOX.' . $hk_bs_s['kopf']) ?></h4>
+<div class="sm-hinweis"><b><?= $hk_bs_k('SCHRITTE_TITEL') ?></b>
+<ol class="sm-schritte">
+<?php foreach ($hk_bs_s['schritte'] as $hk_bs_x) { ?>
+<li><?= $hk_bs_x ?></li>
+<?php } ?>
+</ol></div>
 <div class="sm-breit">
 <table class="sm-tbl">
 <tr><th>#</th><th><?= hk_te('LOX.SP_BAUSTEIN') ?></th><th><?= hk_te('LOX.SP_NAME') ?></th><th><?= hk_te('LOX.SP_PARAMETER') ?></th><th><?= hk_te('LOX.SP_VERBINDEN') ?></th></tr>
-<?php /* Welle Bild 5 (1.3.21, Entscheidung A): die Liste ist die im LoxBerry-Plugins
-         Musterprojekt in Loxone Config gebaute und mit leitungen_setzen.py verbundene
-         (Musterprojekt/baustein_listen.txt, Abschnitt Heimkino) - eine Zeile = ein Baustein,
-         nur die Hauptvariante. Namen #1 bis #3 wie in hk_vorlage(), #6/#7 aus [AKTION] wie
-         in hk_vo_vorlage(); die uebrigen Bausteinnamen in beiden Sprachen wie im Musterprojekt. */ ?>
-<tr><td>1</td><td><?= hk_te('BAUSTEIN.B1_TYP') ?></td><td class="sm-mono"><?= hk_e(hk_vi_name($hk_praefix, 'beamer/an')) ?></td><td><?= hk_te('BAUSTEIN.B1_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B1_VERB') ?></td></tr>
-<tr><td>2</td><td><?= hk_te('BAUSTEIN.B2_TYP') ?></td><td class="sm-mono"><?= hk_e(hk_vi_name($hk_praefix, 'xbox/an')) ?></td><td><?= hk_te('BAUSTEIN.B2_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B2_VERB') ?></td></tr>
-<tr><td>3</td><td><?= hk_te('BAUSTEIN.B3_TYP') ?></td><td class="sm-mono"><?= hk_e(hk_vi_name($hk_praefix, 'xbox/geheimnis_tage')) ?></td><td><?= hk_te('BAUSTEIN.B3_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B3_VERB') ?></td></tr>
-<tr><td>4</td><td><?= hk_te('BAUSTEIN.B4_TYP') ?></td><td><?= hk_te('BAUSTEIN.B4_NAME') ?></td><td><?= hk_te('BAUSTEIN.B4_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B4_VERB') ?></td></tr>
-<tr><td>5</td><td><?= hk_te('BAUSTEIN.B5_TYP') ?></td><td><?= hk_te('BAUSTEIN.B5_NAME') ?></td><td><?= hk_te('BAUSTEIN.B5_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B5_VERB') ?></td></tr>
-<tr><td>6</td><td><?= hk_te('BAUSTEIN.B6_TYP') ?></td><td><?= hk_te('AKTION.KINO_AN') ?></td><td><?= hk_te('BAUSTEIN.B6_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B6_VERB') ?></td></tr>
-<tr><td>7</td><td><?= hk_te('BAUSTEIN.B7_TYP') ?></td><td><?= hk_te('AKTION.KINO_AUS') ?></td><td><?= hk_te('BAUSTEIN.B7_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B7_VERB') ?></td></tr>
-<tr><td>8</td><td><?= hk_te('BAUSTEIN.B8_TYP') ?></td><td><?= hk_te('BAUSTEIN.B8_NAME') ?></td><td><?= hk_te('BAUSTEIN.B8_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B8_VERB') ?></td></tr>
-<tr><td>9</td><td><?= hk_te('BAUSTEIN.B9_TYP') ?></td><td><?= hk_te('BAUSTEIN.B9_NAME') ?></td><td><?= hk_te('BAUSTEIN.B9_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B9_VERB') ?></td></tr>
-<tr><td>10</td><td><?= hk_te('BAUSTEIN.B10_TYP') ?></td><td><?= hk_te('BAUSTEIN.B10_NAME') ?></td><td><?= hk_te('BAUSTEIN.B10_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B10_VERB') ?></td></tr>
-<tr><td>11</td><td><?= hk_te('BAUSTEIN.B11_TYP') ?></td><td><?= hk_te('BAUSTEIN.B11_NAME') ?></td><td><?= hk_te('BAUSTEIN.B11_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B11_VERB') ?></td></tr>
-<tr><td>12</td><td><?= hk_te('BAUSTEIN.B12_TYP') ?></td><td><?= hk_te('BAUSTEIN.B12_NAME') ?></td><td><?= hk_te('BAUSTEIN.B12_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B12_VERB') ?></td></tr>
-<tr><td>13</td><td><?= hk_te('BAUSTEIN.B13_TYP') ?></td><td><?= hk_te('BAUSTEIN.B13_NAME') ?></td><td><?= hk_te('BAUSTEIN.B13_PARAM') ?></td><td><?= hk_te('BAUSTEIN.B13_VERB') ?></td></tr>
+<?php foreach ($hk_bs_s['zeilen'] as $hk_bs_z) { ?>
+<tr><td><?= (int) $hk_bs_z[0] ?></td><td><?= $hk_bs_z[1] ?></td><td><?= $hk_bs_z[2] ?></td><td><?= $hk_bs_z[3] ?></td><td><?= $hk_bs_z[4] ?></td></tr>
+<?php } ?>
 </table>
 </div>
-<div class="sm-hinweis"><?php echo hk_t('LOX.BAUSTEINE_HINWEISE'); ?><br>
-<?php echo hk_tf('LOX.BAUSTEINE_KINOMODUS', array('%1' => hk_te('AKTION.KINO_AN'), '%2' => hk_te('AKTION.KINO_AUS'))); ?><br>
-<?php echo hk_t('LOX.BAUSTEINE_TOKEN'); ?></div>
+<div class="sm-warnung"><b><?= $hk_bs_k('HINWEISE_TITEL') ?></b>
+<ul class="sm-schritte">
+<?php foreach ($hk_bs_s['hinweise'] as $hk_bs_x) { ?>
+<li><?= $hk_bs_x ?></li>
+<?php } ?>
+</ul></div>
 <figure class="sm-bild">
-<img src="einbindung_loxone.png" alt="<?= hk_te('LOX.BILD_ALT') ?>" loading="lazy">
-<figcaption><?= hk_te('LOX.BILD_UNTERSCHRIFT') ?></figcaption>
+<img src="<?= hk_e($hk_bs_s['bild']) ?>" alt="<?= hk_e(sprintf(hk_t('LOX.BILD_ALT'), $hk_bs_s['seite'])) ?>" loading="lazy">
+<figcaption><?= hk_e(sprintf(hk_t('LOX.BILD_UNTERSCHRIFT'), $hk_bs_s['seite'])) ?></figcaption>
 </figure>
 <p class="sm-hilfe"><?php echo hk_t('LOX.MUSTERPROJEKT'); ?></p>
+<?php } ?>
 
 <h2><?= hk_te('LOX.H_SCHRITT8') ?></h2>
 <p class="sm-hilfe"><?php echo hk_tf('LOX.GEGENPROBE', array('%1' => hk_e($hk_praefix))); ?></p>
@@ -1474,6 +1717,11 @@ if ($hk_gwf >= 2) { ?>
     <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
     <input data-role="none" type="hidden" name="activetab" value="tab-test">
     <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="download" value="vo"><?= hk_te('ALLGEMEIN.K_VORLAGE_VO') ?></button>
+  </form>
+  <form method="post" action="index.php">
+    <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="download" value="bt"><?= hk_te('ALLGEMEIN.K_VORLAGE_BT') ?></button>
   </form>
   <form method="post" action="index.php">
     <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">

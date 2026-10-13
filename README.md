@@ -13,6 +13,23 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.26
+
+Vollausstattung aus dem [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt): Der Reiter „Einbindung in
+Loxone“ zeigt in Schritt 7 vier Baustein-Listen – Zustand, Kino-Szene und Meldungen; Steuerung;
+Geräte; Bild und Ton –, je mit Bild und Schritt-für-Schritt-Anleitung (31, 24, 26 und 24 Zeilen
+statt 13).
+
+* **Neuer Knopf „Vorlage Bild und Ton erzeugen“** (Schritt 3): Vorlage `VQ_Heimkino_Bild_und_Ton.xml`,
+  Virtueller Ausgang „Heimkino Bild und Ton (LoxBerry-Plugin)“ mit zwölf Befehlen – Lautstärke setzen
+  (Analogwert `<v.0>`), Eingang HDMI 1 bis 4 und sieben Bildmodi. Der Endpunkt nahm diese Aktionen
+  schon an; neu ist nur die Vorlage. Eine eigene Datei, damit eine schon eingelesene Vorlage
+  „Heimkino steuern“ unverändert bleibt.
+* **Befehlstitel der Vorlage „Heimkino steuern“ fest auf Deutsch**, auch bei englischer Oberfläche –
+  so heißen die Befehle in Loxone Config wie im Musterprojekt und in der Liste. Bei deutscher
+  Oberfläche ändert sich an der Datei nichts.
+* Die Themenliste nennt bei `beamer/grund` auch den Wert `fehler`, den der Dienst schon sendet.
+
 ## Neu in 1.3.25
 
 Die Aufzählung der Themen ohne Retain (unter „Zustand lesen — MQTT“ und im Reiter *MQTT*) ist
@@ -1209,8 +1226,9 @@ gekommen.
 
 ## Einbindung in Loxone
 
-Die Bausteine der Baustein-Liste aus dem Reiter *Einbindung in Loxone* stehen fertig verbunden auf
-der Seite „Heimkino“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
+Die Bausteine der vier Baustein-Listen aus dem Reiter *Einbindung in Loxone* stehen fertig verbunden auf
+den Seiten „Heimkino“, „Heimkino Steuerung“, „Heimkino Geräte“ und „Heimkino Bild und Ton“ im
+[LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
 einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen.
 
 ### Zustand lesen — MQTT
@@ -1234,7 +1252,7 @@ je Thema.
 | `last_error` | Text | letzte Fehlermeldung mit vorangestellter Quelle, sonst ein Bindestrich |
 | `beamer/aktiv` | digital | 1 = der Beamer ist in den Einstellungen eingeschaltet |
 | `beamer/erreichbar` | digital | 1 = der Beamer antwortet auf seinem Steuerport |
-| `beamer/grund` | Text | warum der Beamer nicht antwortet: ok, aus, abgewiesen, kein_weg, zeitueberschreitung, name_unbekannt, keine_adresse, besetzt |
+| `beamer/grund` | Text | warum der Beamer nicht antwortet: ok, aus, abgewiesen, kein_weg, zeitueberschreitung, name_unbekannt, keine_adresse, besetzt, fehler |
 | `beamer/status` | Text | an oder aus. Bleibt bei einem Ausfall stehen - dann gilt beamer/erreichbar = 0. - = Beamer in den Einstellungen abgeschaltet. |
 | `beamer/an` | digital | 1 = der Beamer läuft. Bleibt bei einem Ausfall stehen - nur zusammen mit beamer/erreichbar = 1 gültig. Beamer abgeschaltet: 0 (das zeigt beamer/aktiv = 0). |
 | `beamer/app` | Text | laufende Quelle, zum Beispiel hdmi1. Bleibt bei einem Ausfall stehen. - = keine Quelle oder Beamer abgeschaltet. |
@@ -1287,6 +1305,10 @@ Erlaubte Aktionen ohne Wert: `beamer-aus`, `beamer-wol`, `beamer-bild-aus`,
 
 Mit `&wert=…`: `beamer-taste`, `beamer-eingang`, `beamer-lautstaerke`,
 `beamer-bildmodus`, `beamer-energie`, `beamer-app`.
+
+Lautstärke setzen, die Eingänge HDMI 1 bis 4 und die sieben Bildmodi gibt es seit 1.3.26 als fertige
+Vorlage „Heimkino Bild und Ton (LoxBerry-Plugin)“ (Knopf *Vorlage Bild und Ton erzeugen*). Die
+Befehlstitel beider Ausgangsvorlagen stehen fest auf Deutsch.
 
 Alles andere wird abgewiesen; der Wert darf nur Buchstaben, Ziffern und
 Unterstrich enthalten. **Groß- und Kleinschreibung bleibt dabei erhalten** —

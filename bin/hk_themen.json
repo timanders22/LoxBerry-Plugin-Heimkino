@@ -121,8 +121,8 @@
       "min": 0,
       "max": 0,
       "einheit": "",
-      "de": "warum der Beamer nicht antwortet: ok, aus, abgewiesen, kein_weg, zeitueberschreitung, name_unbekannt, keine_adresse, besetzt",
-      "en": "why the projector does not answer: ok, aus, abgewiesen, kein_weg, zeitueberschreitung, name_unbekannt, keine_adresse, besetzt"
+      "de": "warum der Beamer nicht antwortet: ok, aus, abgewiesen, kein_weg, zeitueberschreitung, name_unbekannt, keine_adresse, besetzt, fehler",
+      "en": "why the projector does not answer: ok, aus, abgewiesen, kein_weg, zeitueberschreitung, name_unbekannt, keine_adresse, besetzt, fehler"
     },
     {
       "thema": "beamer/status",
