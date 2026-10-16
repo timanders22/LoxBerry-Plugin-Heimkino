@@ -13,6 +13,12 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.27
+
+Einbindung in Loxone: Eingang En der Analogwertvalidierung nicht negieren (Hinweis und Bild);
+ohne diese Korrektur löste die Ausfallmeldung nie aus. Wer die Seite schon gebaut hat: Haken bei
+‚En‘ entfernen.
+
 ## Neu in 1.3.26
 
 Vollausstattung aus dem [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt): Der Reiter „Einbindung in
