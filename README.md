@@ -13,6 +13,14 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.29
+
+Vorlage „Heimkino Bild und Ton“: Der Befehl „Lautstärke setzen“ trägt die Skalierung jetzt
+ausdrücklich 1:1 (SourceValLow/DestValLow 0, SourceValHigh/DestValHigh 10), so wie Loxone Config
+sie selbst schreibt – wortgleich mit dem Musterprojekt. Am Verhalten ändert sich nichts: Config
+setzt beim Einlesen ohne diese Angaben dieselben Werte. Kein Neuimport nötig; Dienst und übrige
+Vorlagen sind unverändert.
+
 ## Neu in 1.3.28
 
 Einbindung in Loxone, Seite „Heimkino Steuerung“: Text zu Nr. 6 „Türklingel (eigene Quelle)“

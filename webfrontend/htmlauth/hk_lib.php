@@ -1302,7 +1302,11 @@ function hk_bt_vorlage($cfg)
         $o .= "\t" . '<VirtualOutCmd Title="' . hk_x($b[0]) . '" Comment="" CmdOnMethod="GET" CmdOffMethod="GET" ';
         $o .= 'CmdOn="' . hk_x($adresse) . '" ';
         $o .= 'CmdOnHTTP="" CmdOnPost="" CmdOff="" CmdOffHTTP="" CmdOffPost="" CmdAnswer="" ';
-        $o .= 'Analog="' . ($b[2] === null ? 'true' : 'false') . '" Repeat="0" RepeatRate="0" HintText=""/>' . $crlf;
+        // Analogbefehl: Skalierung 1:1 ausdruecklich, wie Config sie schreibt (seit 1.3.29,
+        // wortgleich mit dem Musterprojekt); die Digitalbefehle bleiben ohne.
+        $o .= 'Analog="' . ($b[2] === null ? 'true' : 'false') . '" Repeat="0" RepeatRate="0" '
+            . ($b[2] === null ? 'SourceValLow="0" DestValLow="0" SourceValHigh="10" DestValHigh="10" ' : '')
+            . 'HintText=""/>' . $crlf;
     }
     $o .= '</VirtualOut>' . $crlf;
     return array($n['bt'][0], $o);
