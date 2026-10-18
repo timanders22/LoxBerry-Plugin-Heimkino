@@ -13,6 +13,14 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.28
+
+Einbindung in Loxone, Seite „Heimkino Steuerung“: Text zu Nr. 6 „Türklingel (eigene Quelle)“
+berichtigt. Als eigene Quelle für den Platzhalter nennt die Tabelle jetzt den Digitaleingang des
+Klingeltasters oder den Klingelausgang der eigenen Türstation (bisher „Intercom-Plugin“ – Loxone ruft
+das Intercom-Plugin auf, nicht umgekehrt). Wortgleich mit dem Musterprojekt. Kein Neuimport nötig,
+Vorlagen und Dienst sind unverändert.
+
 ## Neu in 1.3.27
 
 Einbindung in Loxone: Eingang En der Analogwertvalidierung nicht negieren (Hinweis und Bild);
