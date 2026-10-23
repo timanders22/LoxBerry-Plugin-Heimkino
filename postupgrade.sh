@@ -1,14 +1,49 @@
 #!/bin/sh
 # Heimkino - postupgrade (laeuft als Benutzer loxberry)
-PDIR=$3
-# Rueckfall, falls sudo die Umgebung ausgeraeumt hat (env_reset).
-# Das fuenfte Argument ist das Wurzelverzeichnis und traegt immer.
-LBHOMEDIR="${LBHOMEDIR:-$5}"
-LBPCONFIG="${LBPCONFIG:-$5/config/plugins}"
-LBPBIN="${LBPBIN:-$5/bin/plugins}"
-BASE="${5:-$LBHOMEDIR}"
-PCONFIG="$LBPCONFIG/$PDIR"
-[ -d "$PCONFIG" ] || PCONFIG="$BASE/config/plugins/$PDIR"
+# ---- Wurzelblock (H1, seit 1.3.30; in preinstall, postinstall, preupgrade und postupgrade woertlich gleich) ----
+# Bauform Matter2Lox 0.9.44 (Wurzelblock M3), Alexa NG 1.0.6 und Intercom 2.2.23. Ordner aus $3 mit Schranke
+# ('' . .. und alles mit / oder ..); Wurzel aus $5, sonst LBHOMEDIR, sonst vom Ablageort aufwaerts gesucht
+# (Regeln/06). Eine Wurzel gilt nur mit config/plugins, data/plugins UND config/system/general.json - ein Rest alter
+# Prueflaeufe hat die dritte nie. Bis 1.3.29 setzte postinstall.sh $LBPLOG/$LBPCONFIG/$LBPBIN/$LBPDATA ohne
+# Rueckfall (mit leerer Umgebung: mkdir -p /heimkino), preupgrade und postupgrade nahmen BASE=${5:-$LBHOMEDIR}
+# ohne Pruefung (Pruefbericht H1, mit env -i gemessen).
+# hk_wurzel setzt PFOLDER und BASE; Rueckgabe 0 = erkannt, 1 = Ordnername unzulaessig, 2 = keine LoxBerry-Wurzel.
+hk_ist_wurzel() {
+    [ -n "$1" ] && [ -d "$1/config/plugins" ] && [ -d "$1/data/plugins" ] && [ -f "$1/config/system/general.json" ]
+}
+hk_wurzel_suchen() {
+    v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd)
+    i=0
+    while [ -n "$v" ] && [ "$v" != "/" ] && [ $i -lt 8 ]; do
+        if hk_ist_wurzel "$v"; then printf '%s\n' "$v"; return 0; fi
+        v=$(dirname "$v"); i=$((i + 1))
+    done
+    return 1
+}
+hk_wurzel() {
+    PFOLDER="${1:-heimkino}"
+    case "$PFOLDER" in
+        ''|.|..|*/*|*..*) return 1 ;;
+    esac
+    BASE=""
+    for HK_K in "$2" "$LBHOMEDIR"; do
+        if hk_ist_wurzel "$HK_K"; then BASE="$HK_K"; break; fi
+    done
+    [ -n "$BASE" ] || BASE=$(hk_wurzel_suchen)
+    [ -n "$BASE" ] || return 2
+    return 0
+}
+# ---- Ende Wurzelblock ----
+if ! hk_wurzel "$3" "$5"; then
+    echo "<FAIL> Kein LoxBerry-Wurzelverzeichnis erkannt oder Ordnername unzulaessig - es wurde nichts"
+    echo "<FAIL> zurueckgespielt und nichts gestartet. Einstellungen und Xbox-Anmeldung liegen weiter in der"
+    echo "<FAIL> Sicherung neben dem Datenordner bzw. in der Zweitschrift. Bitte melden."
+    exit 1
+fi
+PDIR=$PFOLDER
+# Alle Pfade aus BASE/PFOLDER (H1, seit 1.3.30).
+LBPBIN="$BASE/bin/plugins"
+PCONFIG="$BASE/config/plugins/$PFOLDER"
 SICHER="$BASE/data/plugins/$PDIR.upgrade_sicherung"
 PDATA="$BASE/data/plugins/$PDIR"
 MARKE="$BASE/data/plugins/$PDIR.upgrade_laeuft"
@@ -65,14 +100,45 @@ for k in ("refresh_token", "client_id"):
         sys.exit(0)
 sys.exit(1)' "$1" 2>/dev/null
             hk_rc=$?
+            # H3 (1.3.30): ein python3, das abbricht (Rueckgabe 2, 137 ...), heisst "nicht heil" - bis 1.3.29
+            # galt die Datei dann als heil und verdraengte eine heile Zweitschrift. Nur ein FEHLENDES python3
+            # (command -v oben) laesst eine JSON-Datei weiter als heil gelten.
             case $hk_rc in
                 0) return 0 ;;
                 1) return 1 ;;
-                *) return 0 ;;
+                *) return 1 ;;
             esac
             ;;
     esac
     return 1
+}
+
+# Wie viele Anwenderfelder traegt eine Datei? Wortgleich zu preupgrade.sh (seit 1.3.30, H2).
+hk_felder() {   # $1 Datei, $2 Art (cfg|json)
+    [ -s "$1" ] || { echo 0; return; }
+    case "$2" in
+        cfg)
+            hk_z=0
+            for hk_f in keycode ip mac geraete_id; do
+                hk_w=$(sed -n "s/^[[:space:]]*$hk_f[[:space:]]*=[[:space:]]*//p" "$1" 2>/dev/null | head -1)
+                hk_w=$(printf '%s' "$hk_w" | tr -d '[:space:]')
+                [ -n "$hk_w" ] && hk_z=$((hk_z + 1))
+            done
+            echo "$hk_z"
+            ;;
+        json)
+            command -v python3 >/dev/null 2>&1 || { echo 0; return; }
+            python3 -c 'import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    d = {}
+if not isinstance(d, dict):
+    d = {}
+print(sum(1 for k in ("client_id", "client_secret", "refresh_token") if str(d.get(k, "")).strip()))' "$1" 2>/dev/null || echo 0
+            ;;
+        *) echo 0 ;;
+    esac
 }
 
 # Aus der Sicherung zurueckstellen - nach Inhalt, nicht nach Vorhandensein.
@@ -99,6 +165,15 @@ sicher_zurueck() {   # $1 Dateiname, $2 Art (cfg|json), $3 Klartext fuer die Mel
     sz_ziel="$PCONFIG/$1"
     [ -f "$sz_quelle" ] || return 1
     if hk_inhalt "$sz_quelle" "$2"; then
+        # H2 mit E4 (1.3.30, Pruefbericht): postinstall.sh hat das Ziel womoeglich eben aus der Zweitschrift
+        # geheilt (preupgrade hatte erkannt, dass die laufende Datei weniger Anwenderfelder traegt). Traegt das
+        # Ziel Inhalt und MEHR Felder als die Sicherung, bleibt es - bis 1.3.29 kopierte diese Stelle die
+        # schlechtere Sicherung darueber und meldete <OK>. SZ_FEHLER=1: die Sicherung bleibt liegen.
+        if hk_inhalt "$sz_ziel" "$2" && [ "$(hk_felder "$sz_ziel" "$2")" -gt "$(hk_felder "$sz_quelle" "$2")" ]; then
+            SZ_FEHLER=1
+            echo "<WARNING> Die gesicherte $1 traegt weniger Anwenderfelder als die geheilte - sie bleibt unter $SICHER"
+            return 0
+        fi
         if sz_kopieren "$sz_quelle" "$sz_ziel"; then
             echo "<OK> $3 uebernommen."
         else
@@ -146,7 +221,7 @@ else
     # Nach INHALT, nicht nach Groesse (seit 1.3.14): eine abgeschnittene
     # Datei ist nicht leer, traegt aber nichts - bis 1.3.13 hiess sie hier
     # "vorhanden" (in WSL gemessen, Pruefung-Heimkino-1.3.14, Fall H2).
-    NETZ_PRUEF="${5:-$LBHOMEDIR}/config/plugins/${3:-heimkino}/heimkino.cfg"
+    NETZ_PRUEF="$BASE/config/plugins/$PFOLDER/heimkino.cfg"
     if hk_inhalt "$NETZ_PRUEF" cfg; then
         echo "<OK> Die Einstellungen sind vorhanden (aus der Zweitschrift)."
     else
@@ -155,6 +230,66 @@ else
     fi
 fi
 sicher_zurueck xbox_auth.json json "Bestehende Xbox-Anmeldung" || true
+
+# ---------- Haken der Umstellung fuer bestehende Anlagen (seit 1.3.30, Gruppe 9) ----------
+#
+# Entscheidung 1 und E3 (Entwurf 3.7): der HTTP-Endpunkt haengt seit 1.3.30 am Haken endpunkt_ein (Vorgabe 0).
+# Eine bestehende Anlage mit Aktionstoken behaelt ihn: fehlt der Schluessel in [heimkino], gilt endpunkt_ein=1, wenn
+# ein Aktionstoken gesetzt ist, sonst 0 (ohne Token konnte niemand den Endpunkt nutzen). Die beiden Haken der
+# Befehlsbruecke (befehle_mqtt_ein, befehle_mqtt_steuern) kommen als 0 dazu. Hier, NACH dem Zurueckspielen der
+# Einstellungen (sicher_zurueck - anders als bei Matter2Lox, wo postinstall zuletzt schreibt) und VOR dem
+# Dienststart: der Dienst und die Oberflaeche ergaenzten fehlende Schluessel sonst mit der Vorgabe 0. Geschrieben
+# ueber eine Nebendatei, geprueft (Abschnitt, Laenge, jeder Schluessel), dann mv und 0600; die Zweitschrift neben
+# dem Konfigordner bekommt dieselbe Regel (mit ihrem eigenen Token). Eine Neuinstallation hat die Schluessel schon
+# (Paketvorlage) - dann geschieht hier nichts.
+hk_haken_wert() {   # $1 Datei, $2 Schluessel in [heimkino]; Ausgabe Wert, Rueckgabe 1 = fehlt
+    awk -v k="$2" '
+        /^[[:space:]]*\[/ { im = ($0 ~ /^[[:space:]]*\[heimkino\][[:space:]]*$/); next }
+        im && $0 ~ ("^[[:space:]]*" k "[[:space:]]*=") { sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]*$/, ""); print; f = 1; exit }
+        END { exit (f ? 0 : 1) }' "$1" 2>/dev/null
+}
+hk_haken_ergaenzen() {   # $1 Datei, $2 Klartext fuer die Meldung
+    hk_d="$1"
+    [ -f "$hk_d" ] || return 0
+    grep -q '^[[:space:]]*\[heimkino\][[:space:]]*$' "$hk_d" 2>/dev/null || return 0
+    hk_neu=""
+    hk_info=""
+    if ! hk_haken_wert "$hk_d" endpunkt_ein >/dev/null; then
+        if [ -n "$(hk_haken_wert "$hk_d" aktionstoken)" ]; then
+            hk_neu="endpunkt_ein=1"
+            hk_info=" (bestehende Anlage mit Aktionstoken - der HTTP-Weg bleibt an)"
+        else
+            hk_neu="endpunkt_ein=0"
+        fi
+    fi
+    for hk_k in befehle_mqtt_ein befehle_mqtt_steuern; do
+        hk_haken_wert "$hk_d" "$hk_k" >/dev/null || hk_neu="$hk_neu${hk_neu:+ }$hk_k=0"
+    done
+    [ -n "$hk_neu" ] || return 0
+    hk_tmp="$hk_d.$$.haken"
+    if awk -v zeilen="$hk_neu" '
+            { print }
+            !fertig && $0 ~ /^[[:space:]]*\[heimkino\][[:space:]]*$/ {
+                n = split(zeilen, z, " "); for (i = 1; i <= n; i++) print z[i]; fertig = 1 }
+        ' "$hk_d" > "$hk_tmp" 2>/dev/null \
+       && [ "$(wc -c < "$hk_tmp")" -gt "$(wc -c < "$hk_d")" ] \
+       && grep -q '^[[:space:]]*\[heimkino\][[:space:]]*$' "$hk_tmp" \
+       && hk_haken_wert "$hk_tmp" endpunkt_ein >/dev/null \
+       && hk_haken_wert "$hk_tmp" befehle_mqtt_ein >/dev/null \
+       && hk_haken_wert "$hk_tmp" befehle_mqtt_steuern >/dev/null \
+       && chmod 600 "$hk_tmp" 2>/dev/null && mv -f "$hk_tmp" "$hk_d" 2>/dev/null; then
+        chmod 600 "$hk_d" 2>/dev/null
+        chown loxberry:loxberry "$hk_d" 2>/dev/null
+        echo "<INFO> $2 ergaenzt: $hk_neu$hk_info."
+    else
+        rm -f "$hk_tmp" 2>/dev/null
+        echo "<WARNING> $2 liess sich nicht ergaenzen ($hk_neu). Den HTTP-Endpunkt schaltet man im Reiter"
+        echo "<WARNING> Einbindung in Loxone ein (Haken 'HTTP-Endpunkt fuer Loxone annehmen')."
+    fi
+}
+hk_haken_ergaenzen "$PCONFIG/heimkino.cfg" "Konfiguration"
+hk_haken_ergaenzen "$BASE/config/plugins/$PFOLDER.backup.heimkino.cfg" "Zweitschrift"
+
 
 chmod 600 "$PCONFIG/heimkino.cfg" 2>/dev/null
 chmod 600 "$PCONFIG/xbox_auth.json" 2>/dev/null

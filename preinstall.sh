@@ -23,19 +23,44 @@
 # Microsoft-Anmeldung einer frueheren Installation, und die Meldung sprach
 # von einer Aktualisierung (in WSL gemessen, Installer-Pruefer Faelle N2-N4).
 # Die Bibliothek liest .alt nie; die Deinstallation raeumt es ab.
-ARGV3=$3
-ARGV5=$5
-PFOLDER="${ARGV3:-heimkino}"
-BASE="${ARGV5:-$LBHOMEDIR}"
-# Wurzelsuche wie in den uebrigen Hakenskripten: ohne config/plugins,
-# data/plugins UND config/system/general.json wird nichts angefasst.
-if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ] || [ ! -d "$BASE/data/plugins" ] \
-   || [ ! -f "$BASE/config/system/general.json" ]; then
-    echo "<WARNING> Kein LoxBerry-Wurzelverzeichnis erkannt ('$BASE') - nichts beiseitegelegt."
-    exit 0
-fi
-case "$PFOLDER" in
-    ''|*/*|*..*) echo "<WARNING> Unzulaessiger Ordnername '$PFOLDER' - nichts beiseitegelegt."; exit 0 ;;
+# ---- Wurzelblock (H1, seit 1.3.30; in preinstall, postinstall, preupgrade und postupgrade woertlich gleich) ----
+# Bauform Matter2Lox 0.9.44 (Wurzelblock M3), Alexa NG 1.0.6 und Intercom 2.2.23. Ordner aus $3 mit Schranke
+# ('' . .. und alles mit / oder ..); Wurzel aus $5, sonst LBHOMEDIR, sonst vom Ablageort aufwaerts gesucht
+# (Regeln/06). Eine Wurzel gilt nur mit config/plugins, data/plugins UND config/system/general.json - ein Rest alter
+# Prueflaeufe hat die dritte nie. Bis 1.3.29 setzte postinstall.sh $LBPLOG/$LBPCONFIG/$LBPBIN/$LBPDATA ohne
+# Rueckfall (mit leerer Umgebung: mkdir -p /heimkino), preupgrade und postupgrade nahmen BASE=${5:-$LBHOMEDIR}
+# ohne Pruefung (Pruefbericht H1, mit env -i gemessen).
+# hk_wurzel setzt PFOLDER und BASE; Rueckgabe 0 = erkannt, 1 = Ordnername unzulaessig, 2 = keine LoxBerry-Wurzel.
+hk_ist_wurzel() {
+    [ -n "$1" ] && [ -d "$1/config/plugins" ] && [ -d "$1/data/plugins" ] && [ -f "$1/config/system/general.json" ]
+}
+hk_wurzel_suchen() {
+    v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd)
+    i=0
+    while [ -n "$v" ] && [ "$v" != "/" ] && [ $i -lt 8 ]; do
+        if hk_ist_wurzel "$v"; then printf '%s\n' "$v"; return 0; fi
+        v=$(dirname "$v"); i=$((i + 1))
+    done
+    return 1
+}
+hk_wurzel() {
+    PFOLDER="${1:-heimkino}"
+    case "$PFOLDER" in
+        ''|.|..|*/*|*..*) return 1 ;;
+    esac
+    BASE=""
+    for HK_K in "$2" "$LBHOMEDIR"; do
+        if hk_ist_wurzel "$HK_K"; then BASE="$HK_K"; break; fi
+    done
+    [ -n "$BASE" ] || BASE=$(hk_wurzel_suchen)
+    [ -n "$BASE" ] || return 2
+    return 0
+}
+# ---- Ende Wurzelblock ----
+hk_wurzel "$3" "$5"
+case $? in
+    1) echo "<WARNING> Unzulaessiger Ordnername '$PFOLDER' - nichts beiseitegelegt."; exit 0 ;;
+    2) echo "<WARNING> Kein LoxBerry-Wurzelverzeichnis erkannt ('${5:-$LBHOMEDIR}') - nichts beiseitegelegt."; exit 0 ;;
 esac
 [ -f "$BASE/data/plugins/$PFOLDER.upgrade_laeuft" ] && exit 0
 

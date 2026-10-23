@@ -91,12 +91,25 @@ def _code_holen():
     return code
 
 
+# Gruppe 9 (1.3.30, Entwurf 3.5): fuehrt der Dienst einen Befehl aus (befehl_ausfuehren mit nachfassen=...),
+# geht das Nachfassen in seine Liste im Speicher statt in die Warteschlange.
+_NACHFASSEN = None
+
+
 def _auftrag(cfg, aktion, wert=""):
-    """Den Dienst nachfassen lassen - sofern eingeschaltet."""
+    """Den Dienst nachfassen lassen - sofern eingeschaltet.
+
+    Seit 1.3.30 (H6) ein eigener Auftrag in der Warteschlange auftraege/
+    statt auftrag.json: bis 1.3.29 ueberschrieb ein Nachfassauftrag eine
+    eben angenommene Kino-Szene, und die Szene lief nie."""
     if aktion not in ZIELE or not gemein.ja(cfg, "heimkino", "nachfassen"):
         return
     ziel, frist = ZIELE[aktion]
-    gemein.auftrag_stellen(aktion, ziel, frist, wert)
+    if _NACHFASSEN is not None:
+        _NACHFASSEN(aktion, ziel, frist, wert)
+        return
+    gemein.auftrag_einreihen({"art": "nachfassen", "aktion": aktion, "wert": wert, "ziel": ziel,
+                              "frist": float(frist), "quelle": "http"})
 
 
 def _wert(rest, was):
@@ -122,9 +135,21 @@ def hauptteil(argumente):
     if not argumente:
         print("Kein Befehl angegeben.")
         return 1
-    befehl = argumente[0]
-    rest = argumente[1:]
+    return befehl_ausfuehren(argumente[0], argumente[1:], cfg, log)
 
+
+def befehl_ausfuehren(befehl, rest, cfg, log, nachfassen=None):
+    """Einen Befehl ausfuehren - fuer die Kommandozeile UND fuer den Dienst (seit 1.3.30, Entwurf 3.5).
+
+    Die Verzweigung stand bis 1.3.29 in hauptteil(); jetzt ruft der Dienst
+    dieselbe Funktion fuer Befehle, die ueber MQTT (Befehlsbruecke) in die
+    Warteschlange kamen - die Ausgabe auf stdout faengt er auf. Die
+    Kommandozeile gibt byte-gleich aus wie bisher. nachfassen: Rueckruf
+    (aktion, ziel, frist, wert) des Dienstes statt eines Auftrags.
+    Rueckgabe 0 bei Erfolg, sonst 1.
+    """
+    global _NACHFASSEN
+    _NACHFASSEN = nachfassen
     try:
         if befehl == "beamer-aus":
             _beamer(cfg).aus()
@@ -294,9 +319,12 @@ def hauptteil(argumente):
                 print("Szene %s abgewiesen: der Dienst laeuft nicht. Im Reiter "
                       "Einstellungen starten oder das Protokoll ansehen." % befehl)
                 return 1
-            # Nur den Auftrag hinterlegen - siehe Kopf dieser Datei.
-            if not gemein.auftrag_stellen(befehl, "szene", 600):
-                print("Der Auftrag liess sich nicht ablegen (%s)." % P["auftrag"])
+            # Nur den Auftrag hinterlegen - siehe Kopf dieser Datei. Seit 1.3.30
+            # (H6) ein eigener Auftrag in der Warteschlange; er verfaellt nach
+            # 60 s, wenn der Dienst beschaeftigt war.
+            if not gemein.auftrag_einreihen({"art": "szene", "aktion": befehl, "wert": "",
+                                             "quelle": "http", "verfall_s": 60}):
+                print("Der Auftrag liess sich nicht ablegen (%s)." % P["auftraege"])
                 return 1
             log.info("Szene %s angenommen.", befehl)
             print("Szene %s angenommen - der Dienst fuehrt sie aus. Der Ablauf "
@@ -364,6 +392,8 @@ def hauptteil(argumente):
         log.error("%s: %s", befehl, fehler)
         print("Fehler: %s" % fehler)
         return 1
+    finally:
+        _NACHFASSEN = None
     return 0
 
 

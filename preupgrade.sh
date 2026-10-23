@@ -1,13 +1,55 @@
 #!/bin/sh
 # Heimkino - preupgrade (laeuft als Benutzer loxberry)
-PDIR=$3
-# Rueckfall, falls sudo die Umgebung ausgeraeumt hat (env_reset).
-# Das fuenfte Argument ist das Wurzelverzeichnis und traegt immer.
-LBHOMEDIR="${LBHOMEDIR:-$5}"
-LBPCONFIG="${LBPCONFIG:-$5/config/plugins}"
-BASE="${5:-$LBHOMEDIR}"
-PCONFIG="$LBPCONFIG/$PDIR"
-[ -d "$PCONFIG" ] || PCONFIG="$BASE/config/plugins/$PDIR"
+# ---- Wurzelblock (H1, seit 1.3.30; in preinstall, postinstall, preupgrade und postupgrade woertlich gleich) ----
+# Bauform Matter2Lox 0.9.44 (Wurzelblock M3), Alexa NG 1.0.6 und Intercom 2.2.23. Ordner aus $3 mit Schranke
+# ('' . .. und alles mit / oder ..); Wurzel aus $5, sonst LBHOMEDIR, sonst vom Ablageort aufwaerts gesucht
+# (Regeln/06). Eine Wurzel gilt nur mit config/plugins, data/plugins UND config/system/general.json - ein Rest alter
+# Prueflaeufe hat die dritte nie. Bis 1.3.29 setzte postinstall.sh $LBPLOG/$LBPCONFIG/$LBPBIN/$LBPDATA ohne
+# Rueckfall (mit leerer Umgebung: mkdir -p /heimkino), preupgrade und postupgrade nahmen BASE=${5:-$LBHOMEDIR}
+# ohne Pruefung (Pruefbericht H1, mit env -i gemessen).
+# hk_wurzel setzt PFOLDER und BASE; Rueckgabe 0 = erkannt, 1 = Ordnername unzulaessig, 2 = keine LoxBerry-Wurzel.
+hk_ist_wurzel() {
+    [ -n "$1" ] && [ -d "$1/config/plugins" ] && [ -d "$1/data/plugins" ] && [ -f "$1/config/system/general.json" ]
+}
+hk_wurzel_suchen() {
+    v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd)
+    i=0
+    while [ -n "$v" ] && [ "$v" != "/" ] && [ $i -lt 8 ]; do
+        if hk_ist_wurzel "$v"; then printf '%s\n' "$v"; return 0; fi
+        v=$(dirname "$v"); i=$((i + 1))
+    done
+    return 1
+}
+hk_wurzel() {
+    PFOLDER="${1:-heimkino}"
+    case "$PFOLDER" in
+        ''|.|..|*/*|*..*) return 1 ;;
+    esac
+    BASE=""
+    for HK_K in "$2" "$LBHOMEDIR"; do
+        if hk_ist_wurzel "$HK_K"; then BASE="$HK_K"; break; fi
+    done
+    [ -n "$BASE" ] || BASE=$(hk_wurzel_suchen)
+    [ -n "$BASE" ] || return 2
+    return 0
+}
+# ---- Ende Wurzelblock ----
+hk_wurzel "$3" "$5"
+HK_RC=$?
+if [ "$HK_RC" -ne 0 ]; then
+    if [ "$HK_RC" -eq 1 ]; then
+        echo "<FAIL> Unzulaessiger Ordnername '$PFOLDER'."
+    else
+        echo "<FAIL> Der LoxBerry-Wurzelordner liess sich nicht bestimmen."
+    fi
+    echo "<FAIL> Es wurde NICHTS gesichert. Das Update wird abgebrochen (Rueckgabe 2),"
+    echo "<FAIL> es wurde nichts geloescht. Bitte melden."
+    # 2, nicht 1: plugininstall.pl wertet 1 nur als Fehlerzeile und raeumt danach ab; ab 2 bricht es VOR dem
+    # Abraeumen ab (Bauart Matter2Lox 0.9.44, Bericht installer I4).
+    exit 2
+fi
+PDIR=$PFOLDER
+PCONFIG="$BASE/config/plugins/$PFOLDER"
 
 # ---------- Die Marke "Aktualisierung laeuft" ZUERST ----------
 #
@@ -39,6 +81,18 @@ else
     echo "<WARNING> Die Marke $BASE/data/plugins/$PDIR.upgrade_laeuft liess sich"
     echo "<WARNING> nicht anlegen. Ein Systemstart waehrend der Aktualisierung"
     echo "<WARNING> koennte den Dienst mit der Vorgabe-Konfiguration anwerfen."
+fi
+
+# ---------- Befehlsbruecke anhalten (seit 1.3.30, Entwurf 3.9) ----------
+#
+# Sonst reichte sie waehrend der Aktualisierung Befehle an einen Dienst weiter, den es gleich nicht mehr gibt.
+# Beim Umstieg von 1.3.29 gibt es sie noch nicht - dann nichts. Den Neustart besorgt der Waechter in
+# cron.01min binnen einer Minute nach dem Update (nur mit "Befehle ueber MQTT annehmen"; nie, solange die Marke
+# liegt).
+HK_BB="$BASE/bin/plugins/$PFOLDER/befehlsbruecke.sh"
+if [ -f "$HK_BB" ] && command -v bash >/dev/null 2>&1; then
+    HK_BB_AUS=$(timeout 40 bash "$HK_BB" stop 2>&1 | head -n 1)
+    echo "<INFO> Befehlsbruecke: ${HK_BB_AUS:-angehalten}"
 fi
 
 # ---------- Lief der Dienst? (seit 1.3.15, I3) ----------
@@ -103,10 +157,13 @@ for k in ("refresh_token", "client_id"):
         sys.exit(0)
 sys.exit(1)' "$1" 2>/dev/null
             hk_rc=$?
+            # H3 (1.3.30): ein python3, das abbricht (Rueckgabe 2, 137 ...), heisst "nicht heil" - bis 1.3.29
+            # galt die Datei dann als heil und verdraengte eine heile Zweitschrift. Nur ein FEHLENDES python3
+            # (command -v oben) laesst eine JSON-Datei weiter als heil gelten.
             case $hk_rc in
                 0) return 0 ;;
                 1) return 1 ;;
-                *) return 0 ;;
+                *) return 1 ;;
             esac
             ;;
     esac
@@ -228,8 +285,9 @@ fi
 # an postupgrade.sh. Laeuft das aus irgendeinem Grund nicht durch, greift
 # jetzt postinstall.sh auf diese Zweitschrift zu - sie liegt ausserhalb des
 # ueberschriebenen Ordners und wird vom Installer nicht angefasst.
-NETZ_BASE="${5:-$LBHOMEDIR}"
-NETZ_PDIR="${3:-heimkino}"
+# Seit 1.3.30 (H1) aus dem Wurzelblock oben.
+NETZ_BASE="$BASE"
+NETZ_PDIR="$PFOLDER"
 NETZ_CFG="$NETZ_BASE/config/plugins/$NETZ_PDIR"
 # Nach INHALT entscheiden, nicht nach GROESSE (Regeln/05: "Merkwort
 # vorhanden?", nicht "ist die Datei leer?"). Bis 1.3.12 stand hier "[ -s ]".
@@ -278,7 +336,9 @@ netz_zweitschrift() {   # $1 Dateiname, $2 Pruefart, $3 Rechte
     nz_quelle="$NETZ_CFG/$1"
     nz_ziel="$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.$1"
     [ -s "$nz_quelle" ] || return 0
-    if [ -f "$nz_ziel" ] && hk_inhalt "$nz_ziel" "$2" && ! hk_inhalt "$nz_quelle" "$2"; then
+    # H3 (1.3.30): eine Quelle ohne erkennbaren Inhalt ersetzt eine vorhandene Zweitschrift nie - auch dann nicht,
+    # wenn sich deren Inhalt gerade nicht pruefen laesst (python3 bricht ab: beide gelten als "nicht heil").
+    if [ -f "$nz_ziel" ] && ! hk_inhalt "$nz_quelle" "$2"; then
         echo "<WARNING> $1 ist unvollstaendig - die vorhandene Zweitschrift"
         echo "<WARNING> bleibt unveraendert."
         return 0

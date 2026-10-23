@@ -13,6 +13,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import socket
 import sys
 import time
@@ -43,7 +44,22 @@ def lb_wurzel_ermitteln():
     return ""
 
 
-ORDNER = "heimkino"
+def _ordner_bestimmen():
+    """H8 (1.3.30, Pruefbericht Fremdbefunde mit E2): der Ordnername der eigenen Ablage, wenn diese Datei unter
+    .../bin/plugins/<ordner>/ liegt; im Zweig "ausdruecklich" (LBHOMEDIR und LBPPLUGINDIR, so arbeiten die
+    Pruefwerkzeuge) der aus $LBPPLUGINDIR; "heimkino" nur noch als Archivrueckfall. Bis 1.3.29 stand hier fest
+    "heimkino": mit LBPPLUGINDIR=heimkino01 zeigte P["config"] auf die Konfiguration eines FREMDEN gleichnamigen
+    Plugins, waehrend bin/dienst.sh heimkino01 nahm. Dieselbe Regel steht in hk_paths() (H13)."""
+    eigen = os.path.dirname(os.path.abspath(__file__))
+    if os.path.basename(os.path.dirname(eigen)) == "plugins":
+        return os.path.basename(eigen)
+    lbp = os.path.basename(os.environ.get("LBPPLUGINDIR", "").rstrip("/"))
+    if lbp not in ("", ".", "/", "bin", "html", "plugins") and os.environ.get("LBHOMEDIR"):
+        return lbp
+    return "heimkino"
+
+
+ORDNER = _ordner_bestimmen()
 
 # Groesse, ab der die Protokolldatei gekappt wird, und was danach stehen
 # bleibt. log/plugins liegt auf einem LoxBerry im Arbeitsspeicher (tmpfs) -
@@ -140,10 +156,16 @@ def pfade():
         # Prozessliste und sind fuer jeden lokalen Benutzer lesbar.
         "code": os.path.join(basis, "config", "plugins", ORDNER, "xbox_code.tmp"),
         "zustand": os.path.join(basis, "data", "plugins", ORDNER, "zustand.json"),
-        # Auftraege des Aktionsendpunkts: was zuletzt geschaltet wurde und
-        # welcher Zustand daraufhin erwartet wird. Der Dienst fasst nach -
-        # er ist die einzige Stelle, die den Beamer befragen darf.
-        "auftrag": os.path.join(basis, "data", "plugins", ORDNER, "auftrag.json"),
+        # Auftragswarteschlange (seit 1.3.30, H6/E4): je Auftrag eine Datei - Szenen (HTTP und MQTT),
+        # Einzelbefehle ueber MQTT und Nachfassen. Bis 1.3.29 EINE Datei auftrag.json, die ein neuer
+        # Auftrag ueberschrieb. Der Dienst ist die einzige Stelle, die den Beamer befragen darf.
+        "auftraege": os.path.join(basis, "data", "plugins", ORDNER, "auftraege"),
+        # Gleichwert-Merker der Oberflaeche (hk_lib.php) - der Dienst nimmt einen Eintrag zurueck, wenn ein
+        # ueber MQTT eingereihter Befehl scheitert oder verfaellt (seit 1.3.30, E5).
+        "gleichwert": os.path.join(basis, "data", "plugins", ORDNER, "befehl_gleichwert.json"),
+        "gleichwert_xbox": os.path.join(basis, "data", "plugins", ORDNER, "befehl_gleichwert_xbox.json"),
+        # Abo-Datei des MQTT-Gateways (seit 1.3.30, Entwurf 2.4): "<praefix>/#", gepflegt vom Dienst.
+        "abo": os.path.join(basis, "config", "plugins", ORDNER, "mqtt_subscriptions.cfg"),
         # Betriebszaehler. Neustartfest, deshalb unter data/ und nicht
         # unter log/ - log/plugins ist eine Ramdisk.
         "betrieb": os.path.join(basis, "data", "plugins", ORDNER, "betrieb.json"),
@@ -684,33 +706,213 @@ def json_schreiben(pfad, daten, rechte=0o640):
         return False
 
 
-def auftrag_stellen(aktion, ziel, frist, wert=""):
-    """Einen Auftrag fuer den Dienst hinterlegen.
+# --------------------------------------------------------------------------
+# Auftragswarteschlange (Gruppe 9 / MQTT, 1.3.30; Entwurf 3.4/3.5, E4)
+#
+# Bis 1.3.29 lag EIN Auftrag in data/plugins/<ordner>/auftrag.json, und jeder
+# neue ueberschrieb den alten: nach "kino-an" und unmittelbar "xbox-an" lag nur
+# noch xbox-an, die Szene lief nie (Pruefbericht H6); und zwischen Lesen und
+# Loeschen beim Nachfassen ging ein neuer kino-an verloren (H9, Race). Jetzt
+# ist jede Uebergabe eine eigene Datei in data/plugins/<ordner>/auftraege/:
+# <sek10><usek6>_<hex8>.json, atomar ueber ".<name>.tmp" + rename, 0640, der
+# Ordner 0750. Dieselbe Form schreibt hk_auftrag_einreihen() in hk_lib.php
+# (MQTT ueber die Befehlsbruecke). Der Dienst beansprucht eine Datei per
+# os.replace(f, f + ".inarbeit") und arbeitet alles im HAUPTFADEN ab (F1: die
+# Geraetesperre trennt Prozesse, nicht Faeden). Fremde Namen fasst er nie an.
+#
+# Inhalt: {"art": "befehl"|"szene"|"nachfassen", "aktion", "wert", "quelle":
+# "http"|"mqtt", "gestellt": Unix-Sekunden mit Bruch, "verfall_s",
+# "ziel"/"frist" (nur nachfassen), "gw" (nur mqtt: welchen Gleichwert-Merker der
+# Dienst bei Fehlschlag oder Verfall zuruecknimmt)}.
+# --------------------------------------------------------------------------
 
-    Aufgerufen von hk_cmd.py, also vom Aktionsendpunkt. Der Endpunkt selbst
-    wartet NICHT auf die Wirkung: ein virtueller Ausgang in Loxone hat ein
-    Zeitlimit, und der Beamer nimmt ohnehin nur eine Verbindung zur Zeit an.
-    Nachgefasst wird deshalb im Dienst.
-    """
-    return json_schreiben(P["auftrag"], {
-        "aktion": aktion,
-        "wert": wert,
-        "ziel": ziel,              # erwarteter Zustand, z. B. "aus" oder "On"
-        "gestellt": time.time(),
-        "frist": float(frist),
-    })
+KENNUNG = re.compile(r"^[0-9]{16}_[0-9a-f]{8}\.json$")
 
 
-def auftrag_lesen():
-    return json_lesen(P["auftrag"])
-
-
-def auftrag_loeschen():
+def auftrag_einreihen(daten):
+    """Einen Auftrag ablegen. Rueckgabe: Dateiname oder "" (nichts abgelegt)."""
+    ordner = P["auftraege"]
+    if not P["home"] or not os.path.isdir(os.path.dirname(ordner)):
+        return ""
     try:
-        os.unlink(P["auftrag"])
-        return True
+        os.makedirs(ordner, mode=0o750, exist_ok=True)
+    except OSError:
+        return ""
+    jetzt = time.time()
+    sek = int(jetzt)
+    name = "%010d%06d_%s.json" % (sek, min(999999, int(round((jetzt - sek) * 1000000))),
+                                  os.urandom(4).hex())
+    inhalt = dict(daten)
+    inhalt["gestellt"] = jetzt
+    try:
+        text = json.dumps(inhalt, ensure_ascii=False) + "\n"
+    except (TypeError, ValueError):
+        return ""
+    vorlaeufig = os.path.join(ordner, "." + name + ".tmp")
+    try:
+        kennung = os.open(vorlaeufig, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640)
+        with os.fdopen(kennung, "w", encoding="utf-8") as datei:
+            datei.write(text)
+            datei.flush()
+            os.fsync(datei.fileno())
+        os.replace(vorlaeufig, os.path.join(ordner, name))
+        return name
+    except OSError:
+        try:
+            os.unlink(vorlaeufig)
+        except OSError:
+            pass
+        return ""
+
+
+def auftraege_namen(mit_inarbeit=False):
+    """Die Namen der Auftraege in der Warteschlange (nur KENNUNG, sortiert)."""
+    try:
+        eintraege = os.listdir(P["auftraege"])
+    except OSError:
+        return []
+    aus = []
+    for name in eintraege:
+        if KENNUNG.match(name):
+            aus.append(name)
+        elif mit_inarbeit and name.endswith(".inarbeit") and KENNUNG.match(name[:-len(".inarbeit")]):
+            aus.append(name)
+    return sorted(aus)
+
+
+def auftrag_liegt():
+    """Liegt ein Auftrag? (ein listdir je Aufruf - fuer das Wecken aus dem Warten)"""
+    return bool(auftraege_namen())
+
+
+def auftraege_holen(nur_art=None, beim_start=False):
+    """Auftraege beanspruchen, lesen und loeschen; nach "gestellt" sortiert.
+
+    nur_art: nur diese Art (z. B. "szene" fuer den Abbruch einer laufenden
+    Szene) - die uebrigen bleiben unberuehrt liegen. beim_start: auch
+    *.inarbeit eines frueheren Prozesses. Eine unlesbare Datei wird
+    verworfen (mit Eintrag {"art": "unlesbar"}).
+    """
+    aus = []
+    for name in auftraege_namen(mit_inarbeit=beim_start):
+        pfad = os.path.join(P["auftraege"], name)
+        inhalt = json_lesen(pfad)
+        if nur_art is not None and (not isinstance(inhalt, dict) or inhalt.get("art") != nur_art):
+            continue
+        if name.endswith(".inarbeit"):
+            beansprucht = pfad
+        else:
+            beansprucht = pfad + ".inarbeit"
+            try:
+                os.replace(pfad, beansprucht)
+            except OSError:
+                continue
+            inhalt = json_lesen(beansprucht)
+        try:
+            os.unlink(beansprucht)
+        except OSError:
+            pass
+        if not isinstance(inhalt, dict):
+            inhalt = {"art": "unlesbar", "aktion": name}
+        inhalt["_name"] = name
+        aus.append(inhalt)
+    def _zeit(a):
+        try:
+            return float(a.get("gestellt", 0))
+        except (TypeError, ValueError):
+            return 0.0
+    return sorted(aus, key=_zeit)
+
+
+def gleichwert_zuruecknehmen(gw):
+    """Den Gleichwert-Merker eines gescheiterten oder verfallenen MQTT-Befehls
+    zuruecknehmen (E5) - genau diesen Eintrag, nur wenn dort noch derselbe Wert
+    steht, unter derselben Sperre wie hk_lib.php (flock, hoechstens 3 s).
+    Danach geht ein Wiederholen hinaus, wie nach einem HTTP-Fehlschlag."""
+    if not isinstance(gw, dict) or gw.get("datei") not in ("gleichwert", "gleichwert_xbox"):
+        return False
+    pfad = P[gw["datei"]]
+    schluessel = str(gw.get("schluessel", ""))
+    wert = str(gw.get("wert", ""))
+    try:
+        import fcntl
+    except ImportError:
+        fcntl = None
+    try:
+        with open(pfad, "r+", encoding="utf-8") as datei:
+            if fcntl is not None:
+                ende = time.monotonic() + 3.0
+                while True:
+                    try:
+                        fcntl.flock(datei.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except OSError:
+                        if time.monotonic() >= ende:
+                            return False
+                        time.sleep(0.1)
+            try:
+                merker = json.loads(datei.read() or "{}")
+            except ValueError:
+                merker = {}
+            if not isinstance(merker, dict):
+                return False
+            e = merker.get(schluessel)
+            if not isinstance(e, dict) or str(e.get("w", "")) != wert:
+                return False
+            del merker[schluessel]
+            datei.seek(0)
+            datei.truncate(0)
+            datei.write(json.dumps(merker, separators=(",", ":")))
+            datei.flush()
+            return True
     except OSError:
         return False
+
+
+def abo_datei_pflegen(praefix, mqtt_an, log=None):
+    """Die Abo-Datei des MQTT-Gateways (config/plugins/<ordner>/mqtt_subscriptions.cfg) pflegen (Gruppe 9,
+    Entwurf 2.4, E8; Regeln/07 "Ein Plugin mit einstellbarem Praefix fuehrt seine mqtt_subscriptions.cfg selbst
+    nach", Bauart Matter2Lox 0.9.35): Inhalt "<praefix>/#", geschrieben nur, wenn er abweicht; mit MQTT aus
+    entfernt. Bis 1.3.29 musste das Abo unter Gateway V1 von Hand eingetragen werden. Nicht im Paket: eine
+    statische Datei stimmte nur fuer "heimkino" (eine zweite Wahrheit). Rueckgabe: "geschrieben", "entfernt",
+    "gleich" oder "fehler"."""
+    ziel = P["abo"]
+    if not mqtt_an:
+        if os.path.isfile(ziel):
+            try:
+                os.unlink(ziel)
+            except OSError:
+                return "fehler"
+            if log:
+                log.info("MQTT: Abo-Datei %s entfernt (MQTT ist abgeschaltet).", ziel)
+            return "entfernt"
+        return "gleich"
+    soll = "%s/#\n" % praefix
+    try:
+        with open(ziel, "r", encoding="utf-8") as datei:
+            if datei.read() == soll:
+                return "gleich"
+    except OSError:
+        pass
+    vorlaeufig = "%s.%d.neu" % (ziel, os.getpid())
+    try:
+        os.makedirs(os.path.dirname(ziel), exist_ok=True)
+        kennung = os.open(vorlaeufig, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        with os.fdopen(kennung, "w", encoding="utf-8") as datei:
+            datei.write(soll)
+        os.replace(vorlaeufig, ziel)
+    except OSError as fehler:
+        try:
+            os.unlink(vorlaeufig)
+        except OSError:
+            pass
+        if log:
+            log.warning("MQTT: Abo-Datei %s liess sich nicht schreiben (%s).", ziel, fehler)
+        return "fehler"
+    if log:
+        log.info("MQTT: Abo-Datei %s gesetzt auf %s/# (das MQTT-Gateway abonniert die Themen damit selbst).",
+                 ziel, praefix)
+    return "geschrieben"
 
 
 def _heute():

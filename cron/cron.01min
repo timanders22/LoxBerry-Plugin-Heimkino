@@ -24,4 +24,9 @@
 # die Logwartung raeumt eine alte Datei weg.
 mkdir -p "REPLACELBPLOGDIR" 2>/dev/null
 touch "REPLACELBPLOGDIR/cron.err" 2>/dev/null
+# Gruppe 9 (1.3.30, Entwurf 3.9): zuerst der Waechter der Befehlsbruecke - er startet sie jede Minute, wenn
+# "Befehle ueber MQTT annehmen" gesetzt ist, und haelt sie sonst an (befehlsbruecke.php --waechter: misst
+# zustand.json, nie waehrend einer Aktualisierung, hoechstens alle 600 s ein Neustart). Kein Start in den
+# Hakenskripten. Er steht VOR dem Dienstwaechter, der die Startsperre nimmt.
+/bin/bash "REPLACELBPBINDIR/befehlsbruecke.sh" waechter >/dev/null 2>>"REPLACELBPLOGDIR/cron.err"
 /bin/bash "REPLACELBPBINDIR/dienst.sh" waechter >/dev/null 2>>"REPLACELBPLOGDIR/cron.err"

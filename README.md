@@ -13,6 +13,46 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.30
+
+**Werte und Befehle über MQTT.** Das Musterprojekt holt die Werte jetzt als einfache *Virtuelle Eingänge*
+über das MQTT-Gateway (Name wie das Gateway ihn vergibt, z. B. `heimkino_beamer_an`) und schickt Befehle
+über den UDP-Eingang des Gateways: `publish heimkino/befehl/kino 1`, `heimkino/befehl/beamer/aus 1`,
+`heimkino/befehl/beamer/eingang hdmi2` … – 13 Befehlsnamen für die 16 Aktionen. Die gemeinsame
+**Befehlsbrücke** des Plugins nimmt sie an, prüft sie und übergibt sie dem Dienst; die Quittung steht in
+`<präfix>/befehl/<name>/quittung`, das Ergebnis in `beamer/letzte_aktion` bzw. `xbox/letzte_aktion`
+(„… ausgefuehrt (MQTT)“, „… FEHLGESCHLAGEN: …“, „… VERFALLEN …“). Zwei Haken im Reiter MQTT, beide ab Werk
+aus: *Befehle über MQTT annehmen* und *Eingreifende Befehle über MQTT zulassen* (Kino-Szene, Beamer und Xbox
+ein/aus, Tasten). Neue Abhängigkeit: `mosquitto-clients`.
+
+**HTTP-Endpunkt hinter einem eigenen Haken.** Der Endpunkt mit Aktionstoken bleibt für bestehende Anlagen und
+Fremdsysteme – aber nur mit *HTTP-Endpunkt für Loxone annehmen* (Reiter Einbindung in Loxone). Neu
+installiert ist er aus; ein Update mit eingerichtetem Aktionstoken schaltet ihn ein, die Adressen im
+Miniserver wirken also weiter. Die Antworten sind unverändert; neu sind nur `403 … ENDPUNKT_AUS` und
+`BELEGT`, wenn derselbe Befehl länger als 3 s läuft. Die Eingangsvorlage *Heimkino (LoxBerry-Plugin)*
+(VI_Heimkino.xml) entfällt – an ihre Stelle tritt die Namenstabelle; neu ist die Vorlage MQTT-Befehle.
+
+**Herzschlag und Ausfallerkennung.** `status/ok`, `status/ts` und `status/zaehler` (0–999) kommen spätestens
+jede Minute, auch während einer Szene, nie retained. Das Musterprojekt erkennt einen Ausfall jetzt am
+Lebenszeichen (Validator Max 999) und an `status/ok` statt an `service/online`, das nach einem Neustart des
+Miniservers unter Gateway Fassung 2 nicht wiederkam. Die Abo-Datei des Gateways (`<präfix>/#`) pflegt der
+Dienst selbst.
+
+**Kinoende.** Mit dem Hausereignis geht `haus/szene/kino` jetzt auch auf 0, wenn der Beamer von „an“ auf
+„aus“ wechselt, ohne dass die Szene lief (Fernbedienung, CEC): nach zwei Abfragen in Folge und mindestens
+60 s „aus“.
+
+**Szene und Aufträge.** Jeder Auftrag an den Dienst ist eine eigene Datei; „Kino an“ und unmittelbar „Xbox
+an“ verlieren die Szene nicht mehr, und „Kino aus“ bricht eine laufende „Kino an“ binnen Sekunden ab. Eine
+Szene beginnt nach höchstens 1 s.
+
+**Berichtigt:** postupgrade überschreibt eine geheilte Konfiguration nicht mehr mit einer schlechteren Sicherung
+(und meldet dann kein „OK“); die Oberfläche heilt eine fehlende Konfiguration aus der Zweitschrift, statt ein
+neues Token zu würfeln; eine abbrechende Python-Probe gilt nicht mehr als „heil“; Startsperre neben dem
+Datenordner; ein einmaliger Lesefehler der Lautstärke überschreibt den letzten Wert nicht mehr mit -1;
+Schwärzung von `code`/`uhs` in zitierten Cloud-Antworten; der Keycode steht nicht mehr im Klartext in der
+Seite; der Reiter Test lädt wieder richtig; Hilfelink auf die eigene Wiki-Seite.
+
 ## Neu in 1.3.29
 
 Vorlage „Heimkino Bild und Ton“: Der Befehl „Lautstärke setzen“ trägt die Skalierung jetzt

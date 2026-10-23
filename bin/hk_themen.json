@@ -81,6 +81,42 @@
       "kurz_en": "Last poll (Unix time)"
     },
     {
+      "thema": "status/ok",
+      "art": "digital",
+      "retain": false,
+      "min": 0,
+      "max": 1,
+      "einheit": "",
+      "de": "1 = der Dienst arbeitet mit der eingestellten Konfiguration; 0 = Konfiguration fehlt oder ist unlesbar (beide Geräte gelten dann als abgeschaltet) und beim Beenden des Dienstes. Kommt mit jedem Herzschlag (spätestens jede Minute), nie retained - Gateway V2: Noncached.",
+      "en": "1 = the service works with the configured settings; 0 = configuration missing or unreadable (both devices then count as disabled) and when the service stops. Sent with every heartbeat (at least every minute), never retained - gateway V2: noncached.",
+      "kurz_de": "Dienst arbeitet",
+      "kurz_en": "Service working"
+    },
+    {
+      "thema": "status/ts",
+      "art": "analog",
+      "retain": false,
+      "min": 0,
+      "max": 4102444800,
+      "einheit": "",
+      "de": "Unix-Sekunden des letzten Herzschlags, nie retained.",
+      "en": "Unix seconds of the last heartbeat, never retained.",
+      "kurz_de": "Herzschlag (Unix-Zeit)",
+      "kurz_en": "Heartbeat (Unix time)"
+    },
+    {
+      "thema": "status/zaehler",
+      "art": "analog",
+      "retain": false,
+      "min": 0,
+      "max": 999,
+      "einheit": "",
+      "de": "Lebenszeichen: zählt mit jedem Herzschlag eins weiter (spätestens jede Minute, auch während einer Szene), 0 bis 999, läuft um; nie retained. Bleibt es stehen, arbeitet der Dienst nicht mehr.",
+      "en": "Sign of life: counts up with every heartbeat (at least every minute, also during a scene), 0 to 999, wraps around; never retained. If it stops, the service is no longer working.",
+      "kurz_de": "Lebenszeichen",
+      "kurz_en": "Sign of life"
+    },
+    {
       "thema": "last_error",
       "art": "text",
       "retain": false,

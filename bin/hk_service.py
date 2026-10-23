@@ -31,6 +31,14 @@ Aufrufe von aussen:
   hk_service.py --protokoll   Lage der Protokolldatei als JSON
   hk_service.py --sendewerte  Werte, die der Dienst senden kann, als JSON (seit 1.3.24,
                               fuer die Pruefzeile "Wertebereich der Vorlage")
+
+Seit 1.3.30 (Gruppe 9 / MQTT, Entwurf entwurf_gruppe9_hk.txt): eine
+Auftragswarteschlange data/plugins/<ordner>/auftraege/ fuer Szenen (HTTP
+und MQTT), Einzelbefehle ueber MQTT (Befehlsbruecke) und Nachfassen - alles
+im Hauptfaden, weil die Geraetesperre Prozesse trennt, nicht Faeden (F1);
+ein kino-aus bricht eine laufende kino-an ab (H9). Dazu der Herzschlag
+status/ok|ts|zaehler (E7), das Kinoende haus/szene/kino = 0, wenn der
+Beamer ausgeht (V2/E9), und die Abo-Datei des Gateways.
 """
 
 import datetime
@@ -61,16 +69,24 @@ def _abbruch(nummer, rahmen):        # noqa: ARG001
     LAEUFT = False
 
 
-def _warten(sekunden):
+def _warten(sekunden, wecken=False):
     """In Ein-Sekunden-Schritten warten, damit ein Stopp sofort greift.
 
     Mit time.monotonic() seit 1.3.15 (C11): bis 1.3.14 rechnete die Schleife
     mit time.time(), und ein Uhrsprung rueckwaerts verlaengerte die Wartezeit
     um den Sprung (Befund code 13).
+
+    Seit 1.3.30: je Sekunde der Herzschlag, wenn er faellig ist (spaetestens
+    alle 60 s, auch bei einem Abfragetakt von 3600 s), und mit wecken=True
+    (nur die Hauptschleife) endet das Warten, sobald ein Auftrag liegt - eine
+    Szene beginnt nach hoechstens 1 s statt bis zu 60 s (H6).
     """
     ende = time.monotonic() + sekunden
     while LAEUFT and time.monotonic() < ende:
         time.sleep(min(1.0, max(0.0, ende - time.monotonic())))
+        HERZ.falls_faellig()
+        if wecken and gemein.auftrag_liegt():
+            break
     return LAEUFT
 
 
@@ -95,14 +111,24 @@ class Lebenszeichen:
         self._faden = None
 
     def _lauf(self):
-        while not self._halt.wait(self.abstand):
+        # Seit 1.3.30: alle 5 s nachsehen - der Herzschlag (status/zaehler) geht
+        # spaetestens alle 60 s, auch waehrend einer Szene oder eines langen
+        # Befehls (Xbox-Cloud); der Zeitstempel weiter alle Takt/2.
+        naechster = time.monotonic() + self.abstand
+        while not self._halt.wait(min(5.0, self.abstand)):
+            if time.monotonic() >= naechster:
+                naechster = time.monotonic() + self.abstand
+                try:
+                    self.melder.sende("service/zeitstempel", int(time.time()))
+                except Exception:            # noqa: BLE001 - das Lebenszeichen darf nie stoeren
+                    pass
+                try:
+                    os.utime(P["zustand"], None)
+                except OSError:
+                    pass
             try:
-                self.melder.sende("service/zeitstempel", int(time.time()))
-            except Exception:            # noqa: BLE001 - das Lebenszeichen darf nie stoeren
-                pass
-            try:
-                os.utime(P["zustand"], None)
-            except OSError:
+                HERZ.falls_faellig(55)
+            except Exception:                # noqa: BLE001 - das Lebenszeichen darf nie stoeren
                 pass
 
     def __enter__(self):
@@ -154,10 +180,15 @@ def beamer_abfragen(cfg, log, meldungen, vorher=None):
             "Beamer: ein anderer Vorgang sprach gerade mit dem Geraet, der "
             "Durchgang wurde uebersprungen. Die zuletzt gemeldeten Werte "
             "bleiben stehen.", log, "info", wieder_nach=600)
+        # V2 Kinoende (seit 1.3.30, Entwurf 2.7 Regel 2): ein uebersprungener
+        # Durchgang hat den Beamer nicht gefragt und zaehlt nicht als "aus".
         if isinstance(vorher, dict) and vorher.get("aktiv"):
-            return dict(vorher)
+            uebersprungen = dict(vorher)
+            uebersprungen["uebersprungen"] = True
+            return uebersprungen
         ergebnis["grund"] = "besetzt"
         ergebnis["grund_text"] = gemein.GRUND_TEXT["besetzt"]
+        ergebnis["uebersprungen"] = True
         return ergebnis
     try:
         return _beamer_abfragen_gesperrt(cfg, log, meldungen, ergebnis,
@@ -225,6 +256,10 @@ def _beamer_abfragen_gesperrt(cfg, log, meldungen, ergebnis, ip, port, grenze):
             ergebnis["lautstaerke"] = geraet.lautstaerke()
             ergebnis["stumm"] = 1 if geraet.stumm() else 0
         except Exception as fehler:      # noqa: BLE001
+            # H10 (1.3.30): ein einmaliger Lesefehler ist ein Ausfall, kein
+            # "nicht geliefert" - der letzte gueltige Wert bleibt stehen
+            # (ausfall_themen). Bis 1.3.29 ging -1/-1 retained ueber ihn.
+            ergebnis["zusatz_fehler"] = True
             gemein.einmal_melden(
                 meldungen, "beamer_zusatz",
                 "Beamer: Lautstaerke und Stummschaltung liessen sich nicht "
@@ -375,23 +410,48 @@ def _beamer_objekt(cfg):
                     sperre=P["sperre"], sperre_warten=15)
 
 
-def _warten_auf_beamer(cfg, sekunden):
-    """Warten, bis der Steuerport antwortet. Gibt die Dauer oder None zurueck."""
+class SzeneAbbruch(Exception):
+    """Eine laufende kino-an wird durch ein kino-aus abgebrochen (H9, Entwurf 3.5)."""
+
+    def __init__(self, auftrag):
+        Exception.__init__(self, "abgebrochen durch kino-aus")
+        self.auftrag = auftrag
+
+
+def _abbruch_pruefen(abbruch):
+    """Ruft die Abbruchfrage der Szene; liefert sie einen Auftrag (kino-aus), endet die Szene."""
+    if abbruch is None:
+        return
+    auftrag = abbruch()
+    if auftrag is not None:
+        raise SzeneAbbruch(auftrag)
+
+
+def _warten_auf_beamer(cfg, sekunden, abbruch=None):
+    """Warten, bis der Steuerport antwortet. Gibt die Dauer oder None zurueck.
+
+    Seit 1.3.30 (H9) fragt jeder Schleifenschritt (alle 3 s) nach einem
+    kino-aus in der Warteschlange - bis 1.3.29 lief eine kino-an bis zu ihrer
+    Wartegrenze weiter (ab Werk 210 s, hoechstens 1200 s), nachdem der Bediener
+    "aus" gedrueckt hatte."""
     ip = gemein.wert(cfg, "beamer", "ip")
     port = gemein.zahl(cfg, "beamer", "port", 9761, 1, 65535)
     anfang = time.monotonic()
     while LAEUFT and (time.monotonic() - anfang) < sekunden:
+        _abbruch_pruefen(abbruch)
         if gemein.erreichbarkeit(ip, port, 2, P["sperre"], 5)[0]:
             return time.monotonic() - anfang
         if not _warten(3):
             break
+    _abbruch_pruefen(abbruch)
     return None
 
 
-def _warten_auf_xbox(cfg, log, sekunden):
+def _warten_auf_xbox(cfg, log, sekunden, abbruch=None):
     kennung = gemein.wert(cfg, "xbox", "geraete_id")
     anfang = time.monotonic()
     while LAEUFT and (time.monotonic() - anfang) < sekunden:
+        _abbruch_pruefen(abbruch)
         try:
             from xbox_cloud import XboxCloud
             if XboxCloud(P["auth"], log).status(kennung)["status"] in ("On", "on"):
@@ -400,10 +460,11 @@ def _warten_auf_xbox(cfg, log, sekunden):
             pass
         if not _warten(5):
             break
+    _abbruch_pruefen(abbruch)
     return None
 
 
-def szene_ausfuehren(aktion, cfg, melder, log):
+def szene_ausfuehren(aktion, cfg, melder, log, abbruch=None):
     """Kino an oder aus - Schritt fuer Schritt, mit echten Wartebedingungen.
 
     Der Gewinn gegenueber einer Nachbildung in Loxone: dort liessen sich die
@@ -412,6 +473,14 @@ def szene_ausfuehren(aktion, cfg, melder, log):
 
     Jeder Schritt geht als szene/schritt hinaus, damit in der App sichtbar
     ist, wo es klemmt.
+
+    Seit 1.3.30 (H9, Entwurf 3.5) laeuft die Szene im Hauptfaden des Dienstes
+    (F1: die Geraetesperre trennt Prozesse, nicht Faeden) und fragt in den
+    Warteschleifen und zwischen den Schritten abbruch(): kommt ein kino-aus,
+    endet kino-an mit "abgebrochen durch kino-aus nach <n> s", und der
+    abbrechende Auftrag wird zurueckgegeben - der Dienst fuehrt ihn sofort aus.
+    Ein laufender Cloud-Aufruf (hoechstens 15 s) wird nicht unterbrochen.
+    Rueckgabe: der abbrechende Auftrag oder None.
     """
     anfang = time.monotonic()
     beamer_an = gemein.ja(cfg, "beamer", "aktiv")
@@ -419,12 +488,17 @@ def szene_ausfuehren(aktion, cfg, melder, log):
     w_beamer = gemein.zahl(cfg, "szene", "warten_beamer", 120, 10, 600)
     w_xbox = gemein.zahl(cfg, "szene", "warten_xbox", 90, 10, 600)
     fehler = []
+    abgebrochen = None
 
     melder.sende("szene/laeuft", 1)
     melder.sende("szene/ergebnis", "-")
     hausereignis_melden(aktion, cfg, melder, log)
+    if aktion == "kino-aus":
+        # V2 (Entscheidung 3): kino-aus setzt die Kinoende-Erkennung zurueck - das Hausereignis ist schon 0.
+        kinoende_zuruecksetzen()
 
     def schritt(text):
+        _abbruch_pruefen(abbruch)
         melder.sende("szene/schritt", text)
         log.info("Szene %s: %s", aktion, text)
 
@@ -439,7 +513,7 @@ def szene_ausfuehren(aktion, cfg, melder, log):
                     except ValueError as f:
                         fehler.append("WoL: %s" % f)
                 schritt("warten, bis der Beamer antwortet")
-                dauer = _warten_auf_beamer(cfg, w_beamer)
+                dauer = _warten_auf_beamer(cfg, w_beamer, abbruch)
                 if dauer is None:
                     fehler.append("Beamer kam innerhalb von %d s nicht hoch" % w_beamer)
                 else:
@@ -469,7 +543,7 @@ def szene_ausfuehren(aktion, cfg, melder, log):
                     fehler.append("Xbox wecken: %s" % f)
                 else:
                     schritt("warten, bis die Konsole On meldet")
-                    dauer = _warten_auf_xbox(cfg, log, w_xbox)
+                    dauer = _warten_auf_xbox(cfg, log, w_xbox, abbruch)
                     if dauer is None:
                         fehler.append("Konsole meldete innerhalb von %d s kein On" % w_xbox)
                     else:
@@ -494,9 +568,13 @@ def szene_ausfuehren(aktion, cfg, melder, log):
                     fehler.append("Beamer ausschalten: %s" % f)
         else:
             fehler.append("unbekannte Szene %r" % aktion)
+    except SzeneAbbruch as ab:
+        abgebrochen = ab.auftrag
     finally:
         dauer = int(time.monotonic() - anfang)
-        if not LAEUFT:
+        if abgebrochen is not None:
+            ergebnis = "%s abgebrochen durch kino-aus nach %d s" % (aktion, dauer)
+        elif not LAEUFT:
             ergebnis = "%s abgebrochen - der Dienst wurde beendet" % aktion
         elif fehler:
             ergebnis = "%s mit Beanstandung nach %d s: %s" % (
@@ -507,7 +585,7 @@ def szene_ausfuehren(aktion, cfg, melder, log):
         melder.sende("szene/ergebnis", ergebnis)
         melder.sende("szene/laeuft", 0)
         (log.warning if fehler else log.info)("Szene: %s", ergebnis)
-    return not fehler
+    return abgebrochen
 
 
 # --------------------------------------------------------------------------
@@ -577,7 +655,8 @@ EREIGNIS_THEMEN = ("beamer/letzte_aktion", "xbox/letzte_aktion",
 # steht NICHT in bin/hk_themen.json und nicht in --themen: es liegt
 # ausserhalb des Praefixes, und die Themen-Tabelle zeigt <praefix>/<thema>.
 # Der Stand fuer den Reiter Test geht mit zustand.json hinaus.
-HAUS_STAND = {"wert": "", "zeit": 0}
+# "ende" (seit 1.3.30): wann das Kinoende zuletzt erkannt wurde (Reiter Test).
+HAUS_STAND = {"wert": "", "zeit": 0, "ende": 0}
 
 
 def hausereignis_wirksam(cfg):
@@ -691,6 +770,12 @@ def ausfall_themen(beamer, xbox):
                     "beamer/lautstaerke", "beamer/stumm"))
     if xbox.get("aktiv") and xbox.get("status") == "unbekannt":
         weg.update(("xbox/status", "xbox/an", "xbox/name"))
+    # H10 (seit 1.3.30, Pruefbericht): scheiterte nur das Lesen der Zusatzwerte
+    # bei laufendem Beamer, gehen Lautstaerke und Stummschaltung nicht hinaus -
+    # der letzte gueltige (retained) Wert bleibt. -1 heisst weiter "das Feld
+    # liefert der gelungene Abruf nicht" (Beamer aus, Zusatzwerte aus).
+    if beamer.get("aktiv") and beamer.get("zusatz_fehler"):
+        weg.update(("beamer/lautstaerke", "beamer/stumm"))
     return weg
 
 
@@ -769,7 +854,7 @@ def _alle_themen():
     leer_xbox = {"aktiv": False, "status": "unbekannt", "angemeldet": False,
                  "fehler": "", "quelle": "", "name": "", "erreichbar": False}
     return sorted(list(mqtt_werte(leer_beamer, leer_xbox, "", "", 0).keys())
-                  + list(EREIGNIS_THEMEN))
+                  + list(EREIGNIS_THEMEN) + list(HERZSCHLAG_THEMEN))
 
 
 def sendewerte():
@@ -834,6 +919,269 @@ def keycode_nachziehen(cfg, log):
     return False
 
 
+class Herzschlag:
+    """status/ok|ts|zaehler - das Lebenszeichen der Hausform (Gruppe 9, Entwurf 2.2, E7).
+
+    Bis 1.3.29 gab es nur service/zeitstempel je Durchgang (Takt bis 3600 s)
+    und service/online (retained, kommt nur beim Verbinden - nach einem
+    Neustart des Miniservers unter Gateway V2 ohne reconnect nie wieder). Die
+    Ausfallerkennung der Hausform (Validator an <praefix>_status_zaehler,
+    Max 999) ging so nicht. Jetzt: status/ok (1 = der Dienst arbeitet mit der
+    eingestellten Konfiguration, 0 = Konfiguration fehlt oder ist unlesbar,
+    und 0 beim geordneten Ende), status/ts (Unix-Sekunden) und status/zaehler
+    (0-999, laeuft um) - nie retained, gesendet am Ende jedes Durchgangs und
+    spaetestens 60 s nach dem letzten (auch bei einem Abfragetakt von 3600 s)
+    und waehrend einer Szene oder eines langen Befehls aus dem
+    Lebenszeichen-Faden. Der Zaehler steht hinter einer Sperre, weil beide
+    Faeden senden. Haengt der Hauptfaden ausserhalb einer Szene, bleibt der
+    Zaehler stehen - genau das soll die Ausfallerkennung sehen.
+    Jeder Herzschlag frischt die Aenderungszeit von zustand.json auf (der
+    Waechter in dienst.sh und die Zeile im Reiter Test messen daran).
+    """
+
+    ABSTAND = 60
+
+    def __init__(self):
+        self.melder = None
+        self.ok = 0
+        self.zaehler = 0
+        self.letzter = None
+        self.zuletzt = None
+        self._sperre = threading.Lock()
+
+    def senden(self):
+        with self._sperre:
+            m = self.melder
+            if m is not None:
+                m.sende("status/ok", 1 if self.ok else 0)
+                m.sende("status/ts", int(time.time()))
+                m.sende("status/zaehler", self.zaehler)
+            self.letzter = self.zaehler
+            self.zaehler = (self.zaehler + 1) % 1000
+            self.zuletzt = time.monotonic()
+        try:
+            os.utime(P["zustand"], None)
+        except OSError:
+            pass
+
+    def falls_faellig(self, abstand=None):
+        grenze = self.ABSTAND if abstand is None else abstand
+        if self.zuletzt is None or time.monotonic() - self.zuletzt >= grenze:
+            self.senden()
+
+
+HERZ = Herzschlag()
+HERZSCHLAG_THEMEN = ("status/ok", "status/ts", "status/zaehler")
+
+
+# --------------------------------------------------------------------------
+# V2 Kinoende (Gruppe 9, Entscheidung 3, Entwurf 2.7, E9)
+# --------------------------------------------------------------------------
+
+KINOENDE = {"an_gesehen": False, "aus_seit": None, "aus_folge": 0}
+KINOENDE_FRIST = 60
+
+
+def kinoende_zuruecksetzen():
+    KINOENDE.update(an_gesehen=False, aus_seit=None, aus_folge=0)
+
+
+def kinoende_pruefen(beamer, cfg, melder, log, jetzt=None):
+    """haus/szene/kino = 0, wenn der Beamer von "an" auf "aus" wechselt - auch
+    per Fernbedienung oder CEC, ohne dass die Szene lief (Entscheidung 3).
+
+    Nur mit dem Hausereignis (Haken szene.hausereignis, Kino-Szene, MQTT) und
+    eingeschaltetem Beamer. Ein Durchgang zaehlt nur, wenn er den Beamer
+    wirklich gefragt hat (uebersprungen bei besetzter Sperre zaehlt nicht).
+    Erst ein gesehenes "an" macht scharf; danach zwei "aus" in Folge UND
+    mindestens 60 s seit dem ersten (unabhaengig vom Takt - beim Nachfassen
+    laeuft er mit 5 s). "unbekannt" sagt nichts. Gesendet wird nur, wenn "1"
+    gemerkt ist; ein gemerktes "0" (kino-aus lief) bleibt still. Der Merker
+    lebt nur im Prozess: nach einem Neustart zaehlt erst ein wieder gesehenes
+    "an"; ein Beamer, der nie anging, setzt nichts zurueck.
+    Rueckgabe: True, wenn 0 gesendet wurde.
+    """
+    jetzt = time.monotonic() if jetzt is None else jetzt
+    if not (hausereignis_wirksam(cfg) and beamer.get("aktiv")):
+        kinoende_zuruecksetzen()
+        return False
+    if beamer.get("uebersprungen"):
+        return False
+    status = beamer.get("status")
+    if status == "an":
+        KINOENDE.update(an_gesehen=True, aus_seit=None, aus_folge=0)
+        return False
+    if status != "aus" or not KINOENDE["an_gesehen"]:
+        return False
+    KINOENDE["aus_folge"] += 1
+    if KINOENDE["aus_seit"] is None:
+        KINOENDE["aus_seit"] = jetzt
+    dauer = jetzt - KINOENDE["aus_seit"]
+    if KINOENDE["aus_folge"] < 2 or dauer < KINOENDE_FRIST:
+        return False
+    gemerkt = gemein.hausereignis_gemerkt()
+    kinoende_zuruecksetzen()
+    if gemerkt != "1":
+        return False
+    if not melder.aktiv:
+        log.warning("Hausereignis %s = 0 (Kinoende) nicht gesendet: MQTT ist nicht "
+                    "eingerichtet (siehe Protokoll beim Start).", gemein.HAUS_KINO)
+        return False
+    angenommen = melder.sende_haus(gemein.HAUS_KINO, "0")
+    gemein.hausereignis_merken("0")
+    HAUS_STAND.update(wert="0", zeit=int(time.time()), ende=int(time.time()))
+    log.info("Hausereignis %s = 0: der Beamer ist seit %d s aus (nicht ueber die Szene)%s.",
+             gemein.HAUS_KINO, int(dauer),
+             "" if angenommen else " - der Broker ist gerade nicht verbunden, es geht beim naechsten Verbinden hinaus")
+    return True
+
+
+# --------------------------------------------------------------------------
+# Auftraege aus der Warteschlange (Gruppe 9, Entwurf 3.4-3.6, E4/E6)
+# --------------------------------------------------------------------------
+
+def _alter(auftrag):
+    try:
+        return time.time() - float(auftrag.get("gestellt", 0))
+    except (TypeError, ValueError):
+        return float("inf")
+
+
+def _verfallen(auftrag, vorgabe):
+    try:
+        frist = float(auftrag.get("verfall_s", vorgabe) or vorgabe)
+    except (TypeError, ValueError):
+        frist = float(vorgabe)
+    alter = _alter(auftrag)
+    return not (-5 <= alter <= frist), alter
+
+
+def nachfassen_merken(offen, auftrag):
+    """Einen Nachfassauftrag in die Liste offen (im Speicher, nie mehr in einer Datei): je Geraet gilt der
+    juengste - beamer-aus ersetzt ein offenes beamer-wol (Entwurf 3.5)."""
+    geraet = "xbox" if str(auftrag.get("ziel", "")).startswith("xbox") else "beamer"
+    offen[geraet] = {"aktion": str(auftrag.get("aktion", "")), "wert": str(auftrag.get("wert", "") or ""),
+                     "ziel": str(auftrag.get("ziel", "")), "frist": auftrag.get("frist", 120),
+                     "gestellt": auftrag.get("gestellt", time.time())}
+
+
+def szenen_abbruch(log):
+    """Die Abbruchfrage einer laufenden kino-an: beansprucht NUR Auftraege der Art "szene" - Einzelbefehle bleiben
+    liegen und laufen nach der Szene (oder verfallen nach 30 s). Ein kino-aus bricht ab; ein weiteres kino-an wird
+    verworfen ("laeuft schon")."""
+    def pruefen():
+        abbrechen = None
+        for a in gemein.auftraege_holen(nur_art="szene"):
+            if str(a.get("aktion", "")) == "kino-aus":
+                abbrechen = a
+            else:
+                gemein.gleichwert_zuruecknehmen(a.get("gw"))
+                log.info("Szene kino-an laeuft schon - ein weiteres %s (%s) wurde verworfen.",
+                         a.get("aktion", "?"), a.get("quelle", "?"))
+        return abbrechen
+    return pruefen
+
+
+def befehl_im_dienst(befehl, cfg, melder, log, takt, offen):
+    """Ein Einzelbefehl aus der Warteschlange (ueber MQTT eingereiht, E6): Verfall 30 s pruefen, sonst ausfuehren
+    wie hk_cmd.py (dieselbe Funktion befehl_ausfuehren, mit Geraetesperre und Lebenszeichen) und das Ergebnis in
+    <geraet>/letzte_aktion melden - ueber MQTT kommt keine HTTP-Antwort zurueck. Scheitert oder verfaellt er, nimmt
+    der Dienst den Gleichwert-Merker zurueck (E5), damit ein Wiederholen hinausgeht."""
+    aktion = str(befehl.get("aktion", ""))
+    wert = str(befehl.get("wert", "") or "")
+    thema = ("xbox" if aktion.startswith("xbox-") else "beamer") + "/letzte_aktion"
+    anzeige = aktion + (" " + wert if wert else "")
+    verfallen, alter = _verfallen(befehl, 30)
+    if verfallen:
+        gemein.gleichwert_zuruecknehmen(befehl.get("gw"))
+        text = "%s VERFALLEN nach %d s (Dienst war beschaeftigt)" % (anzeige, int(alter) if alter != float("inf") else -1)
+        melder.sende(thema, text)
+        log.warning("Befehl ueber MQTT: %s", text)
+        return False
+    import contextlib
+    import io
+    import hk_cmd
+    puffer = io.StringIO()
+
+    def merken(ak, ziel, frist, w=""):
+        nachfassen_merken(offen, {"aktion": ak, "ziel": ziel, "frist": frist, "wert": w, "gestellt": time.time()})
+
+    with Lebenszeichen(melder, takt), contextlib.redirect_stdout(puffer):
+        rc = hk_cmd.befehl_ausfuehren(aktion, [wert] if wert else [], cfg, log, nachfassen=merken)
+    zeilen = [z.strip() for z in puffer.getvalue().splitlines() if z.strip()]
+    if rc == 0:
+        text = "%s ausgefuehrt (MQTT)" % anzeige
+        log.info("Befehl ueber MQTT: %s - %s", anzeige, zeilen[-1] if zeilen else "ok")
+    else:
+        grund = zeilen[-1] if zeilen else "ohne Meldung"
+        if grund.startswith("Fehler: "):
+            grund = grund[len("Fehler: "):]
+        try:
+            from xbox_cloud import _ohne_token
+            grund = _ohne_token(grund, 120)
+        except Exception:                # noqa: BLE001 - die Schwaerzung darf den Bericht nie verhindern
+            grund = grund[:120]
+        text = "%s FEHLGESCHLAGEN: %s" % (anzeige, grund[:120])
+        gemein.gleichwert_zuruecknehmen(befehl.get("gw"))
+        log.warning("Befehl ueber MQTT: %s", text)
+    melder.sende(thema, text)
+    return rc == 0
+
+
+def auftraege_abarbeiten(auftraege, cfg, melder, log, takt, offen, beim_start=False):
+    """Eine Runde der Warteschlange im Hauptfaden (F1): (1) Szenen - die juengste gewinnt, ein kino-aus bricht eine
+    laufende kino-an ab und laeuft sofort; (2) Einzelbefehle nach "gestellt"; (3) Nachfassauftraege in die Liste
+    offen. Beim Start wird verworfen, was laenger als AUFTRAG_VERALTET liegt (es wurde gestellt, als kein Dienst
+    lief - Muster 5). Rueckgabe: True, wenn etwas ausgefuehrt wurde (dann fragt der Dienst nach 5 s nach)."""
+    szenen, befehle = [], []
+    for a in auftraege:
+        art = a.get("art")
+        alter = _alter(a)
+        if beim_start and not (0 <= alter <= AUFTRAG_VERALTET):
+            gemein.gleichwert_zuruecknehmen(a.get("gw"))
+            log.warning("Auftrag %s vom Start verworfen: er lag %s, als kein Dienst lief.", a.get("aktion", "?"),
+                        ("seit %d s" % alter) if alter != float("inf") else "ohne lesbare Zeit")
+            continue
+        if art == "szene":
+            szenen.append(a)
+        elif art == "befehl":
+            befehle.append(a)
+        elif art == "nachfassen":
+            nachfassen_merken(offen, a)
+        else:
+            log.warning("Auftrag %s verworfen: unbekannte Art %r.", a.get("_name", "?"), art)
+    ausgefuehrt = False
+    if szenen:
+        for alt in szenen[:-1]:
+            gemein.gleichwert_zuruecknehmen(alt.get("gw"))
+            log.info("Szene %s (%s) verworfen - eine neuere Szene folgt.", alt.get("aktion", "?"), alt.get("quelle", "?"))
+        a = szenen[-1]
+        while a is not None and LAEUFT:
+            aktion = str(a.get("aktion", ""))
+            verfallen, alter = _verfallen(a, AUFTRAG_VERALTET)
+            if verfallen:
+                gemein.gleichwert_zuruecknehmen(a.get("gw"))
+                log.warning("Szene %s verfallen nach %d s (der Dienst war beschaeftigt) - nicht ausgefuehrt.",
+                            aktion, int(alter) if alter != float("inf") else -1)
+                break
+            if aktion not in ("kino-an", "kino-aus") or not gemein.ja(cfg, "szene", "aktiv"):
+                log.warning("Szene %s nicht ausgefuehrt: %s.", aktion, "unbekannte Szene" if aktion not in
+                            ("kino-an", "kino-aus") else "die Kino-Szene ist in den Einstellungen abgeschaltet")
+                break
+            if a.get("quelle") == "mqtt":
+                log.info("Szene %s ueber MQTT.", aktion)
+            with Lebenszeichen(melder, takt):
+                a = szene_ausfuehren(aktion, cfg, melder, log,
+                                     abbruch=szenen_abbruch(log) if aktion == "kino-an" else None)
+            ausgefuehrt = True
+    for b in befehle:
+        if not LAEUFT:
+            break
+        befehl_im_dienst(b, cfg, melder, log, takt, offen)
+        ausgefuehrt = True
+    return ausgefuehrt
+
+
 # --------------------------------------------------------------------------
 # Hauptschleife
 # --------------------------------------------------------------------------
@@ -882,26 +1230,19 @@ def hauptteil():
             praefixe_aufraeumen(melder.praefix, log)
             altwerte_abraeumen(melder.praefix, log)
         entfernt_gemeldet = set()
+        # Gruppe 9 (1.3.30): Herzschlag und Abo-Datei des Gateways (Entwurf 2.2, 2.4).
+        HERZ.melder = melder
+        HERZ.ok = 1 if lage == "ok" else 0
+        gemein.abo_datei_pflegen(melder.praefix, gemein.ja(cfg, "heimkino", "mqtt"), log)
 
-        # Ein Auftrag, der beim Start schon laenger als AUFTRAG_VERALTET
-        # liegt, wurde gestellt, als kein Dienst lief - er wird verworfen,
-        # nicht ausgefuehrt. Bis 1.3.13 lief eine Kino-Szene, die jemand am
-        # Abend ohne laufenden Dienst gedrueckt hatte, beim naechsten Start
-        # ab, womoeglich Stunden spaeter (Muster 5 der Nachlese; Bauart
-        # ZendureSolarFlow 0.9.26). hk_cmd.py legt ohne Dienst seit 1.3.14
-        # gar keinen mehr ab; dieser Zweig faengt die Reste ab.
-        alt_auftrag = gemein.auftrag_lesen()
-        if alt_auftrag:
-            try:
-                alter = time.time() - float(alt_auftrag.get("gestellt", 0))
-            except (TypeError, ValueError):
-                alter = float("inf")
-            if not (0 <= alter <= AUFTRAG_VERALTET):
-                gemein.auftrag_loeschen()
-                log.warning("Auftrag %s vom Start verworfen: er lag %s, als kein "
-                            "Dienst lief.", alt_auftrag.get("aktion", "?"),
-                            ("seit %d s" % alter) if alter != float("inf")
-                            else "ohne lesbare Zeit")
+        # Auftraege, die beim Start schon laenger als AUFTRAG_VERALTET liegen,
+        # wurden gestellt, als kein Dienst lief - sie werden verworfen, nicht
+        # ausgefuehrt (Muster 5 der Nachlese; seit 1.3.30 in der Warteschlange
+        # auftraege/, auch *.inarbeit eines frueheren Prozesses).
+        beim_start = True
+        # Nachfassen lebt seit 1.3.30 im Speicher: je Geraet der juengste Auftrag.
+        offen = {}
+        naechste_abfrage = 0.0
 
         letzte_config = 0.0
         letzte_runde = time.time()
@@ -919,11 +1260,13 @@ def hauptteil():
                 cfg, lage = gemein.config_lesen(log)
                 letzte_config = geaendert
                 takt = gemein.zahl(cfg, "heimkino", "intervall", 60, 10, 3600)
+                HERZ.ok = 1 if lage == "ok" else 0
                 # Hausereignis abgeschaltet (Einstellung, Szene oder MQTT):
                 # nicht mehr wiederholen und ein gesendetes abraeumen (Kino-1).
                 if not hausereignis_wirksam(cfg):
                     melder.haus_vergessen()
                     hausereignis_abraeumen(log)
+                    kinoende_zuruecksetzen()
                 # Verglichen wird der GESAEUBERTE neue Wert mit dem
                 # gesaeuberten alten - sonst meldet der Dienst bei jeder
                 # Konfigurationsaenderung eine Umstellung, die keine ist.
@@ -956,81 +1299,101 @@ def hauptteil():
                     melder = gemein.Melder(neuer, log,
                                            gemein.ja(cfg, "heimkino", "mqtt"),
                                            haus=haus_werte)
+                    HERZ.melder = melder
                     if melder.aktiv:
                         gemein.praefix_merken(melder.praefix)
                     entfernt_gemeldet = set()
+                gemein.abo_datei_pflegen(gemein.praefix_saeubern(neuer), gemein.ja(cfg, "heimkino", "mqtt"), log)
 
-            # --- Auftrag: Szene sofort ausfuehren, sonst spaeter nachfassen.
-            auftrag = gemein.auftrag_lesen()
-            if auftrag and str(auftrag.get("aktion", "")).startswith("kino-"):
-                gemein.auftrag_loeschen()
-                with Lebenszeichen(melder, takt):
-                    szene_ausfuehren(str(auftrag["aktion"]), cfg, melder, log)
-                auftrag = None
+            # --- Auftraege (Gruppe 9, Entwurf 3.5): Szenen, Einzelbefehle,
+            # Nachfassen - alles im Hauptfaden (F1). Bis 1.3.29 lag EIN Auftrag
+            # in auftrag.json, und ein neuer ueberschrieb ihn (H6).
+            ausgefuehrt = auftraege_abarbeiten(gemein.auftraege_holen(beim_start=beim_start),
+                                               cfg, melder, log, takt, offen, beim_start)
+            beim_start = False
 
-            beamer = beamer_abfragen(cfg, log, meldungen, letzter_beamer)
-            letzter_beamer = beamer
-            xbox = xbox_abfragen(cfg, log, meldungen)
-            ablauf_datum, ablauf_tage = geheimnis_restlaufzeit(cfg, log, meldungen)
-            if ablauf_tage != "" and ablauf_tage <= 60:
-                gemein.einmal_melden(
-                    meldungen, "xbox_geheimnis_ablauf",
-                    ("Xbox: das Azure-Clientgeheimnis ist seit %d Tagen abgelaufen - "
-                     "ein neues anlegen und die Anmeldung wiederholen."
-                     % abs(ablauf_tage)) if ablauf_tage < 0 else
-                    ("Xbox: das Azure-Clientgeheimnis laeuft in %d Tagen ab (%s)."
-                     % (ablauf_tage, ablauf_datum)),
-                    log, "warning", wieder_nach=86400)
+            # --- Abfrage nur im Takt: der Beamer wird nicht oefter befragt als
+            # bis 1.3.29. Nach einem ausgefuehrten Auftrag fruehestens nach 5 s.
+            if time.monotonic() >= naechste_abfrage:
+                beamer = beamer_abfragen(cfg, log, meldungen, letzter_beamer)
+                letzter_beamer = beamer
+                # V2 Kinoende (Entscheidung 3, Entwurf 2.7).
+                kinoende_pruefen(beamer, cfg, melder, log)
+                xbox = xbox_abfragen(cfg, log, meldungen)
+                ablauf_datum, ablauf_tage = geheimnis_restlaufzeit(cfg, log, meldungen)
+                if ablauf_tage != "" and ablauf_tage <= 60:
+                    gemein.einmal_melden(
+                        meldungen, "xbox_geheimnis_ablauf",
+                        ("Xbox: das Azure-Clientgeheimnis ist seit %d Tagen abgelaufen - "
+                         "ein neues anlegen und die Anmeldung wiederholen."
+                         % abs(ablauf_tage)) if ablauf_tage < 0 else
+                        ("Xbox: das Azure-Clientgeheimnis laeuft in %d Tagen ab (%s)."
+                         % (ablauf_tage, ablauf_datum)),
+                        log, "warning", wieder_nach=86400)
 
-            jetzt = time.time()
-            vergangen = jetzt - letzte_runde
-            letzte_runde = jetzt
+                jetzt = time.time()
+                vergangen = jetzt - letzte_runde
+                letzte_runde = jetzt
 
-            # Betriebszeit fortschreiben - eine Schaetzung aus dem Abtastraster,
-            # keine Angabe des Geraets. Steht so in der Themenliste.
-            b_stunden, b_heute = gemein.betrieb_fortschreiben(
-                beamer["status"] == "an", vergangen, "beamer")
-            x_stunden, x_heute = gemein.betrieb_fortschreiben(
-                xbox["status"] in ("On", "on"), vergangen, "xbox")
+                # Betriebszeit fortschreiben - eine Schaetzung aus dem Abtastraster,
+                # keine Angabe des Geraets. Steht so in der Themenliste.
+                b_stunden, b_heute = gemein.betrieb_fortschreiben(
+                    beamer["status"] == "an", vergangen, "beamer")
+                x_stunden, x_heute = gemein.betrieb_fortschreiben(
+                    xbox["status"] in ("On", "on"), vergangen, "xbox")
 
-            if auftrag and gemein.ja(cfg, "heimkino", "nachfassen"):
-                if nachfassen(auftrag, beamer, xbox, melder, log):
-                    gemein.auftrag_loeschen()
-                    auftrag = None
-            elif auftrag:
-                gemein.auftrag_loeschen()
-                auftrag = None
+                # Nachfassen: je Geraet der juengste offene Auftrag (seit 1.3.30
+                # im Speicher - das Race zwischen Lesen und Loeschen, H9, gibt
+                # es nicht mehr).
+                if offen and gemein.ja(cfg, "heimkino", "nachfassen"):
+                    for geraet in list(offen):
+                        if nachfassen(offen[geraet], beamer, xbox, melder, log):
+                            del offen[geraet]
+                elif offen:
+                    offen.clear()
 
-            gemein.zustand_schreiben({
-                "zeit": jetzt,
-                "zeit_text": time.strftime("%d.%m.%Y %H:%M:%S",
-                                           time.localtime(jetzt)),
-                "config_lage": lage,
-                "beamer": beamer,
-                "xbox": xbox,
-                "geheimnis_ablauf": ablauf_datum,
-                "geheimnis_tage": ablauf_tage,
-                "betrieb": {"beamer_h": b_stunden, "beamer_heute": b_heute,
-                            "xbox_h": x_stunden, "xbox_heute": x_heute},
-                "auftrag_offen": bool(auftrag),
-                "takt": takt,
-                "hausereignis": dict(HAUS_STAND, wirksam=hausereignis_wirksam(cfg)),
-            })
+                gemein.zustand_schreiben({
+                    "zeit": jetzt,
+                    "zeit_text": time.strftime("%d.%m.%Y %H:%M:%S",
+                                               time.localtime(jetzt)),
+                    "config_lage": lage,
+                    "beamer": beamer,
+                    "xbox": xbox,
+                    "geheimnis_ablauf": ablauf_datum,
+                    "geheimnis_tage": ablauf_tage,
+                    "betrieb": {"beamer_h": b_stunden, "beamer_heute": b_heute,
+                                "xbox_h": x_stunden, "xbox_heute": x_heute},
+                    "auftrag_offen": bool(offen),
+                    "takt": takt,
+                    "hausereignis": dict(HAUS_STAND, wirksam=hausereignis_wirksam(cfg)),
+                    "herzschlag": {"zaehler": HERZ.zaehler, "zeit": int(jetzt)},
+                })
 
-            melder.sende_viele(werte_fuer_versand(
-                mqtt_werte(beamer, xbox, ablauf_datum, ablauf_tage, jetzt,
-                           b_stunden, b_heute, x_stunden, x_heute),
-                beamer, xbox, entfernt_gemeldet))
+                melder.sende_viele(werte_fuer_versand(
+                    mqtt_werte(beamer, xbox, ablauf_datum, ablauf_tage, jetzt,
+                               b_stunden, b_heute, x_stunden, x_heute),
+                    beamer, xbox, entfernt_gemeldet))
+                # Herzschlag am Ende jedes Durchgangs (Entwurf 2.2).
+                HERZ.senden()
+                # Solange ein Nachfassauftrag offen ist, kuerzer warten - sonst
+                # dauerte die Rueckmeldung bis zu einem vollen Takt.
+                naechste_abfrage = time.monotonic() + (TAKT_NACHFASSEN if offen else takt)
+            if ausgefuehrt:
+                naechste_abfrage = min(naechste_abfrage, time.monotonic() + TAKT_NACHFASSEN)
 
             # Die Protokolldatei liegt auf einer Ramdisk. Ohne Kappung frisst
             # sie Arbeitsspeicher, bis nichts mehr geht.
             gemein.log_kappen()
 
-            # Solange ein Auftrag offen ist, kuerzer warten - sonst dauerte
-            # die Rueckmeldung bis zu einem vollen Takt.
-            _warten(TAKT_NACHFASSEN if auftrag else takt)
+            # Warten bis zur naechsten Abfrage - ein neuer Auftrag weckt sofort
+            # (seit 1.3.30, H6: eine Szene beginnt nach hoechstens 1 s statt
+            # bis zu 60 s), der Herzschlag geht spaetestens alle 60 s.
+            _warten(max(0.0, naechste_abfrage - time.monotonic()), wecken=True)
     finally:
         if melder is not None:
+            # Seit 1.3.30 (Entwurf 2.2): status/ok = 0 beim geordneten Ende, vor
+            # service/online = 0 - die Ausfallerkennung meldet sofort.
+            melder.sende("status/ok", 0)
             melder.sende("service/online", 0)
             # Kurz warten, damit die letzte Meldung den Broker noch erreicht -
             # loop_stop() unmittelbar danach wuerde sie sonst verschlucken.

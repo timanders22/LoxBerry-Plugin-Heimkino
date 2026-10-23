@@ -11,6 +11,10 @@
  *   /plugins/heimkino/index.php?token=<TOKEN>&aktion=beamer-aus
  *   /plugins/heimkino/index.php?selftest=1&token=<TOKEN>
  *
+ * Seit 1.3.30 (Gruppe 9 / MQTT): nur mit dem Haken "HTTP-Endpunkt fuer
+ * Loxone annehmen" (endpunkt_ein; neu aus, nach einem Update mit Token an),
+ * sonst 403 GRUND=ENDPUNKT_AUS. Das Musterprojekt schaltet ueber MQTT.
+ *
  * Antwort: Klartext, eine Zeile. HTTP 200 bei Erfolg - auch mit
  * UNVERAENDERT=1, wenn derselbe Sollwert innerhalb von 60 s schon hinausging
  * (dann wird nichts gesendet) -, sonst 400/403/429/500/503.
@@ -78,6 +82,23 @@ function hk_ende($code, $text, $grund = 'ok')
 }
 
 $cfg = hk_config_read();
+
+/* ---------- HTTP-Endpunkt hinter einem eigenen Haken (Gruppe 9, 1.3.30) ----------
+ *
+ * Entscheidung 1 und E3 (ENTSCHEIDUNGEN_GRUPPE9_HEIMKINO.md, Entwurf 3.7): das
+ * Musterprojekt holt Werte und sendet Befehle ueber MQTT (Befehlsbruecke). Dieser
+ * Endpunkt bleibt fuer bestehende Anlagen und Fremdsysteme mit Token, aber nur
+ * mit dem Haken "HTTP-Endpunkt fuer Loxone annehmen" (endpunkt_ein; neu aus,
+ * nach einem Update mit gesetztem Aktionstoken an). Ohne ihn gilt die Sperre fuer
+ * ALLE Aufrufe, auch den Selbsttest - VOR dem Token, nichts wird angelegt. */
+if (!hk_endpunkt_an($cfg)) {
+    if (isset($_GET['selftest']) && is_string($_GET['selftest']) && $_GET['selftest'] === '1') {
+        hk_ende(403, 'SELFTEST;OK=0;ERR=ENDPUNKT_AUS', 'endpunkt_aus');
+    }
+    hk_ende(403, 'FEHLER;OK=0;GRUND=ENDPUNKT_AUS - Reiter Einbindung in Loxone, Haken "HTTP-Endpunkt fuer '
+                 . 'Loxone annehmen".', 'endpunkt_aus');
+}
+
 $soll = hk_cfg($cfg, 'heimkino', 'aktionstoken', '');
 // Ein Feld kann als Feld ankommen (?token[]=x). (string) darauf ergaebe
 // "Array" samt Meldung - erst is_string, dann alles andere.
@@ -139,109 +160,14 @@ if (!hash_equals($soll, $ist)) {
     hk_ende(403, 'Token falsch.', 'token_falsch');
 }
 
-$aktion = (isset($_GET['aktion']) && is_string($_GET['aktion'])) ? $_GET['aktion'] : '';
-$erlaubt = array_keys(hk_aktionen());
-$mit_wert = array_keys(hk_aktionen_mit_wert());
-
-/* Der Mindestabstand fuer die Xbox (C10) steht seit dem Nachtrag vom
- * 01.10.2026 HINTER der Gleichwert-Unterdrueckung, wie bei EVCC: derselbe
- * Wert ist UNVERAENDERT=1, erst ein anderer Wert laeuft in die 10-s-Bremse. */
-
-/* Erst die Aktion und ihren Wert pruefen, dann die Gleichwert-Unterdrueckung
- * (X-7), dann senden. Bis 1.3.17 wurde im selben Zweig geprueft und gesendet. */
-$hk_wert = '';
-if (in_array($aktion, $erlaubt, true)) {
-    $hk_argumente = array($aktion);
-} elseif (in_array($aktion, $mit_wert, true)) {
-    $wert = (isset($_GET['wert']) && is_string($_GET['wert'])) ? $_GET['wert'] : '';
-    // Nur Buchstaben, Ziffern und Unterstrich - alles andere hat in einem
-    // Geraetebefehl nichts zu suchen. Gross- und Kleinschreibung bleibt
-    // dabei ERHALTEN: der Bildmodus filmMaker der LG-Steuerung ist gemischt
-    // geschrieben, und ein Kleinschreiben zerstoerte einen gueltigen Wert.
-    // \z statt $ seit 1.3.15 (C5): "volumeup%0A" bestand das Muster, und der
-    // Zeilenumbruch landete im Geraetebefehl (Befund code 6).
-    if (!preg_match('/^[A-Za-z0-9_]{1,32}\z/', $wert)) {
-        hk_ende(400, 'Der Wert enthaelt unerlaubte Zeichen.', 'wert');
-    }
-    $hk_wert = $wert;
-    $hk_argumente = array($aktion, $wert);
-} else {
-    hk_ende(400, 'Unbekannte Aktion. Erlaubt: '
-                 . implode(', ', array_merge($erlaubt, $mit_wert)), 'unbekannt');
+/* Gruppe 9 (1.3.30): ab hier steht der Rumpf als hk_steuern() in hk_lib.php - DIESELBE Funktion ruft die
+ * Befehlsbruecke (Quelle 'mqtt'). Aktion und Wert, Gleichwert-Unterdrueckung 60 s (X-7), Xbox-Bremse 10 s (C10) und
+ * Merker stehen dort; die Antworten sind byte-gleich die bis 1.3.29. Neu: der Merker endpunkt_zuletzt (wann zuletzt
+ * ein Aufruf mit Token kam - Reiter Test) und BELEGT nach 3 s ohne Gleichwert-Sperre (H15). */
+hk_endpunkt_merken();
+$hk_e = hk_steuern((isset($_GET['aktion']) && is_string($_GET['aktion'])) ? $_GET['aktion'] : '',
+                   (isset($_GET['wert']) && is_string($_GET['wert'])) ? $_GET['wert'] : '', 'http');
+if ($hk_e['retry'] !== null) {
+    header('Retry-After: ' . (int) $hk_e['retry']);
 }
-
-/* Gleichwert-Unterdrueckung (X-7, B-Nachzug 01.10.2026, Entscheidung Nr. 19;
- * Vorbild EVCC 0.9.37 und Marstek 1.1.19). Sollwert-Befehle - Beamer aus,
- * Kino-Szene, Lautstaerke, Eingang, Bildmodus, Energiesparstufe, seit dem
- * Nachtrag auch Bild an/aus, Ton an/aus und Xbox an/aus - gehen mit DEMSELBEN
- * Wert innerhalb von 60 s nicht erneut hinaus: HTTP 200 mit UNVERAENDERT=1,
- * gesendet wird nichts. Tasten, Anwendungen und beamer-wol (Wake-on-LAN ohne
- * Rueckmeldung, Entscheidung Nr. 20) gehen immer hinaus; die Xbox-Bremse
- * bleibt (unten). Kein zusaetzliches 429. Der Merker bleibt waehrend des Befehls
- * gesperrt; laesst er sich nicht oeffnen, faellt es geschlossen aus (503). */
-$hk_gw_schl = hk_gleichwert_schluessel($aktion);
-$hk_gw = null;
-$hk_gw_merker = array();
-if ($hk_gw_schl !== '') {
-    $hk_gw = hk_gleichwert_oeffnen($aktion);
-    if ($hk_gw === false) {
-        hk_ende(503, 'Die Gleichwert-Sperre ist nicht verfuegbar (Datenordner oder Merkerdatei '
-                     . 'fehlt) - es wird nichts gesendet.', 'gleichwert_fehlt');
-    }
-    $hk_gw_merker = hk_gleichwert_lesen($hk_gw);
-    $hk_seit = hk_gleichwert_seit($hk_gw_merker, $hk_gw_schl, hk_gleichwert_wert($aktion, $hk_wert));
-    if ($hk_seit >= 0) {
-        hk_gleichwert_schliessen($hk_gw, null);
-        hk_ende(200, 'UNVERAENDERT=1;AKTION=' . $aktion . ($hk_wert !== '' ? ';WERT=' . $hk_wert : '')
-                     . ';SEIT_S=' . $hk_seit . ' - derselbe Befehl ging vor ' . $hk_seit
-                     . ' s hinaus; es wurde nichts gesendet.', 'unveraendert');
-    }
-}
-
-/* Mindestabstand fuer die Xbox (seit 1.3.15, C10): jeder Aufruf geht an die
- * Microsoft-Cloud, und ein flatternder Ausgang in Loxone loeste bis 1.3.14
- * jede Sekunde einen aus (Befund code 12). 10 s fuer beide Befehle zusammen;
- * sonst 429 mit Grund. Ohne Datenordner faellt die Bremse geschlossen aus.
- * Seit dem Nachtrag 01.10.2026 hinter der Gleichwert-Unterdrueckung. */
-if ($aktion === 'xbox-an' || $aktion === 'xbox-aus') {
-    list($hk_frei, $hk_rest) = hk_xbox_bremse(10);
-    if (!$hk_frei) {
-        if ($hk_gw !== null && $hk_gw !== false) {
-            hk_gleichwert_schliessen($hk_gw, null);
-        }
-        if ($hk_rest < 0) {
-            hk_ende(503, 'Die Befehlsbremse fuer die Xbox ist nicht verfuegbar '
-                         . '(Datenordner fehlt) - es wird nichts gesendet.', 'bremse_fehlt');
-        }
-        header('Retry-After: ' . (int) $hk_rest);
-        hk_ende(429, 'Zu schnell: xbox-an und xbox-aus hoechstens alle 10 s. Noch '
-                     . (int) $hk_rest . ' s warten - der Befehl wurde nicht gesendet.', 'bremse');
-    }
-}
-
-list($code, $ausgabe) = hk_cmd($hk_argumente);
-
-/* Merker nachfuehren. Taste und Anwendung sperren erst jetzt - sie werden nie
- * unterdrueckt; laesst sich der Merker dann nicht oeffnen, bleibt es still,
- * denn ohne Merker fallen die Sollwerte ohnehin geschlossen aus. */
-if ($hk_gw === null && hk_gleichwert_betrifft($aktion)) {
-    $hk_gw = hk_gleichwert_oeffnen();
-    $hk_gw_merker = $hk_gw === false ? array() : hk_gleichwert_lesen($hk_gw);
-}
-if ($hk_gw !== null && $hk_gw !== false) {
-    hk_gleichwert_schliessen($hk_gw, hk_gleichwert_nachher($hk_gw_merker, $aktion, $hk_wert, $code === 0));
-}
-/* Die Kino-Szene schaltet auch die Xbox: danach verfaellt deren Merker
- * (Nachtrag). Laesst er sich nicht oeffnen, bleibt es still - ohne Merker
- * faellt die Xbox ohnehin geschlossen aus. */
-if ($aktion === 'kino-an' || $aktion === 'kino-aus') {
-    $hk_gx = hk_gleichwert_oeffnen('xbox-an');
-    if ($hk_gx !== false) {
-        hk_gleichwert_schliessen($hk_gx, array());
-    }
-}
-
-if ($code === 0) {
-    hk_ende(200, trim($ausgabe) !== '' ? trim($ausgabe) : 'OK', 'ausgefuehrt');
-}
-hk_ende(500, trim($ausgabe) !== '' ? trim($ausgabe) : 'Fehler', 'fehlgeschlagen');
+hk_ende($hk_e['code'], $hk_e['text'], $hk_e['grund']);

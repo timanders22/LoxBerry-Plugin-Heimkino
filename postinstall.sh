@@ -3,30 +3,81 @@
 COMMAND=$0
 PTEMPDIR=$1
 PSHNAME=$2
-PDIR=$3
 PVERSION=$4
 
-PLOG=$LBPLOG/$PDIR
-PCONFIG=$LBPCONFIG/$PDIR
+# ---- Wurzelblock (H1, seit 1.3.30; in preinstall, postinstall, preupgrade und postupgrade woertlich gleich) ----
+# Bauform Matter2Lox 0.9.44 (Wurzelblock M3), Alexa NG 1.0.6 und Intercom 2.2.23. Ordner aus $3 mit Schranke
+# ('' . .. und alles mit / oder ..); Wurzel aus $5, sonst LBHOMEDIR, sonst vom Ablageort aufwaerts gesucht
+# (Regeln/06). Eine Wurzel gilt nur mit config/plugins, data/plugins UND config/system/general.json - ein Rest alter
+# Prueflaeufe hat die dritte nie. Bis 1.3.29 setzte postinstall.sh $LBPLOG/$LBPCONFIG/$LBPBIN/$LBPDATA ohne
+# Rueckfall (mit leerer Umgebung: mkdir -p /heimkino), preupgrade und postupgrade nahmen BASE=${5:-$LBHOMEDIR}
+# ohne Pruefung (Pruefbericht H1, mit env -i gemessen).
+# hk_wurzel setzt PFOLDER und BASE; Rueckgabe 0 = erkannt, 1 = Ordnername unzulaessig, 2 = keine LoxBerry-Wurzel.
+hk_ist_wurzel() {
+    [ -n "$1" ] && [ -d "$1/config/plugins" ] && [ -d "$1/data/plugins" ] && [ -f "$1/config/system/general.json" ]
+}
+hk_wurzel_suchen() {
+    v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd)
+    i=0
+    while [ -n "$v" ] && [ "$v" != "/" ] && [ $i -lt 8 ]; do
+        if hk_ist_wurzel "$v"; then printf '%s\n' "$v"; return 0; fi
+        v=$(dirname "$v"); i=$((i + 1))
+    done
+    return 1
+}
+hk_wurzel() {
+    PFOLDER="${1:-heimkino}"
+    case "$PFOLDER" in
+        ''|.|..|*/*|*..*) return 1 ;;
+    esac
+    BASE=""
+    for HK_K in "$2" "$LBHOMEDIR"; do
+        if hk_ist_wurzel "$HK_K"; then BASE="$HK_K"; break; fi
+    done
+    [ -n "$BASE" ] || BASE=$(hk_wurzel_suchen)
+    [ -n "$BASE" ] || return 2
+    return 0
+}
+# ---- Ende Wurzelblock ----
+hk_wurzel "$3" "$5"
+case $? in
+    1) echo "<FAIL> Unzulaessiger Ordnername '$PFOLDER' - es wurde nichts angelegt; das Plugin ist nicht lauffaehig."
+       exit 1 ;;
+    2) echo "<FAIL> Der LoxBerry-Wurzelordner liess sich nicht bestimmen."
+       echo "<FAIL> Ohne ihn wuerden Ordner im Wurzelverzeichnis des Systems"
+       echo "<FAIL> angelegt. Es wurde nichts angelegt; das Plugin ist nicht lauffaehig."
+       exit 1 ;;
+esac
+PDIR=$PFOLDER
+# Alle Pfade aus BASE/PFOLDER (H1, seit 1.3.30) - bis 1.3.29 aus $LBPLOG, $LBPCONFIG, $LBPBIN, $LBPDATA.
+PLOG="$BASE/log/plugins/$PFOLDER"
+PCONFIG="$BASE/config/plugins/$PFOLDER"
+PBIN="$BASE/bin/plugins/$PFOLDER"
+PDATA="$BASE/data/plugins/$PFOLDER"
 
-mkdir -p $PLOG
-touch $PLOG/$PSHNAME.log
-chown loxberry:loxberry $PLOG/$PSHNAME.log
+mkdir -p "$PLOG"
+touch "$PLOG/$PSHNAME.log"
+chown loxberry:loxberry "$PLOG/$PSHNAME.log"
 
-chmod 755 "$LBPBIN/$PDIR"/*.py 2>/dev/null
+chmod 755 "$PBIN"/*.py 2>/dev/null
 # dienst.sh wird vom Daemon, von der Oberflaeche UND vom minuetlichen
 # Waechter aufgerufen. Ohne Ausfuehrungsrecht schluege der Waechter jede
-# Minute lautlos fehl.
-chmod 755 "$LBPBIN/$PDIR/dienst.sh" 2>/dev/null
+# Minute lautlos fehl. Seit 1.3.30 ebenso befehlsbruecke.sh (Waechter der Befehlsbruecke).
+chmod 755 "$PBIN/dienst.sh" "$PBIN/befehlsbruecke.sh" 2>/dev/null
 # Die beiden Datendateien sind nur zum Lesen da - sie tragen die Vorgaben
 # und die MQTT-Themen fuer BEIDE Sprachen, Python wie PHP.
-chmod 644 "$LBPBIN/$PDIR/hk_vorgaben.json" "$LBPBIN/$PDIR/hk_themen.json" 2>/dev/null
+chmod 644 "$PBIN/hk_vorgaben.json" "$PBIN/hk_themen.json" 2>/dev/null
 
 # data/plugins/<ordner> traegt seit 1.2.12 die PID-Datei und den Sollmerker
 # des Waechters. Bis 1.2.11 lag die PID-Datei unter log/plugins - also auf
 # einer Ramdisk, die bei jedem Neustart leer ist.
-mkdir -p "$LBPDATA/$PDIR" 2>/dev/null
-chown loxberry:loxberry "$LBPDATA/$PDIR" 2>/dev/null
+mkdir -p "$PDATA" 2>/dev/null
+chown loxberry:loxberry "$PDATA" 2>/dev/null
+# Seit 1.3.30 (Entwurf 3.9): die Auftragswarteschlange des Dienstes (Befehle ueber MQTT, Szenen,
+# Nachfassen); der Dienst legt sie beim Start ebenso an.
+mkdir -p "$PDATA/auftraege" 2>/dev/null
+chown loxberry:loxberry "$PDATA/auftraege" 2>/dev/null
+chmod 750 "$PDATA/auftraege" 2>/dev/null
 
 # Die Konfiguration enthaelt nach dem Einrichten den Keycode des Beamers und
 # das Aktionstoken: 0600 seit 1.3.15 (C9; Regeln/05, Ultraschall 1.2.6 - drei
@@ -74,8 +125,9 @@ fi
 #
 # Eine gueltige Konfiguration wird NIE ueberschrieben. Eine Sicherung, die
 # echte Einstellungen ersetzt, waere schlimmer als gar keine.
-NETZ_BASE="${5:-$LBHOMEDIR}"
-NETZ_PDIR="${3:-heimkino}"
+# Seit 1.3.30 (H1) aus dem Wurzelblock oben.
+NETZ_BASE="$BASE"
+NETZ_PDIR="$PFOLDER"
 NETZ_CFG="$NETZ_BASE/config/plugins/$NETZ_PDIR"
 # Vier Lagen werden unterschieden, nicht zwei:
 #   fehlt / leer                    -> verloren
@@ -130,10 +182,13 @@ for k in ("refresh_token", "client_id"):
         sys.exit(0)
 sys.exit(1)' "$1" 2>/dev/null
             hk_rc=$?
+            # H3 (1.3.30): ein python3, das abbricht (Rueckgabe 2, 137 ...), heisst "nicht heil" - bis 1.3.29
+            # galt die Datei dann als heil und verdraengte eine heile Zweitschrift. Nur ein FEHLENDES python3
+            # (command -v oben) laesst eine JSON-Datei weiter als heil gelten.
             case $hk_rc in
                 0) return 0 ;;
                 1) return 1 ;;
-                *) return 0 ;;
+                *) return 1 ;;
             esac
             ;;
     esac
@@ -169,7 +224,8 @@ netz_zurueck() {   # $1 Datei, $2 Art (cfg|json), $3 Rechte, $4 Pruefsumme der V
             echo "<WARNING> $ziel.kaputt daneben."
         fi
     fi
-    if cp -p "$zweit" "$ziel" 2>/dev/null; then
+    # H2 (1.3.30): die Wirkung pruefen, nicht den Rueckgabewert allein.
+    if cp -p "$zweit" "$ziel" 2>/dev/null && cmp -s "$zweit" "$ziel"; then
         chmod "$rechte" "$ziel" 2>/dev/null
         echo "<OK> $datei aus der Zweitschrift wiederhergestellt."
     else
@@ -178,7 +234,9 @@ netz_zurueck() {   # $1 Datei, $2 Art (cfg|json), $3 Rechte, $4 Pruefsumme der V
     fi
 }
 # Die Pruefsumme ist die der MITGELIEFERTEN config/heimkino.cfg. Sie wird
-# beim Anheben der Fassung nachgezogen, wenn sich die Vorgabedatei aendert.
+# beim Anheben der Fassung nachgezogen, wenn sich die Vorgabedatei aendert -
+# zuletzt 1.3.30 (H12: die 8 fehlenden Schluessel und die drei Haken der
+# Umstellung, im selben Bau).
 #
 # Nur bei einer Aktualisierung (Entscheidung Nr. 1, Nachtrag Heimkino-C,
 # 02.10.2026): die Marke data/plugins/<ordner>.upgrade_laeuft aus
@@ -190,7 +248,7 @@ netz_zurueck() {   # $1 Datei, $2 Art (cfg|json), $3 Rechte, $4 Pruefsumme der V
 # VolkswagenID 0.9.27.
 if [ -f "$NETZ_BASE/data/plugins/$NETZ_PDIR.upgrade_laeuft" ]; then
     netz_zurueck "heimkino.cfg" cfg 0600 \
-        "279a0e0f89591b0823f655ac9cafcc366d177d056035cfa066edd163db4701d0"
+        "83b9231a6f6f042acafc946f2cf382aca933b84a58b334bf4c2ac9cec40f62ec"
     # xbox_auth.json liefert das Archiv nie mit - es gibt also keine Vorgabe,
     # mit der man vergleichen koennte. Der leere vierte Wert sagt das aus.
     netz_zurueck "xbox_auth.json" json 0600 ""

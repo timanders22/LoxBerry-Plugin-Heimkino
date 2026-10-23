@@ -211,12 +211,18 @@ CFG="$PCONFIG/heimkino.cfg"
 # Ohne flock (kein util-linux) bleibt es beim Verhalten bis 1.3.18.
 # Bauart: Bewaesserung 0.9.35, Sprachsteuerung 0.11.13 (startsperre_nehmen).
 HK_SPERRE_GEHALTEN=0
+# H4 (1.3.30, Pruefbericht; Hausform Matter2Lox 0.9.44 dienst.sh :254-266, Chromecast 1.3.24): die Sperre liegt
+# auf einer eigenen Datei NEBEN dem Datenordner, nicht mehr auf $0. Ein Update ersetzt dienst.sh (neuer Inode),
+# und zwei Inodes heben die gegenseitige Sperre auf (gemessen: B bekam die Sperre sofort, waehrend A sie auf der
+# alten Datei hielt). Laesst sich die Datei nicht anlegen, geht es wie bisher ohne Sperre weiter; die
+# Deinstallation raeumt sie ab.
+STARTSPERRE="$LBHOMEDIR/data/plugins/$PNAME.startsperre"
 startsperre_nehmen() {
     [ "$HK_SPERRE_GEHALTEN" = "1" ] && return 0
     command -v flock >/dev/null 2>&1 || return 0
-    HK_SPERRDATEI=$(readlink -f "$0" 2>/dev/null)
-    [ -n "$HK_SPERRDATEI" ] && [ -r "$HK_SPERRDATEI" ] || return 0
-    exec 8<"$HK_SPERRDATEI"
+    touch "$STARTSPERRE" 2>/dev/null
+    [ -f "$STARTSPERRE" ] && [ -w "$STARTSPERRE" ] || return 0
+    { exec 8<>"$STARTSPERRE"; } 2>/dev/null || return 0
     if flock -w 15 8; then
         HK_SPERRE_GEHALTEN=1
         return 0
@@ -349,7 +355,10 @@ starten() {
     vollzug_erlaubt || return 1
     if ! startsperre_nehmen; then
         echo "Ein anderer Start dieses Plugins laeuft seit ueber 15 Sekunden - jetzt wird nichts gestartet."
-        return 0
+        # H5 (1.3.30, mit E1): 4 statt 0 - "nichts gestartet" ist kein Erfolg. Der Fall start) unten wertet 4 NICHT
+        # als Fehlstart (sonst bestrafte der Waechter eine belegte Sperre mit 60/300/900 s Rueckstau); Waechter
+        # und restart nehmen die Sperre vorher selbst und erreichen diese Zeile nie.
+        return 4
     fi
     # Auch eine Waise ohne PID-Datei zaehlt als laufender Dienst - sonst
     # liefen danach zwei (seit 1.3.14, siehe dienste()).
@@ -513,7 +522,10 @@ case "$1" in
     start)
         # Scheitert der Start bei liegendem Merker (der Dienst lief schon
         # einmal), holt der Waechter ihn mit steigendem Abstand nach.
-        starten || { [ -f "$SOLL" ] && fehlstart_merken; exit 1; }
+        # Rueckgabe 4 (Startsperre belegt, H5/E1): kein Fehlstart.
+        starten; hk_rc=$?
+        [ "$hk_rc" = 4 ] && exit 4
+        [ "$hk_rc" = 0 ] || { [ -f "$SOLL" ] && fehlstart_merken; exit 1; }
         ;;
     stop)    anhalten ;;
     restart)

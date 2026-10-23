@@ -123,7 +123,10 @@ function hk_test_zeilen($cfg, $voll = true)
 
     // --- Antwortet der eigene Endpunkt? Der echte Aufruf auf 127.0.0.1 -
     // nur er findet die getrennten Baeume, die keine Leseprobe sieht.
-    if (!$voll) {
+    if (!hk_endpunkt_an($cfg)) {
+        // Gruppe 9 (1.3.30, Entwurf 3.7): der Endpunkt ist aus - gewollt, kein Befund.
+        $zeilen[] = array(2, hk_t('PRUEF.ENDPUNKT'), hk_t('BEFEHL.T_ENDPUNKT_AUS'));
+    } elseif (!$voll) {
         $zeilen[] = array(2, hk_t('PRUEF.ENDPUNKT'), $nur_test);
     } else {
         list($zu, $tx) = hk_endpunkt_probe($cfg);
@@ -199,6 +202,40 @@ function hk_test_zeilen($cfg, $voll = true)
         : ($zu === 2 ? hk_t('PRUEF.NICHT_MESSBAR')
                      : hk_tf('PRUEF.VORLAGEN_KAPUTT', array('%1' => $tx))));
 
+    // --- Gruppe 9 / MQTT (1.3.30, Entwurf 3.9): Befehlsbruecke, Praefixgrenze, Auswahlwerte, Warteschlange,
+    // HTTP-Endpunkt, Herzschlag, Namenstabelle, Abo-Datei. Alle lesen nur; was einen Prozess startet, nur bei
+    // offenem Reiter Test.
+    list($zu, $tx) = hk_pruef_bruecke($cfg);
+    $zeilen[] = array($zu, hk_t('BEFEHL.T_FRAGE_BRUECKE'), $tx);
+    if (!$voll) {
+        $zeilen[] = array(2, hk_t('BEFEHL.T_FRAGE_EINRICHTUNG'), $nur_test);
+    } else {
+        list($zu, $tx) = hk_pruef_bruecke_einrichtung($cfg);
+        $zeilen[] = array($zu, hk_t('BEFEHL.T_FRAGE_EINRICHTUNG'), $tx);
+    }
+    list($zu, $tx) = hk_pruef_praefix($cfg);
+    $zeilen[] = array($zu, hk_t('BEFEHL.T_FRAGE_PRAEFIX'), $tx);
+    if (!$voll) {
+        $zeilen[] = array(2, hk_t('BEFEHL.T_FRAGE_AUSWAHL'), $nur_test);
+    } else {
+        list($zu, $tx) = hk_pruef_auswahl();
+        $zeilen[] = array($zu, hk_t('BEFEHL.T_FRAGE_AUSWAHL'), $tx);
+    }
+    list($zu, $tx) = hk_pruef_warteschlange();
+    $zeilen[] = array($zu, hk_t('BEFEHL.T_FRAGE_WS'), $tx);
+    list($zu, $tx) = hk_pruef_endpunkt_ein($cfg);
+    $zeilen[] = array($zu, hk_t('BEFEHL.T_FRAGE_ENDPUNKT'), $tx);
+    list($zu, $tx) = hk_pruef_herzschlag();
+    $zeilen[] = array($zu, hk_t('BEFEHL.T_FRAGE_HERZ'), $tx);
+    if (!$voll) {
+        $zeilen[] = array(2, hk_t('BEFEHL.T_FRAGE_NAMEN'), $nur_test);
+    } else {
+        list($zu, $tx) = hk_pruef_namen();
+        $zeilen[] = array($zu, hk_t('BEFEHL.T_FRAGE_NAMEN'), $tx);
+    }
+    list($zu, $tx) = hk_pruef_abo($cfg);
+    $zeilen[] = array($zu, hk_t('BEFEHL.T_FRAGE_ABO'), $tx);
+
     // --- Wertebereich der Vorlage (seit 1.3.24, Regeln/03): liegt jeder
     // Wert, den der Dienst senden kann, in [MinVal, MaxVal], und bekommt ein
     // digitaler Eingang nur 0/1? Startet einen Python-Prozess, deshalb nur
@@ -247,10 +284,13 @@ function hk_test_zeilen($cfg, $voll = true)
     } elseif (!hk_an($cfg, 'szene', 'aktiv') || !hk_an($cfg, 'heimkino', 'mqtt')) {
         $zeilen[] = array(0, hk_t('PRUEF.HAUS'), hk_t('PRUEF.HAUS_WIRKUNGSLOS'));
     } elseif (isset($hs['wert']) && in_array((string) $hs['wert'], array('0', '1'), true)) {
+        // V2 (1.3.30): dazu, wann das Kinoende zuletzt erkannt wurde (Beamer ging aus, ohne Szene).
         $zeilen[] = array(1, hk_t('PRUEF.HAUS'), hk_tf('PRUEF.HAUS_ZULETZT', array(
             '%1' => (string) $hs['wert'],
             '%2' => !empty($hs['zeit']) ? date('d.m.Y H:i:s', (int) $hs['zeit'])
-                                        : hk_t('PRUEF.HAUS_VOR_START'))));
+                                        : hk_t('PRUEF.HAUS_VOR_START')))
+            . (!empty($hs['ende']) ? ' ' . hk_tf('PRUEF.HAUS_ENDE', array('%1' => date('d.m.Y H:i:s', (int) $hs['ende'])))
+                                   : ''));
     } else {
         $zeilen[] = array(2, hk_t('PRUEF.HAUS'), hk_t('PRUEF.HAUS_NOCH_NICHT'));
     }

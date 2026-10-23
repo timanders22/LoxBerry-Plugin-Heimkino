@@ -59,13 +59,20 @@ function hk_paths()
      * des Benutzers loxberry); ohne Wurzel wurden die Pfade ab "/"
      * zusammengesetzt (/config/plugins/heimkino/... - Muster 1 und 2 der
      * Nachlese, in WSL gemessen, Pruefung-Heimkino-1.3.14, Fall O3). */
-    $ordner = 'heimkino';
+    /* H13 (1.3.30, Pruefbericht Fremdbefunde, E2): der Ordnername ist der der eigenen Ablage, wenn diese Datei unter
+     * .../htmlauth/plugins/<ordner>/ liegt; im Zweig "ausdruecklich" der aus $LBPPLUGINDIR; "heimkino" nur noch als
+     * Rueckfall fuer das ausgepackte Archiv. Bis 1.3.29 stand hier fest 'heimkino' - unter plugins/heimkino01 lief
+     * die Oberflaeche dann im Archivmodus (in WSL gemessen), und bin/hk_common.py zeigte mit LBPPLUGINDIR auf die
+     * Konfiguration eines fremden gleichnamigen Plugins. Dieselbe Regel steht in hk_common.ORDNER (H8). */
+    $lbp = basename(rtrim((string) getenv('LBPPLUGINDIR'), '/'));
+    $eigen = basename(dirname(__DIR__)) === 'plugins' ? basename(__DIR__) : '';
+    $ordner = $eigen !== '' ? $eigen : 'heimkino';
     $home = rtrim((string) getenv('LBHOMEDIR'), '/');
     if ($home === '' || !is_dir($home . '/config/plugins') || !is_dir($home . '/data/plugins')) {
         $home = lb_wurzel_ermitteln();
     }
     /* Archivmodus (seit 1.3.14). Die Anlage gilt nur, wenn diese Bibliothek
-     * dort installiert liegt (<Wurzel>/webfrontend/htmlauth/plugins/heimkino,
+     * dort installiert liegt (<Wurzel>/webfrontend/htmlauth/plugins/<ordner>,
      * physisch verglichen) oder der Aufrufer Wurzel UND Ordner ausdruecklich
      * nennt ($LBHOMEDIR und $LBPPLUGINDIR - so arbeiten die Pruefwerkzeuge
      * mit ihrer Attrappe). Bis 1.3.13 nahm ein Archiv oder eine Kopie unter
@@ -75,12 +82,14 @@ function hk_paths()
     if ($home !== '') {
         $soll = @realpath($home . '/webfrontend/htmlauth/plugins/' . $ordner);
         $ist = @realpath(__DIR__);
-        $installiert = ($soll !== false && $ist !== false && $soll === $ist);
-        $lbp = basename(rtrim((string) getenv('LBPPLUGINDIR'), '/'));
+        $installiert = ($eigen !== '' && $soll !== false && $ist !== false && $soll === $ist);
         $umgebung = (string) getenv('LBHOMEDIR');
         $ausdruecklich = ($lbp !== '' && !in_array($lbp, array('.', '/', 'bin', 'html', 'plugins'), true)
             && $umgebung !== '' && @realpath($umgebung) !== false
             && @realpath($umgebung) === @realpath($home));
+        if (!$installiert && $ausdruecklich) {
+            $ordner = $lbp;
+        }
         if (!$installiert && !$ausdruecklich) {
             $archiv = $home;
             $home = '';
@@ -141,6 +150,13 @@ function hk_paths()
         'gleichwert' => $basis . '/data/plugins/' . $ordner . '/befehl_gleichwert.json',
         // Eigener Merker der Xbox (Nachtrag): ihr Cloud-Befehl haelt die Sperre bis 90 s.
         'gleichwert_xbox' => $basis . '/data/plugins/' . $ordner . '/befehl_gleichwert_xbox.json',
+        // Gruppe 9 (1.3.30, Entwurf 3.4/3.5, E4): Auftragswarteschlange fuer den Dienst - MQTT-Befehle, Szenen
+        // (HTTP und MQTT) und Nachfassen; je Auftrag eine Datei <sek10><usek6>_<hex8>.json.
+        'auftraege' => $basis . '/data/plugins/' . $ordner . '/auftraege',
+        // Gruppe 9 (Entwurf 3.7): wann zuletzt ein schaltender Aufruf mit Token kam (nur die Zeit).
+        'endpunkt_zuletzt' => $basis . '/data/plugins/' . $ordner . '/endpunkt_zuletzt',
+        // Gruppe 9 (Entwurf 2.4, E8): die Abo-Datei des MQTT-Gateways, gepflegt vom Dienst ("<praefix>/#").
+        'abo'      => $basis . '/config/plugins/' . $ordner . '/mqtt_subscriptions.cfg',
         'cron'     => $home !== '' ? $home . '/system/cron' : '',
     );
     return $p;
@@ -329,8 +345,9 @@ function hk_config_fremde_namen()
 }
 
 /**
- * Traegt eine .cfg Inhalt? Lesbar, Abschnitt [heimkino] und ein Aktionstoken
- * (Merkwort, Regeln/05 "Die Selbstheilung entscheidet nach Inhalt").
+ * Traegt eine .cfg Inhalt? Lesbar, Abschnitt [heimkino] und ein Anwenderfeld
+ * (keycode, ip, mac, geraete_id) - seit 1.3.30 derselbe Begriff wie hk_inhalt der
+ * Hakenskripte (H14; Regeln/05 "Die Selbstheilung entscheidet nach Inhalt").
  */
 function hk_cfg_hat_inhalt($datei)
 {
@@ -338,9 +355,12 @@ function hk_cfg_hat_inhalt($datei)
         return false;
     }
     $g = @parse_ini_file($datei, true, INI_SCANNER_RAW);
+    // H14 (1.3.30): derselbe Inhaltsbegriff wie hk_inhalt der Hakenskripte (seit 1.3.15, I4) - Abschnitt
+    // [heimkino] UND ein Anwenderfeld (keycode, ip, mac, geraete_id). Das Aktionstoken zaehlt nicht mehr: es
+    // entsteht beim ersten Oeffnen von selbst. Bis 1.3.29 verlangte diese Stelle das Token, und eine Zweitschrift
+    // mit Feldern, aber ohne Token heilte nicht (Pruefbericht H14, Fall a).
     return is_array($g) && isset($g['heimkino']) && is_array($g['heimkino'])
-        && isset($g['heimkino']['aktionstoken'])
-        && trim((string) $g['heimkino']['aktionstoken']) !== '';
+        && hk_cfg_felder_zahl(@file_get_contents($datei)) > 0;
 }
 
 /** Was hk_config_heilen() in DIESEM Aufruf festgestellt hat (Regeln/05: den
@@ -374,11 +394,30 @@ function hk_heilung_lage($setzen = null)
  */
 function hk_config_heilen()
 {
-    if (hk_config_lage() !== 'kaputt') {
-        return array('nichts', '');
-    }
+    $lage = hk_config_lage();
     $p = hk_paths();
     $datei = $p['config'];
+    /* E5 (1.3.30, Pruefbericht H14/E5): auch eine FEHLENDE Datei und die Paketvorlage (kein Anwenderfeld, kein
+     * Aktionstoken - so sieht sie zwischen dem Kopierschritt des Installers und postinstall aus) heilen, wenn die
+     * Zweitschrift Inhalt traegt. Bis 1.3.29 heilte nur "kaputt": der erste Seitenaufruf wuerfelte dann ein neues
+     * Token, schrieb die Vorgaben und zog die leere Datei als Zweitschrift nach - Keycode, MAC, Xbox-Kennung und
+     * das alte Token waren weg (unter 7.4/8.4/8.5 gemessen). Geschrieben wird nur die Zweitschrift selbst. */
+    if ($lage === 'fehlt' || ($lage === 'ok' && hk_cfg_ist_vorlage($datei))) {
+        if (!hk_cfg_hat_inhalt($p['zweit'])) {
+            return array('nichts', '');
+        }
+        $inhalt = @file_get_contents($p['zweit']);
+        if ($inhalt === false || !hk_datei_ersetzen($datei, $inhalt, 0600)) {
+            return array(hk_heilung_lage('fehler'), $datei);
+        }
+        hk_log_gebremst('cfg_geheilt_leer', 'Konfiguration ' . $datei . ($lage === 'fehlt' ? ' fehlte'
+            : ' trug weder ein Anwenderfeld noch ein Aktionstoken (Paketvorlage)') . '; sie wurde aus der '
+            . 'Zweitschrift ' . basename($p['zweit']) . ' wiederhergestellt.', 'WARNING', 0);
+        return array(hk_heilung_lage('geheilt_leer'), $datei);
+    }
+    if ($lage !== 'kaputt') {
+        return array('nichts', '');
+    }
     if (!hk_cfg_hat_inhalt($p['zweit'])) {
         hk_log_gebremst('cfg_kaputt_ohne', 'Konfiguration ' . $datei . ' ist beschaedigt '
             . '(nicht lesbar), und es gibt keine heile Zweitschrift. Es wird nichts '
@@ -550,8 +589,13 @@ function hk_config_write($cfg)
     // Die Zweitschrift zieht mit - aber nur ein Stand MIT Aktionstoken
     // (Regeln/05: "Eine Wache ueberschreibt die Zweitschrift nur, wenn
     // wirklich eine Konfiguration mit Token gespeichert wird").
-    if (trim((string) hk_cfg($cfg, 'heimkino', 'aktionstoken', '')) !== '') {
-        @hk_datei_ersetzen(hk_paths()['zweit'], $t, 0600);
+    // H14 (1.3.30): und nur, wenn der neue Stand mindestens so viele Anwenderfelder (keycode ip mac geraete_id)
+    // traegt wie die vorhandene Zweitschrift - dieselbe Zaehlung wie hk_felder in den Hakenskripten. Bis 1.3.29
+    // ersetzte ein Stand ohne Felder (fehlende cfg, Paketvorlage) die einzige heile Zweitschrift.
+    $zweit = hk_paths()['zweit'];
+    if (trim((string) hk_cfg($cfg, 'heimkino', 'aktionstoken', '')) !== ''
+        && (!is_file($zweit) || hk_cfg_felder_zahl($t) >= hk_cfg_felder_zahl(@file_get_contents($zweit)))) {
+        @hk_datei_ersetzen($zweit, $t, 0600);
     }
     return true;
 }
@@ -1110,44 +1154,6 @@ function hk_hostname()
     return $eigen ? $eigen : 'loxberry';
 }
 
-function hk_xml_virtual_in_http($kopf, $cmds)
-{
-    $crlf = "\r\n";
-    $o = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
-    $o .= '<VirtualInHttp HintText="" ';
-    $o .= 'Title="' . hk_x($kopf['title']) . '" ';
-    $o .= 'Comment="' . hk_x(isset($kopf['comment']) ? $kopf['comment'] : '') . '" ';
-    $o .= 'Address="' . hk_x(isset($kopf['address']) ? $kopf['address'] : '') . '" ';
-    $o .= 'PollingTime="' . hk_x(isset($kopf['polling']) ? $kopf['polling'] : '60') . '"';
-    $o .= '>' . $crlf;
-    $o .= "\t" . '<Info templateType="2" minVersion="17010727"/>' . $crlf;
-    foreach ($cmds as $c) {
-        $o .= "\t" . '<VirtualInHttpCmd ';
-        $o .= 'Title="' . hk_x($c['title']) . '" ';
-        $o .= 'Comment="' . hk_x(isset($c['comment']) ? $c['comment'] : '') . '" ';
-        $o .= 'Check="' . hk_x(isset($c['check']) ? $c['check'] : ' ') . '" ';
-        $o .= 'Signed="true" ';
-        $o .= 'Analog="' . ($c['analog'] ? 'true' : 'false') . '" ';
-        $o .= 'SourceValLow="0" ';
-        $o .= 'DestValLow="0" ';
-        $o .= 'SourceValHigh="100" ';
-        $o .= 'DestValHigh="100" ';
-        $o .= 'DefVal="0" ';
-        // Grenzen NICHT pauschal auf +-2147483647: Loxone zieht daraus die
-        // Reglergrenzen und die Plausibilitaetspruefung. Und ein Feld, das
-        // negativ werden kann (Tage bis zum Ablauf), braucht ein negatives
-        // MinVal - sonst steht in der Visualisierung 0, und 0 heisst dort
-        // "heute" statt "abgelaufen".
-        $o .= 'MinVal="' . (int) $c['min'] . '" ';
-        $o .= 'MaxVal="' . (int) $c['max'] . '" ';
-        $o .= 'Unit="' . hk_x($c['unit']) . '" ';
-        $o .= 'HintText=""';
-        $o .= '/>' . $crlf;
-    }
-    $o .= '</VirtualInHttp>' . $crlf;
-    return $o;
-}
-
 /**
  * Name des virtuellen Eingangs, den das MQTT-Gateway fuer ein Thema bildet.
  *
@@ -1160,36 +1166,6 @@ function hk_xml_virtual_in_http($kopf, $cmds)
 function hk_vi_name($praefix, $thema)
 {
     return str_replace('/', '_', (string) $praefix . '/' . (string) $thema);
-}
-
-/** Vorlage der Statuseingaenge. Rueckgabe: array(dateiname, inhalt) */
-function hk_vorlage($cfg)
-{
-    $praefix = hk_cfg($cfg, 'heimkino', 'themenpraefix', 'heimkino');
-    $cmds = array();
-    foreach (hk_themen() as $thema => $e) {
-        // Textthemen bleiben draussen. Das nachgebaute Format ist nur fuer
-        // ZAHLENwerte belegt; bis 1.2.11 landeten last_error, beamer/status,
-        // beamer/app, xbox/status und das Ablaufdatum mit Analog="true" und
-        // Zahlengrenzen in der Datei.
-        if ($e['art'] === 'text') { continue; }
-        $cmds[] = array(
-            'title'   => hk_vi_name($praefix, $thema),
-            'comment' => $e['kurz'],
-            'check'   => ' ',
-            'analog'  => ($e['art'] === 'analog'),
-            'min'     => $e['min'],
-            'max'     => $e['max'],
-            'unit'    => $e['einheit'] !== '' ? $e['einheit'] : '<v.1>',
-        );
-    }
-    $n = hk_vorlagen_namen();
-    return array($n['vi'][0], hk_xml_virtual_in_http(array(
-        'title'   => $n['vi'][1],
-        'address' => 'http://' . hk_hostname(),
-        'polling' => '604800',
-        'comment' => hk_tf('LOX.VORLAGE_KOMMENTAR', array('%1' => date('d.m.Y'))),
-    ), $cmds));
 }
 
 /** Vorlage der Steuerbefehle (Virtueller Ausgang). */
@@ -1227,10 +1203,13 @@ function hk_vo_vorlage($cfg)
  */
 function hk_vorlagen_namen()
 {
+    // Gruppe 9 (1.3.30, E8): die Eingangsvorlage VI_Heimkino.xml (VirtualInHttp mit Scheinadresse und
+    // polling 604800 - der Kunstgriff, den der Hausstandard fuer Gateway-Werte ausschliesst) entfaellt; die Werte
+    // kommen als Virtuelle Eingaenge ueber das MQTT-Gateway (Namenstabelle). Neu die Vorlage der MQTT-Befehle.
     return array(
-        'vi' => array('VI_Heimkino.xml', 'Heimkino (LoxBerry-Plugin)'),
         'vo' => array('VQ_Heimkino.xml', 'Heimkino steuern (LoxBerry-Plugin)'),
         'bt' => array('VQ_Heimkino_Bild_und_Ton.xml', 'Heimkino Bild und Ton (LoxBerry-Plugin)'),
+        'mqtt' => array('VQ_Heimkino_MQTT.xml', 'Heimkino Befehle (MQTT)'),
     );
 }
 
@@ -1769,7 +1748,7 @@ function hk_vorlagen_probe($cfg)
         return array(2, '0');
     }
     $zahl = 0;
-    foreach (array(hk_vorlage($cfg), hk_vo_vorlage($cfg), hk_bt_vorlage($cfg)) as $paar) {
+    foreach (array(hk_vo_vorlage($cfg), hk_bt_vorlage($cfg), hk_vorlage_mqtt_out($cfg)) as $paar) {
         $zahl++;
         $vorher = libxml_use_internal_errors(true);
         $ok = simplexml_load_string($paar[1]);
@@ -2128,6 +2107,10 @@ function hk_wert_pruefen($abschnitt, $schluessel, $wert)
         case 'heimkino.enabled':
         case 'heimkino.mqtt':
         case 'heimkino.nachfassen':
+        // Gruppe 9 (1.3.30): HTTP-Endpunkt und die beiden Haken der Befehlsbruecke, je 0/1.
+        case 'heimkino.endpunkt_ein':
+        case 'heimkino.befehle_mqtt_ein':
+        case 'heimkino.befehle_mqtt_steuern':
         case 'beamer.aktiv':
         case 'beamer.zusatzwerte':
         case 'xbox.aktiv':
@@ -2193,7 +2176,11 @@ function hk_wert_art($w)
  */
 function hk_sicherung_spaeter()
 {
-    return array('szene.hausereignis');
+    // Gruppe 9 (1.3.30, Entwurf 3.7): die drei Haken kamen mit 1.3.30. Fehlt endpunkt_ein in einer Sicherung,
+    // setzt hk_sicherung_lesen() es wie der Uebergang in postupgrade.sh (1 mit Aktionstoken, sonst 0); fehlen die
+    // beiden Haken der Befehlsbruecke, bleibt der geltende Wert.
+    return array('szene.hausereignis', 'heimkino.endpunkt_ein', 'heimkino.befehle_mqtt_ein',
+                 'heimkino.befehle_mqtt_steuern');
 }
 
 /**
@@ -2308,6 +2295,13 @@ function hk_sicherung_lesen($roh, &$namen = null)
     if ($anzahl === 0 && !$mangel) {
         $mangel[] = hk_t('SET.SICH_LEER');
     }
+    // Gruppe 9 (1.3.30, Entwurf 3.7, E3): eine Sicherung aus einer frueheren Fassung kennt endpunkt_ein nicht -
+    // dieselbe Regel wie der Uebergang in postupgrade.sh: 1, wenn ein Aktionstoken gesetzt ist, sonst 0. Die
+    // beiden Haken der Befehlsbruecke behalten dann ihren geltenden Wert.
+    if (!$mangel && (!isset($daten['heimkino']) || !is_array($daten['heimkino'])
+                     || !array_key_exists('endpunkt_ein', $daten['heimkino']))) {
+        $neu['heimkino']['endpunkt_ein'] = trim((string) hk_cfg($neu, 'heimkino', 'aktionstoken', '')) !== '' ? '1' : '0';
+    }
     return array($mangel ? null : $neu, $mangel, $anzahl, $mangel ? null : $auth, $token_leer);
 }
 
@@ -2410,7 +2404,8 @@ function hk_eingabe_felder($form)
         ),
         'mqtt' => array(
             'text'  => array('themenpraefix'),
-            'haken' => array('mqtt'),
+            // Gruppe 9 (1.3.30): die beiden Haken der Befehlsbruecke stehen im Formular des Reiters MQTT.
+            'haken' => array('mqtt', 'befehle_mqtt_ein', 'befehle_mqtt_steuern'),
         ),
         'xbox_app' => array(
             'text'  => array('client_id', 'rueckleitung'),
@@ -2757,9 +2752,19 @@ function hk_gleichwert_oeffnen($aktion = '')
     if ($fh === false) {
         return false;
     }
-    if (!@flock($fh, LOCK_EX)) {
-        fclose($fh);
-        return false;
+    /* H15 (1.3.30, Pruefbericht, Entwurf 3.11): nicht mehr blockierend. Bis 1.3.29 wartete ein zweiter Aufruf
+     * ohne Grenze, bis der erste seinen Befehl beendet hatte - beim Xbox-Merker bis 90 s (Cloud-Aufruf samt
+     * Erneuerungen), und jeder Aufruf eines flatternden Ausgangs belegte so lange einen Apache-Worker (gemessen:
+     * 5,0 s bei 5 s Haltezeit). Jetzt hoechstens 3 s in Schritten von 100 ms, dann 'belegt' - der Endpunkt
+     * antwortet dann sofort, die Befehlsbruecke quittiert BELEGT. Die Sperre selbst bleibt (zwei gleiche Aufrufe
+     * senden nur einmal). */
+    $ende = microtime(true) + 3.0;
+    while (!@flock($fh, LOCK_EX | LOCK_NB)) {
+        if (microtime(true) >= $ende) {
+            fclose($fh);
+            return 'belegt';
+        }
+        usleep(100000);
     }
     return $fh;
 }
@@ -2840,4 +2845,859 @@ function hk_gleichwert_schliessen($fh, $merker)
     @flock($fh, LOCK_UN);
     fclose($fh);
     return $ok;
+}
+
+/* ==================================================================
+ * Gruppe 9 / MQTT (1.3.30): Befehlsbruecke, EINE Logik fuer HTTP und MQTT,
+ * Auftragswarteschlange, HTTP-Endpunkt hinter einem Haken, Namenstabelle
+ *
+ * Bauvorschrift wz_bild/GRUPPE9_BAUVORSCHRIFT.md; Entwurf Musterprojekt/
+ * entwurf_gruppe9_hk.txt Abschnitte 2.4, 3.2-3.9; ENTSCHEIDUNGEN_GRUPPE9_
+ * HEIMKINO.md (E1-E12). Muster Matter2Lox 0.9.44 (mt_steuern, mt_bb_*).
+ * ================================================================== */
+
+/** Anwenderfelder eines .cfg-Textes: keycode, ip, mac, geraete_id mit Wert (je erste Zeile) - dieselbe Zaehlung
+ * wie hk_felder() in preupgrade.sh und postupgrade.sh (H14, E5). */
+function hk_cfg_felder_zahl($text)
+{
+    $text = is_string($text) ? $text : '';
+    $n = 0;
+    foreach (array('keycode', 'ip', 'mac', 'geraete_id') as $f) {
+        if (preg_match('/^[ \t]*' . $f . '[ \t]*=[ \t]*(.*)$/m', $text, $m) && preg_replace('/\s+/', '', $m[1]) !== '') {
+            $n++;
+        }
+    }
+    return $n;
+}
+
+/** Ist eine lesbare .cfg die Paketvorlage - kein Anwenderfeld und kein Aktionstoken (E5)? */
+function hk_cfg_ist_vorlage($datei)
+{
+    if (!is_file($datei) || !is_readable($datei)) {
+        return false;
+    }
+    $g = @parse_ini_file($datei, true, INI_SCANNER_RAW);
+    if (!is_array($g)) {
+        return false;
+    }
+    $token = isset($g['heimkino']['aktionstoken']) ? trim((string) $g['heimkino']['aktionstoken']) : '';
+    return $token === '' && hk_cfg_felder_zahl((string) @file_get_contents($datei)) === 0;
+}
+
+/* ------------------------------------------------------------------
+ * HTTP-Endpunkt hinter einem eigenen Haken (Entscheidung 1, E3; Entwurf 3.7)
+ * ------------------------------------------------------------------ */
+
+/** Ist der HTTP-Endpunkt fuer Loxone eingeschaltet? (endpunkt_ein; neu 0, Update und Sicherung mit Token 1) */
+function hk_endpunkt_an($cfg = null)
+{
+    if (!is_array($cfg)) {
+        $cfg = hk_config_read();
+    }
+    return hk_an($cfg, 'heimkino', 'endpunkt_ein');
+}
+
+/** Merker: wann zuletzt ein schaltender Aufruf mit Token kam (nur die Zeit; legt keinen Ordner an). */
+function hk_endpunkt_merken()
+{
+    $p = hk_paths();
+    if (@is_dir($p['daten'])) {
+        @file_put_contents($p['endpunkt_zuletzt'], (string) time());
+    }
+}
+
+/** Alter des letzten schaltenden Aufrufs in Sekunden, -1 = keiner gemerkt. */
+function hk_endpunkt_zuletzt()
+{
+    $f = hk_paths()['endpunkt_zuletzt'];
+    $w = @is_file($f) ? trim((string) @file_get_contents($f)) : '';
+    return ctype_digit($w) ? max(0, time() - (int) $w) : -1;
+}
+
+/* ------------------------------------------------------------------
+ * EINE Logik fuer HTTP und MQTT (Entwurf 3.4, E5)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Eine Aktion des Endpunkts pruefen und ausfuehren - der Rumpf von webfrontend/html/index.php bis 1.3.29
+ * (Aktion/Wert, Gleichwert 60 s, Xbox-Bremse 10 s, Merker) ohne $_GET, echo, exit und header. Die Antworten des
+ * Endpunkts sind byte-gleich die bis 1.3.29; neu nur BELEGT (H15).
+ *
+ * $quelle 'http': hk_cmd() wie bisher (direkt, mit Geraetesperre, Ergebniszeile von hk_cmd.py).
+ * $quelle 'mqtt': ein Auftrag fuer den Dienst in data/plugins/<ordner>/auftraege/ (E4) - kein HTTP auf sich
+ * selbst, kein Kindprozess. Beim Einreihen gilt der Befehl als gelungen (Merker, E5); scheitert er im Dienst oder
+ * verfaellt er, nimmt der Dienst genau diesen Eintrag zurueck ('gw' im Auftrag).
+ *
+ * Rueckgabe array('code' => HTTP-Status, 'text' => Antwortzeile, 'grund' => Grund fuer das Protokoll,
+ * 'retry' => Sekunden fuer Retry-After oder null).
+ */
+function hk_steuern($aktion, $wert = null, $quelle = 'http')
+{
+    $aktion = is_string($aktion) ? $aktion : '';
+    $r = function ($code, $text, $grund, $retry = null) {
+        return array('code' => $code, 'text' => $text, 'grund' => $grund, 'retry' => $retry);
+    };
+    $erlaubt = array_keys(hk_aktionen());
+    $mit_wert = array_keys(hk_aktionen_mit_wert());
+
+    /* Erst die Aktion und ihren Wert pruefen, dann die Gleichwert-Unterdrueckung
+     * (X-7), dann senden. Bis 1.3.17 wurde im selben Zweig geprueft und gesendet. */
+    $hk_wert = '';
+    if (in_array($aktion, $erlaubt, true)) {
+        $argumente = array($aktion);
+    } elseif (in_array($aktion, $mit_wert, true)) {
+        $w = is_string($wert) ? $wert : '';
+        // Nur Buchstaben, Ziffern und Unterstrich - Gross- und Kleinschreibung bleibt ERHALTEN (filmMaker);
+        // \z statt $ seit 1.3.15 (C5): "volumeup%0A" bestand das Muster (Befund code 6).
+        if (!preg_match('/^[A-Za-z0-9_]{1,32}\z/', $w)) {
+            return $r(400, 'Der Wert enthaelt unerlaubte Zeichen.', 'wert');
+        }
+        $hk_wert = $w;
+        $argumente = array($aktion, $w);
+    } else {
+        return $r(400, 'Unbekannte Aktion. Erlaubt: '
+                       . implode(', ', array_merge($erlaubt, $mit_wert)), 'unbekannt');
+    }
+
+    /* Gleichwert-Unterdrueckung (X-7, Entscheidung Nr. 19): derselbe Sollwert innerhalb von 60 s geht nicht
+     * erneut hinaus (HTTP 200, UNVERAENDERT=1). Der Merker bleibt waehrend des Befehls gesperrt; laesst er sich
+     * nicht oeffnen, faellt es geschlossen aus (503). */
+    $schl = hk_gleichwert_schluessel($aktion);
+    $gw = null;
+    $merker = array();
+    if ($schl !== '') {
+        $gw = hk_gleichwert_oeffnen($aktion);
+        if ($gw === 'belegt') {
+            // H15 (1.3.30): nach 3 s ohne Sperre. Die Xbox haelt ihren Merker fuer den ganzen Cloud-Aufruf.
+            if ($schl === 'xbox') {
+                return $r(200, 'UNVERAENDERT=1;BELEGT=1;AKTION=' . $aktion
+                               . ' - derselbe Befehl laeuft gerade; es wurde nichts gesendet.', 'belegt');
+            }
+            return $r(429, 'Belegt: ein anderer Befehl haelt die Gleichwert-Sperre seit 3 s - der Befehl wurde '
+                           . 'nicht gesendet. In 3 s wiederholen.', 'belegt', 3);
+        }
+        if ($gw === false) {
+            return $r(503, 'Die Gleichwert-Sperre ist nicht verfuegbar (Datenordner oder Merkerdatei '
+                           . 'fehlt) - es wird nichts gesendet.', 'gleichwert_fehlt');
+        }
+        $merker = hk_gleichwert_lesen($gw);
+        $seit = hk_gleichwert_seit($merker, $schl, hk_gleichwert_wert($aktion, $hk_wert));
+        if ($seit >= 0) {
+            hk_gleichwert_schliessen($gw, null);
+            return $r(200, 'UNVERAENDERT=1;AKTION=' . $aktion . ($hk_wert !== '' ? ';WERT=' . $hk_wert : '')
+                           . ';SEIT_S=' . $seit . ' - derselbe Befehl ging vor ' . $seit
+                           . ' s hinaus; es wurde nichts gesendet.', 'unveraendert');
+        }
+    }
+
+    /* Mindestabstand fuer die Xbox (seit 1.3.15, C10): 10 s fuer beide Befehle zusammen, hinter der
+     * Gleichwert-Unterdrueckung (Nachtrag 01.10.2026). Ohne Datenordner faellt die Bremse geschlossen aus. */
+    if ($aktion === 'xbox-an' || $aktion === 'xbox-aus') {
+        list($hk_frei, $hk_rest) = hk_xbox_bremse(10);
+        if (!$hk_frei) {
+            if (is_resource($gw)) {
+                hk_gleichwert_schliessen($gw, null);
+            }
+            if ($hk_rest < 0) {
+                return $r(503, 'Die Befehlsbremse fuer die Xbox ist nicht verfuegbar '
+                               . '(Datenordner fehlt) - es wird nichts gesendet.', 'bremse_fehlt');
+            }
+            return $r(429, 'Zu schnell: xbox-an und xbox-aus hoechstens alle 10 s. Noch '
+                           . (int) $hk_rest . ' s warten - der Befehl wurde nicht gesendet.', 'bremse', (int) $hk_rest);
+        }
+    }
+
+    if ($quelle === 'mqtt') {
+        // E4/E6: eingereiht, ausgefuehrt im Hauptfaden des Dienstes; Verfall 30 s (Befehl) bzw. 60 s (Szene).
+        $szene = ($aktion === 'kino-an' || $aktion === 'kino-aus');
+        $auftrag = array('art' => $szene ? 'szene' : 'befehl', 'aktion' => $aktion, 'wert' => $hk_wert,
+                         'quelle' => 'mqtt', 'verfall_s' => $szene ? 60 : 30);
+        if ($schl !== '') {
+            $auftrag['gw'] = array('datei' => $schl === 'xbox' ? 'gleichwert_xbox' : 'gleichwert',
+                                   'schluessel' => $schl, 'wert' => hk_gleichwert_wert($aktion, $hk_wert));
+        }
+        $name = hk_auftrag_einreihen($auftrag);
+        $code = $name !== '' ? 0 : 1;
+        $ausgabe = $name !== '' ? 'OK=2 eingereiht' : 'Der Auftrag liess sich nicht ablegen.';
+    } else {
+        list($code, $ausgabe) = hk_cmd($argumente);
+    }
+
+    /* Merker nachfuehren. Taste und Anwendung sperren erst jetzt - sie werden nie
+     * unterdrueckt; laesst sich der Merker dann nicht oeffnen, bleibt es still,
+     * denn ohne Merker fallen die Sollwerte ohnehin geschlossen aus. */
+    if ($gw === null && hk_gleichwert_betrifft($aktion)) {
+        $gw = hk_gleichwert_oeffnen();
+        $merker = is_resource($gw) ? hk_gleichwert_lesen($gw) : array();
+    }
+    if (is_resource($gw)) {
+        hk_gleichwert_schliessen($gw, hk_gleichwert_nachher($merker, $aktion, $hk_wert, $code === 0));
+    }
+    /* Die Kino-Szene schaltet auch die Xbox: danach verfaellt deren Merker
+     * (Nachtrag). Laesst er sich nicht oeffnen, bleibt es still. */
+    if ($aktion === 'kino-an' || $aktion === 'kino-aus') {
+        $hk_gx = hk_gleichwert_oeffnen('xbox-an');
+        if (is_resource($hk_gx)) {
+            hk_gleichwert_schliessen($hk_gx, array());
+        }
+    }
+
+    if ($code === 0) {
+        return $r(200, trim($ausgabe) !== '' ? trim($ausgabe) : 'OK', $quelle === 'mqtt' ? 'eingereiht' : 'ausgefuehrt');
+    }
+    return $r(500, trim($ausgabe) !== '' ? trim($ausgabe) : 'Fehler', 'fehlgeschlagen');
+}
+
+/**
+ * Einen Auftrag fuer den Dienst ablegen (Entwurf 3.4, E4): data/plugins/<ordner>/auftraege/<sek10><usek6>_<hex8>.json,
+ * atomar ueber die Nebendatei ".<name>.tmp" (0640) und rename; der Ordner 0750. Dieselbe Form schreibt
+ * hk_common.auftrag_einreihen() in Python (hk_cmd.py: Szene und Nachfassen ueber HTTP). Der Dienst nimmt nur Namen
+ * dieser Form (KENNUNG). Rueckgabe: Dateiname oder '' (nichts abgelegt).
+ */
+function hk_auftrag_einreihen(array $a)
+{
+    $p = hk_paths();
+    if ($p['home'] === '' || !is_dir($p['daten'])) {
+        return '';
+    }
+    $ordner = $p['auftraege'];
+    if (!is_dir($ordner)) {
+        @mkdir($ordner, 0750);
+        @chmod($ordner, 0750);
+    }
+    if (!is_dir($ordner)) {
+        return '';
+    }
+    $jetzt = microtime(true);
+    $sek = (int) floor($jetzt);
+    $us = min(999999, (int) round(($jetzt - $sek) * 1000000));
+    try {
+        $hex = bin2hex(random_bytes(4));
+    } catch (Exception $e) {
+        $hex = sprintf('%08x', mt_rand(0, 0x7fffffff));
+    } catch (Error $e) {
+        $hex = sprintf('%08x', mt_rand(0, 0x7fffffff));
+    }
+    $name = sprintf('%010d%06d_%s.json', $sek, $us, $hex);
+    $a['gestellt'] = $jetzt;
+    $js = json_encode($a, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if ($js === false) {
+        return '';
+    }
+    $tmp = $ordner . '/.' . $name . '.tmp';
+    $fh = @fopen($tmp, 'x');
+    if ($fh === false) {
+        return '';
+    }
+    @chmod($tmp, 0640);
+    $n = @fwrite($fh, $js . "\n");
+    @fclose($fh);
+    if ($n !== strlen($js) + 1 || !@rename($tmp, $ordner . '/' . $name)) {
+        @unlink($tmp);
+        return '';
+    }
+    return $name;
+}
+
+/* ------------------------------------------------------------------
+ * Befehlsbruecke (Entwurf 3.3-3.9)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Die Auswahlwerte der Bruecke (F3): je Art klein -> Geraeteschreibweise. Die Bruecke schreibt 'auswahl' klein und
+ * laesst in 'werte' nur a-z, 0-9 und _ zu; das Geraet erwartet "filmMaker" (lg_beamer._aus_liste haelt Gross- und
+ * Kleinschreibung). Die Woerter sind die von bin/lg_beamer.py (EINGAENGE, BILDMODI, ENERGIESPAREN); die
+ * Pruefzeile "Auswahlwerte der Befehlsbruecke" im Reiter Test haelt sie zeichengenau gegen lg_beamer.py --woerter.
+ */
+function hk_bb_woerter_geraet()
+{
+    return array(
+        'eingang' => array('dtv', 'atv', 'cadtv', 'catv', 'avav1', 'component1', 'hdmi1', 'hdmi2', 'hdmi3', 'hdmi4'),
+        'bildmodus' => array('cinema', 'eco', 'filmMaker', 'game', 'normal', 'sports', 'vivid'),
+        'energiesparen' => array('auto', 'screenoff', 'maximum', 'medium', 'minimum', 'off'),
+    );
+}
+
+function hk_bb_auswahl()
+{
+    $aus = array();
+    foreach (hk_bb_woerter_geraet() as $art => $liste) {
+        foreach ($liste as $w) {
+            $aus[$art][strtolower($w)] = $w;
+        }
+    }
+    return $aus;
+}
+
+/**
+ * Einstellungen fuer die Zuordnung: Praefix aus [heimkino] themenpraefix; annehmen = "Befehle ueber MQTT annehmen"
+ * (befehle_mqtt_ein); eingreifend = "Eingreifende Befehle ueber MQTT zulassen" (befehle_mqtt_steuern, E2);
+ * mqtt_ein = "Zustand per MQTT melden" (status/befehle nur dann). Liest nur, schreibt nie.
+ */
+function hk_bb_einstellungen()
+{
+    $c = hk_config_read();
+    return array('praefix' => hk_cfg($c, 'heimkino', 'themenpraefix', 'heimkino'),
+                 'annehmen' => hk_an($c, 'heimkino', 'befehle_mqtt_ein'),
+                 'eingreifend' => hk_an($c, 'heimkino', 'befehle_mqtt_steuern'),
+                 'mqtt_ein' => hk_an($c, 'heimkino', 'mqtt'));
+}
+
+/** Protokoll der Befehlsbruecke: die Logdatei des Plugins (hk_log_zeile), mit Stufe. */
+function hk_bb_protokoll($stufe, $text)
+{
+    hk_log_zeile((string) $text, (string) $stufe);
+}
+
+/**
+ * Ein Befehl der Befehlsbruecke (tun() in bin/befehle_zuordnung.php): Name und Wert -> Aktion und Wert (Entwurf 3.2,
+ * Umschrift 3.3), dann die Vorpruefungen, die nur MQTT betreffen - ueber MQTT fuehrt NUR der Dienst aus; ohne ihn
+ * laege der Befehl bis zum Verfall und wirkte ueberraschend spaet (E6). Dann hk_steuern(..., 'mqtt').
+ * Rueckgabe array(bool ok, string grund) fuer die Quittung.
+ */
+function hk_bb_tun($name, $wert)
+{
+    $name = (string) $name;
+    $wert = (string) $wert;
+    $einfach = array('beamer/aus' => 'beamer-aus', 'beamer/wol' => 'beamer-wol', 'xbox/an' => 'xbox-an',
+                     'xbox/aus' => 'xbox-aus');
+    $mit_wert = array('beamer/lautstaerke' => 'beamer-lautstaerke', 'beamer/eingang' => 'beamer-eingang',
+                      'beamer/bildmodus' => 'beamer-bildmodus', 'beamer/energie' => 'beamer-energie',
+                      'beamer/taste' => 'beamer-taste', 'beamer/app' => 'beamer-app');
+    $auswahl = array('beamer/eingang' => 'eingang', 'beamer/bildmodus' => 'bildmodus', 'beamer/energie' => 'energiesparen');
+    $arg = null;
+    if ($name === 'kino') {
+        $aktion = $wert === '1' ? 'kino-an' : 'kino-aus';
+    } elseif ($name === 'beamer/bild') {
+        $aktion = $wert === '1' ? 'beamer-bild-an' : 'beamer-bild-aus';
+    } elseif ($name === 'beamer/stumm') {
+        // 1 = stumm, wie das Wertethema beamer/stumm.
+        $aktion = $wert === '1' ? 'beamer-stumm-an' : 'beamer-stumm-aus';
+    } elseif (isset($einfach[$name])) {
+        $aktion = $einfach[$name];
+    } elseif (isset($mit_wert[$name])) {
+        $aktion = $mit_wert[$name];
+        $arg = $wert;
+        if (isset($auswahl[$name])) {
+            $tab = hk_bb_auswahl();
+            $tab = isset($tab[$auswahl[$name]]) ? $tab[$auswahl[$name]] : array();
+            if (!isset($tab[$wert])) {
+                return array(false, 'WERT');
+            }
+            $arg = $tab[$wert];
+        }
+    } else {
+        return array(false, 'UNBEKANNT');
+    }
+    $cfg = hk_config_read();
+    if (!hk_an($cfg, 'heimkino', 'enabled')) {
+        return array(false, 'ABGESCHALTET');
+    }
+    $marke = hk_marke_lage();
+    if ($marke[0] === 1) {
+        return array(false, 'AKTUALISIERUNG');
+    }
+    if (hk_dienst_pid() === 0) {
+        return array(false, 'DIENST_LAEUFT_NICHT');
+    }
+    if (strpos($aktion, 'kino-') === 0 && !hk_an($cfg, 'szene', 'aktiv')) {
+        return array(false, 'SZENE_AUS');
+    }
+    if ((strpos($aktion, 'beamer-') === 0 && !hk_an($cfg, 'beamer', 'aktiv'))
+        || (strpos($aktion, 'xbox-') === 0 && !hk_an($cfg, 'xbox', 'aktiv'))) {
+        return array(false, 'GERAET_AUS');
+    }
+    $e = hk_steuern($aktion, $arg, 'mqtt');
+    switch ($e['grund']) {
+        case 'eingereiht':
+            return array(true, '');
+        case 'unveraendert':
+            hk_log_gebremst('bb_unv_' . $aktion, 'Befehlsbruecke: ' . $aktion . ($arg !== null ? ' ' . $arg : '')
+                . ' unveraendert - derselbe Befehl ging binnen 60 s schon hinaus, es wurde nichts eingereiht.', 'INFO', 60);
+            return array(true, '');
+        case 'belegt':
+            return array(false, 'BELEGT');
+        case 'bremse':
+            return array(false, 'BREMSE');
+        case 'wert':
+        case 'unbekannt':
+            return array(false, 'WERT');
+        case 'gleichwert_fehlt':
+        case 'bremse_fehlt':
+            return array(false, 'MERKER_FEHLT');
+    }
+    return array(false, 'AUFTRAG_FEHLT');
+}
+
+/** Wo liegt eine Datei unter bin/? Installiert bin/plugins/<ordner>/, im Archiv <wurzel>/bin/. '' = fehlt. */
+function hk_bin_datei($name)
+{
+    foreach (array(hk_paths()['bin'] . '/' . $name, dirname(dirname(__DIR__)) . '/bin/' . $name) as $k) {
+        if (@is_file($k)) {
+            return $k;
+        }
+    }
+    return '';
+}
+
+/** Die Bruecke als Bibliothek laden (BB_NUR_LADEN: kein Hauptteil). */
+function hk_bruecke_laden()
+{
+    if (function_exists('bb_waechter')) {
+        return true;
+    }
+    $f = hk_bin_datei('befehlsbruecke.php');
+    if ($f === '') {
+        return false;
+    }
+    if (!defined('BB_NUR_LADEN')) {
+        define('BB_NUR_LADEN', true);
+    }
+    require_once $f;
+    return function_exists('bb_waechter');
+}
+
+/** Die geladene und gepruefte Zuordnung oder null. */
+function hk_bb_zuordnung()
+{
+    if (!hk_bruecke_laden()) {
+        return null;
+    }
+    list($z) = bb_zuordnung_laden(hk_bin_datei('befehle_zuordnung.php'));
+    if ($z === null) {
+        return null;
+    }
+    list($f) = bb_zuordnung_pruefen($z);
+    return $f ? null : $z;
+}
+
+/** Die Befehlsliste der Bruecke (bb_liste(): EINE Quelle fuer Reiter und Vorlage) oder null. */
+function hk_bb_liste()
+{
+    $z = hk_bb_zuordnung();
+    return $z === null ? null : bb_liste($z, bb_einstellungen($z));
+}
+
+/**
+ * Direktstart bzw. -stopp der Bruecke beim Speichern im Reiter MQTT (Entwurf 3.9, Bauart mt/ic/cc):
+ * befehlsbruecke.sh start startet nur nach --soll, nie als root, nie waehrend eines Updates, nie doppelt; der
+ * Waechter in cron.01min startet hoechstens alle 600 s neu. $neustart: Praefix gewechselt (stop, dann start).
+ * Rueckgabe array(''|'ein'|'aus'|'start_fehl'|'stop_fehl', Ausgabe).
+ */
+function hk_bruecke_schalten($neustart = false)
+{
+    if (DIRECTORY_SEPARATOR === '\\' || hk_paths()['home'] === '' || !hk_bruecke_laden()) {
+        return array('', '');
+    }
+    $p = bb_pfade();
+    if (!$p) {
+        return array('', '');
+    }
+    $e = hk_bb_einstellungen();
+    $laeuft = (bool) bb_dienste();
+    if ($e['annehmen']) {
+        if ($laeuft && !$neustart) {
+            return array('', '');
+        }
+        if ($laeuft) {
+            bb_sh($p, 'stop');
+        }
+        list($rc, $aus) = bb_sh($p, 'start');
+        return array(($rc === 0 && bb_dienste()) ? 'ein' : 'start_fehl', $aus);
+    }
+    if (!$laeuft) {
+        return array('', '');
+    }
+    list($rc, $aus) = bb_sh($p, 'stop');
+    return array(($rc === 0 && !bb_dienste()) ? 'aus' : 'stop_fehl', $aus);
+}
+
+/** Ein Satz zum Ergebnis von hk_bruecke_schalten() ('' = nichts zu sagen), maskiert. */
+function hk_bruecke_satz(array $r)
+{
+    $a = $r[1] !== '' ? $r[1] : '-';
+    switch ($r[0]) {
+        case 'ein':
+            return hk_e(sprintf(hk_t('BEFEHL.H_GESTARTET'), $a));
+        case 'aus':
+            return hk_e(sprintf(hk_t('BEFEHL.H_ANGEHALTEN'), $a));
+        case 'start_fehl':
+            return hk_e(sprintf(hk_t('BEFEHL.H_START_FEHL'), $a));
+        case 'stop_fehl':
+            return hk_e(sprintf(hk_t('BEFEHL.H_STOP_FEHL'), $a));
+    }
+    return '';
+}
+
+/* ------------------------------------------------------------------
+ * Die 22 Befehle des Musterprojekts (Entwurf 3.8, Abschnitt 6) - EINE Tabelle fuer die Vorlage MQTT-Befehle, die
+ * Befehlstabelle im Reiter Einbindung und die Baustein-Liste. Titel fest deutsch "Heimkino: ..." (Sprachregel
+ * 13.10.2026): mit Doppelpunkt und Leerzeichen gleicht er nie einem Gateway-Namen (heimkino_...).
+ * Je Zeile: titel, name (Brueckenname), wert (Nutzlast; '<v.0>' beim Analogbefehl), analog, kachel (Comment).
+ * ------------------------------------------------------------------ */
+function hk_mqtt_befehle()
+{
+    $z = function ($titel, $name, $wert, $kachel, $analog = false) {
+        return array('titel' => 'Heimkino: ' . $titel, 'name' => $name, 'wert' => $wert, 'analog' => $analog,
+                     'kachel' => 'Heimkino: ' . $kachel);
+    };
+    return array(
+        $z('Kino-Szene einschalten', 'kino', '1', 'Kino an'),
+        $z('Kino-Szene ausschalten', 'kino', '0', 'Kino aus'),
+        $z('Beamer einschalten (Wake-on-LAN)', 'beamer/wol', '1', 'Beamer wecken'),
+        $z('Beamer ausschalten', 'beamer/aus', '1', 'Beamer aus'),
+        $z("Bild ausblenden (Ger\xc3\xa4t bleibt an)", 'beamer/bild', '0', 'Bild aus'),
+        $z('Bild wieder einblenden', 'beamer/bild', '1', 'Bild an'),
+        $z('Ton stumm schalten', 'beamer/stumm', '1', 'Ton stumm'),
+        $z('Ton wieder einschalten', 'beamer/stumm', '0', 'Ton an'),
+        $z('Xbox wecken', 'xbox/an', '1', 'Xbox an'),
+        $z('Xbox ausschalten', 'xbox/aus', '1', 'Xbox aus'),
+        $z("Lautst\xc3\xa4rke setzen", 'beamer/lautstaerke', '<v.0>', "Lautst\xc3\xa4rke", true),
+        $z('Eingang HDMI 1', 'beamer/eingang', 'hdmi1', 'HDMI 1'),
+        $z('Eingang HDMI 2', 'beamer/eingang', 'hdmi2', 'HDMI 2'),
+        $z('Eingang HDMI 3', 'beamer/eingang', 'hdmi3', 'HDMI 3'),
+        $z('Eingang HDMI 4', 'beamer/eingang', 'hdmi4', 'HDMI 4'),
+        $z('Bildmodus Kino', 'beamer/bildmodus', 'cinema', 'Bild Kino'),
+        $z('Bildmodus Filmmaker', 'beamer/bildmodus', 'filmmaker', 'Bild Filmmaker'),
+        $z('Bildmodus Spiel', 'beamer/bildmodus', 'game', 'Bild Spiel'),
+        $z('Bildmodus Normal', 'beamer/bildmodus', 'normal', 'Bild Normal'),
+        $z('Bildmodus Sport', 'beamer/bildmodus', 'sports', 'Bild Sport'),
+        $z('Bildmodus Lebhaft', 'beamer/bildmodus', 'vivid', 'Bild Lebhaft'),
+        $z('Bildmodus Eco', 'beamer/bildmodus', 'eco', 'Bild Eco'),
+    );
+}
+
+/** Der Befehl, den ein Ausgang der Vorlage MQTT-Befehle sendet: "publish <praefix>/befehl/<name> <wert>". */
+function hk_mqtt_befehl_text($praefix, $name, $wert)
+{
+    return 'publish ' . trim((string) $praefix, '/') . '/befehl/' . $name . ' ' . $wert;
+}
+
+/** Ist ein Brueckenname eingreifend? Aus der Zuordnung (bb_liste); ohne Bruecke nach Entwurf 3.2 (E2). */
+function hk_mqtt_eingreifend($name)
+{
+    static $ein = null;
+    if ($ein === null) {
+        $ein = array();
+        $l = hk_bb_liste();
+        if (is_array($l)) {
+            foreach ($l['befehle'] as $b) {
+                $ein[$b['name']] = !empty($b['eingreifend']);
+            }
+        } else {
+            foreach (array('kino', 'beamer/aus', 'beamer/wol', 'xbox/an', 'xbox/aus', 'beamer/taste') as $n) {
+                $ein[$n] = true;
+            }
+        }
+    }
+    return !empty($ein[$name]);
+}
+
+/** Port des UDP-Eingangs des MQTT-Gateways aus general.json (Vorgabe 11884). */
+function hk_udp_port()
+{
+    $f = hk_paths()['general'];
+    $j = is_readable($f) ? json_decode((string) @file_get_contents($f), true) : null;
+    $m = is_array($j) ? (isset($j['Mqtt']) ? $j['Mqtt'] : (isset($j['mqtt']) ? $j['mqtt'] : null)) : null;
+    $port = is_array($m) ? (isset($m['Udpinport']) ? $m['Udpinport'] : (isset($m['udpinport']) ? $m['udpinport'] : 0)) : 0;
+    $port = (int) $port;
+    return ($port > 0 && $port < 65536) ? $port : 11884;
+}
+
+/** Der Rechner fuer die UDP-Adresse der Vorlage: hk_hostname() ohne den Webserver-Port. */
+function hk_udp_host()
+{
+    $h = hk_hostname();
+    return substr_count($h, ':') === 1 ? (string) preg_replace('/:[0-9]+\z/', '', $h) : $h;
+}
+
+/**
+ * Vorlage "MQTT-Befehle" (Entwurf 3.8): ein Virtueller Ausgang an /dev/udp/<LoxBerry>/<UDP-Eingang des Gateways>, je
+ * Zeile aus hk_mqtt_befehle() ein Befehl bei EIN "publish <praefix>/befehl/<name> <wert>" (nie retain). Lautstaerke
+ * als Analogbefehl mit <v.0> und Skalierung 1:1 wie die Vorlage Bild und Ton. Rueckgabe array(Dateiname, Inhalt).
+ */
+function hk_vorlage_mqtt_out($cfg)
+{
+    $praefix = hk_cfg($cfg, 'heimkino', 'themenpraefix', 'heimkino');
+    $n = hk_vorlagen_namen();
+    $crlf = "\r\n";
+    $o = '<?xml version="1.0" encoding="utf-8"?>' . $crlf;
+    $o .= '<VirtualOut HintText="" Title="' . hk_x($n['mqtt'][1]) . '" '
+        . 'Comment="' . hk_x(hk_t('BEFEHL.V_KOMMENTAR')) . '" '
+        . 'Address="' . hk_x('/dev/udp/' . hk_udp_host() . '/' . hk_udp_port()) . '" CmdInit="" CloseAfterSend="true" CmdSep="">' . $crlf;
+    $o .= "\t" . '<Info templateType="3" minVersion="17010727"/>' . $crlf;
+    foreach (hk_mqtt_befehle() as $b) {
+        $o .= "\t" . '<VirtualOutCmd Title="' . hk_x($b['titel']) . '" Comment="' . hk_x($b['kachel']) . '" '
+            . 'CmdOnMethod="GET" CmdOffMethod="GET" ';
+        $o .= 'CmdOn="' . hk_x(hk_mqtt_befehl_text($praefix, $b['name'], $b['wert'])) . '" ';
+        $o .= 'CmdOnHTTP="" CmdOnPost="" CmdOff="" CmdOffHTTP="" CmdOffPost="" CmdAnswer="" ';
+        $o .= 'Analog="' . ($b['analog'] ? 'true' : 'false') . '" Repeat="0" RepeatRate="0" '
+            . ($b['analog'] ? 'SourceValLow="0" DestValLow="0" SourceValHigh="10" DestValHigh="10" ' : '')
+            . 'HintText=""/>' . $crlf;
+    }
+    $o .= '</VirtualOut>' . $crlf;
+    return array($n['mqtt'][0], $o);
+}
+
+/* ------------------------------------------------------------------
+ * Namenstabelle und V2-Hakenliste (Entwurf 2.4, E8)
+ * ------------------------------------------------------------------ */
+
+/** V2-Hakenliste des Musterprojekts (Praefix heimkino, 28 Haken, 4 Noncached): Thema relativ zum Praefix => N|''. */
+function hk_mqtt_hakenliste_muster()
+{
+    return array(
+        'status/ok' => 'N', 'status/zaehler' => '', 'beamer/an' => '', 'beamer/aktiv' => '',
+        'beamer/erreichbar' => 'N', 'beamer/lautstaerke' => '', 'beamer/stumm' => '', 'beamer/betriebsstunden' => '',
+        'beamer/laufzeit_heute' => '', 'xbox/an' => '', 'xbox/aktiv' => '', 'xbox/angemeldet' => 'N',
+        'xbox/erreichbar' => 'N', 'xbox/betriebsstunden' => '', 'xbox/laufzeit_heute' => '', 'xbox/geheimnis_tage' => '',
+        'xbox/geheimnis_datum_bekannt' => '', 'szene/laeuft' => '',
+        'last_error' => '', 'beamer/grund' => '', 'beamer/app' => '', 'beamer/letzte_aktion' => '', 'xbox/status' => '',
+        'xbox/name' => '', 'xbox/letzte_aktion' => '', 'xbox/geheimnis_ablauf' => '', 'szene/schritt' => '',
+        'szene/ergebnis' => '',
+    );
+}
+
+/**
+ * Die Namenstabelle - EINE Quelle fuer Reiter Einbindung, Reiter MQTT und die Pruefzeile. Je Zeile: thema (relativ
+ * zum Praefix), voll, name (Gateway-Name, hk_vi_name), art (zahl|text), retained, v2 (N|''), muster (steht so im
+ * Musterprojekt), bedeutung. Aus bin/hk_themen.json (die drei status/-Themen des Herzschlags stehen dort seit
+ * 1.3.30) und dem Lebenszeichen der Bruecke status/befehle.
+ */
+function hk_mqtt_namen($cfg = null)
+{
+    if (!is_array($cfg)) {
+        $cfg = hk_config_read();
+    }
+    $p = hk_cfg($cfg, 'heimkino', 'themenpraefix', 'heimkino');
+    $muster = hk_mqtt_hakenliste_muster();
+    $zeilen = array();
+    foreach (hk_themen() as $thema => $e) {
+        $zeilen[] = array($thema, $e['art'] === 'text' ? 'text' : 'zahl', $e['retain'], $e['text']);
+    }
+    $zeilen[] = array('status/befehle', 'zahl', false, hk_t('BEFEHL.B_STATUS_BEFEHLE'));
+    $aus = array();
+    foreach ($zeilen as $z) {
+        $aus[] = array('thema' => $z[0], 'voll' => trim($p, '/') . '/' . $z[0], 'name' => hk_vi_name($p, $z[0]),
+                       'art' => $z[1], 'retained' => (bool) $z[2],
+                       'v2' => isset($muster[$z[0]]) ? $muster[$z[0]] : '', 'muster' => isset($muster[$z[0]]),
+                       'bedeutung' => $z[3]);
+    }
+    return $aus;
+}
+
+/* ------------------------------------------------------------------
+ * Pruefzeilen der Umstellung (Reiter Test; Entwurf 3.9). Alle lesen nur.
+ * Rueckgabe je array(zustand, text): 1 in Ordnung, 0 Befund, 2 Hinweis bzw. nicht feststellbar.
+ * ------------------------------------------------------------------ */
+
+/** Laeuft die Befehlsbruecke? Haken aus ist ein Hinweis, kein Kreuz. */
+function hk_pruef_bruecke($cfg)
+{
+    if (!hk_bruecke_laden()) {
+        return array(0, hk_t('BEFEHL.T_FEHLT'));
+    }
+    list($z, $fehler) = bb_zuordnung_laden(hk_bin_datei('befehle_zuordnung.php'));
+    if ($z === null) {
+        return array(0, sprintf(hk_t('BEFEHL.T_DEFEKT'), $fehler));
+    }
+    list($f) = bb_zuordnung_pruefen($z);
+    if ($f) {
+        return array(0, sprintf(hk_t('BEFEHL.T_DEFEKT'), $f[0]));
+    }
+    if (!hk_an($cfg, 'heimkino', 'befehle_mqtt_ein')) {
+        return array(2, hk_t('BEFEHL.T_AUS'));
+    }
+    if (DIRECTORY_SEPARATOR === '\\' || hk_paths()['home'] === '' || !bb_pfade()) {
+        return array(2, hk_t('BEFEHL.T_ARCHIV'));
+    }
+    $zu = bb_zustand_lesen();
+    $alter = ($zu && isset($zu['ts'])) ? time() - (int) $zu['ts'] : null;
+    if (!bb_dienste()) {
+        return array(0, hk_t('BEFEHL.T_STEHT'));
+    }
+    if ($alter === null || $alter > BB_WACHE_GRENZE) {
+        return array(0, sprintf(hk_t('BEFEHL.T_HAENGT'), (int) $alter));
+    }
+    if (empty($zu['abo'])) {
+        return array(0, sprintf(hk_t('BEFEHL.T_OHNE_ABO'), isset($zu['fehler']) ? (string) $zu['fehler'] : ''));
+    }
+    $zl = (isset($zu['zaehler']) && is_array($zu['zaehler'])) ? $zu['zaehler'] : array();
+    $letzte = (!empty($zu['letzter']) && is_array($zu['letzter']))
+        ? (string) $zu['letzter']['name'] . ': ' . (string) $zu['letzter']['ergebnis'] . ' (vor '
+          . max(0, time() - (int) $zu['letzter']['zeit']) . ' s)' : '-';
+    return array(1, sprintf(hk_t('BEFEHL.T_LAEUFT'),
+        date('d.m.Y H:i', isset($zu['start']) ? (int) $zu['start'] : time()),
+        isset($zl['angenommen']) ? (int) $zl['angenommen'] : 0,
+        isset($zl['abgelehnt']) ? (int) $zl['abgelehnt'] : 0, $letzte));
+}
+
+/** "befehlsbruecke.php --pruefen" (Programme mosquitto_sub/_pub, Zuordnung) als EINE Zeile. */
+function hk_pruef_bruecke_einrichtung($cfg)
+{
+    if (!hk_bruecke_laden()) {
+        return array(0, hk_t('BEFEHL.T_FEHLT'));
+    }
+    ob_start();
+    bb_pruefen();
+    $aus = array_values(array_filter(explode("\n", (string) ob_get_clean()), 'strlen'));
+    if (!$aus) {
+        return array(2, hk_t('BEFEHL.T_UNKLAR'));
+    }
+    $fehl = array_values(preg_grep('/^\[FEHL\]/', $aus));
+    if ($fehl) {
+        // Fehlende mosquitto-clients bei ausgeschaltetem Haken: ein Hinweis, kein Kreuz.
+        return array(hk_an($cfg, 'heimkino', 'befehle_mqtt_ein') ? 0 : 2,
+                     implode(' | ', $fehl) . ' ' . hk_t('BEFEHL.T_EINRICHTUNG'));
+    }
+    return array(1, implode(' | ', array($aus[0], end($aus))));
+}
+
+/** Praefix der Befehle in der Grenze der Bruecke (<= 5 Ebenen a 40 Zeichen, <= 100 Zeichen)? */
+function hk_pruef_praefix($cfg)
+{
+    $pr = hk_cfg($cfg, 'heimkino', 'themenpraefix', 'heimkino');
+    if (!hk_bruecke_laden()) {
+        return array(2, hk_t('BEFEHL.T_FEHLT'));
+    }
+    if (bb_praefix_gueltig($pr)) {
+        return array(1, sprintf(hk_t('BEFEHL.T_PRAEFIX_OK'), $pr));
+    }
+    return array(hk_an($cfg, 'heimkino', 'befehle_mqtt_ein') ? 0 : 2, sprintf(hk_t('BEFEHL.T_PRAEFIX'), $pr));
+}
+
+/**
+ * Auswahlwerte der Bruecke = Wortlisten von lg_beamer.py --woerter, zeichengenau (F3)? $woerter fuer die Gegenprobe
+ * (ein fehlendes Wort muss rot werden), sonst hk_woerter().
+ */
+function hk_pruef_auswahl($woerter = null)
+{
+    $w = $woerter === null ? hk_woerter() : $woerter;
+    if (!$w) {
+        return array(2, hk_t('BEFEHL.T_AUSWAHL_UNKLAR'));
+    }
+    $ab = array();
+    $n = 0;
+    foreach (hk_bb_woerter_geraet() as $art => $liste) {
+        $n += count($liste);
+        $ist = isset($w[$art]) ? array_values($w[$art]) : array();
+        if ($ist !== array_values($liste)) {
+            $ab[] = $art . ': ' . implode(' ', array_merge(array_diff($liste, $ist), array_diff($ist, $liste)));
+        }
+    }
+    return $ab ? array(0, sprintf(hk_t('BEFEHL.T_AUSWAHL_AB'), implode('; ', $ab)))
+               : array(1, sprintf(hk_t('BEFEHL.T_AUSWAHL_OK'), $n));
+}
+
+/**
+ * Warteschlange data/plugins/<ordner>/auftraege/: Zahl, aeltester Auftrag, keine fremden Namen (Hausform E7). Ein
+ * Auftrag, der laenger als 60 s liegt, heisst: der Dienst arbeitet nicht ab.
+ */
+function hk_pruef_warteschlange()
+{
+    $o = hk_paths()['auftraege'];
+    if (hk_paths()['home'] === '') {
+        return array(2, hk_t('BEFEHL.T_WS_UNKLAR'));
+    }
+    if (!is_dir($o)) {
+        return array(1, hk_t('BEFEHL.T_WS_LEER'));
+    }
+    $zahl = 0;
+    $aeltest = null;
+    $fremd = array();
+    foreach ((@scandir($o) ?: array()) as $f) {
+        if ($f === '.' || $f === '..') {
+            continue;
+        }
+        if (preg_match('/^([0-9]{10})[0-9]{6}_[0-9a-f]{8}\.json(\.inarbeit)?\z/', $f, $m)) {
+            $zahl++;
+            $alter = time() - (int) $m[1];
+            $aeltest = $aeltest === null ? $alter : max($aeltest, $alter);
+        } elseif (!preg_match('/^\.[0-9]{16}_[0-9a-f]{8}\.json\.tmp\z/', $f)) {
+            $fremd[] = $f;
+        }
+    }
+    if ($fremd) {
+        return array(0, sprintf(hk_t('BEFEHL.T_WS_FREMD'), implode(', ', $fremd)));
+    }
+    if ($zahl === 0) {
+        return array(1, hk_t('BEFEHL.T_WS_LEER'));
+    }
+    return array($aeltest > 60 ? 0 : 1, sprintf(hk_t('BEFEHL.T_WS_ZAHL'), $zahl, (int) $aeltest));
+}
+
+/** HTTP-Endpunkt aus ist gewollt (grau); an nennt den letzten schaltenden Aufruf. */
+function hk_pruef_endpunkt_ein($cfg)
+{
+    if (!hk_endpunkt_an($cfg)) {
+        return array(2, hk_t('BEFEHL.T_ENDPUNKT_AUS'));
+    }
+    $z = hk_endpunkt_zuletzt();
+    return array(1, $z < 0 ? hk_t('BEFEHL.T_ENDPUNKT_NIE')
+                           : sprintf(hk_t('BEFEHL.T_ENDPUNKT_ZULETZT'), max(0, (int) floor($z / 86400))));
+}
+
+/** Herzschlag: zaehlt status/zaehler? Der Dienst frischt bei jedem Herzschlag die Aenderungszeit von zustand.json
+ * auf und legt den Zaehler beim Durchgang darin ab. */
+function hk_pruef_herzschlag()
+{
+    if (!hk_dienst_pid()) {
+        return array(2, hk_t('PRUEF.HERZ_KEIN_DIENST'));
+    }
+    $z = hk_zustand();
+    $alter = hk_zustand_alter();
+    if (!is_array($z) || !isset($z['herzschlag']['zaehler']) || $alter === null) {
+        return array(0, hk_t('BEFEHL.T_HERZ_NIE'));
+    }
+    return array($alter <= 180 ? 1 : 0, sprintf(hk_t('BEFEHL.T_HERZ'), (int) $z['herzschlag']['zaehler'], (int) $alter));
+}
+
+/**
+ * Namenstabelle (Entwurf 2.4): jeder Name ist der Gateway-Name seines Themas (Gegenseite ohne hk_vi_name()), und
+ * jedes Thema ist eines, das der Dienst sendet (hk_service.py --themen) oder status/befehle der Bruecke. $namen:
+ * Liste array(voll, name, thema) fuer die Gegenprobe (ein verdrehter Name muss rot werden); $themen: die Themen des
+ * Dienstes (sonst gefragt).
+ */
+function hk_pruef_namen($namen = null, $themen = null)
+{
+    if ($namen === null) {
+        $namen = array();
+        foreach (hk_mqtt_namen() as $z) {
+            $namen[] = array($z['voll'], $z['name'], $z['thema']);
+        }
+    }
+    if ($themen === null) {
+        list($code, $aus) = hk_cmd_python('hk_service.py', array('--themen'));
+        $themen = $code === 0 ? json_decode($aus, true) : null;
+        if (!is_array($themen)) {
+            return array(2, hk_t('PRUEF.NICHT_MESSBAR'));
+        }
+    }
+    $themen[] = 'status/befehle';
+    $falsch = array();
+    foreach ($namen as $z) {
+        if (!in_array($z[2], $themen, true) || $z[1] !== strtr($z[0], array('/' => '_'))) {
+            $falsch[] = $z[1];
+        }
+    }
+    return $falsch ? array(0, sprintf(hk_t('BEFEHL.T_NAMEN_FEHL'), implode(', ', $falsch)))
+                   : array(1, sprintf(hk_t('BEFEHL.T_NAMEN_OK'), count($namen), count(hk_mqtt_hakenliste_muster())));
+}
+
+/** Abo-Datei des Gateways: der Dienst pflegt config/plugins/<ordner>/mqtt_subscriptions.cfg = "<praefix>/#". */
+function hk_pruef_abo($cfg)
+{
+    $f = hk_paths()['abo'];
+    $soll = trim(hk_cfg($cfg, 'heimkino', 'themenpraefix', 'heimkino'), '/') . '/#';
+    if (!hk_an($cfg, 'heimkino', 'mqtt')) {
+        return array(is_file($f) ? 0 : 2, is_file($f) ? sprintf(hk_t('BEFEHL.T_ABO_REST'), $f) : hk_t('BEFEHL.T_ABO_AUS'));
+    }
+    $ist = is_file($f) ? trim((string) @file_get_contents($f)) : null;
+    if ($ist === $soll) {
+        return array(1, sprintf(hk_t('BEFEHL.T_ABO_OK'), $soll));
+    }
+    if (!hk_dienst_pid()) {
+        return array(2, hk_t('BEFEHL.T_ABO_KEIN_DIENST'));
+    }
+    return array(0, sprintf(hk_t('BEFEHL.T_ABO_FALSCH'), $ist === null ? '-' : $ist, $soll));
 }

@@ -3,6 +3,8 @@
 # python3-cryptography  - AES fuer die IP-Steuerung des LG-Beamers
 # python3-paho-mqtt     - Meldeweg zum Miniserver
 # python3-requests      - Cloud-Aufrufe fuer die Xbox
+# mosquitto-clients     - Befehlsbruecke (seit 1.3.30): mosquitto_sub und mosquitto_pub
 python3-cryptography
 python3-paho-mqtt
 python3-requests
+mosquitto-clients

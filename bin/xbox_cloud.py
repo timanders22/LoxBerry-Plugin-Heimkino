@@ -108,8 +108,11 @@ _GEHEIM_SCHLUESSEL = (r"(?:access_token|refresh_token|id_token|xsts_token|token"
 # "Schluessel": "Wert" (JSON) und 'Schluessel': 'Wert' (Python-Darstellung
 # eines Woerterbuchs, str(inhalt)); der Wert darf auch eine Liste sein
 # (UserTokens) und darf am Schnitt offen enden.
+# H11 (1.3.30, Pruefbericht; eigener Fund F4 des Entwurfs): im JSON-Zitat zusaetzlich code, uhs und session_id -
+# NUR hier, nicht im Feldmuster: dort schwaerzte "code" auch "HTTP-Antwort Code: 400" in last_error.
+_GEHEIM_ZITAT_SCHLUESSEL = r"(?:" + _GEHEIM_SCHLUESSEL + r"|code|uhs|session_id)"
 _GEHEIM_ZITAT = re.compile(
-    r"""(["']""" + _GEHEIM_SCHLUESSEL + r"""["']\s*:\s*)"""
+    r"""(["']""" + _GEHEIM_ZITAT_SCHLUESSEL + r"""["']\s*:\s*)"""
     r"""(\[[^\]]*\]?|"[^"]*"?|'[^']*'?|[^,}\s]+)""", re.I)
 # Formularfeld oder Kopfzeile: access_token=...&  Authorization: ...
 _GEHEIM_FELD = re.compile(
@@ -124,6 +127,16 @@ _GEHEIM_FREI = (
 _GEHEIM_LANG = re.compile(r"(?<![A-Za-z0-9_.!*$%~+/=-])[A-Za-z0-9_.!*$%~+/=-]{64,}")
 
 
+def _lang_schwaerzen(m):
+    """Eine lange Zeichenkette ohne Leerraum schwaerzen. Bei einer "//"-Adresse bleibt seit 1.3.30 (H11) nur der
+    Rechnername stehen; bis 1.3.29 blieb die ganze Adresse samt Token im Pfad stehen."""
+    t = m.group(0)
+    if t.startswith("//"):
+        i = t.find("/", 2)
+        return t if i < 0 else t[:i + 1] + "***"
+    return "***"
+
+
 def _ohne_token(text, laenge=None):
     """Token-Werte in einem zitierten Antworttext durch *** ersetzen und
     danach auf <laenge> Zeichen kuerzen (Heimkino-a1)."""
@@ -132,8 +145,7 @@ def _ohne_token(text, laenge=None):
         for muster in _GEHEIM_FREI:
             t = muster.sub("***", t)
         t = _GEHEIM_FELD.sub(lambda m: m.group(1) + "***", t)
-        return _GEHEIM_LANG.sub(
-            lambda m: m.group(0) if m.group(0).startswith("//") else "***", t)
+        return _GEHEIM_LANG.sub(_lang_schwaerzen, t)
     text = schwaerzen("" if text is None else str(text))
     if laenge is not None and len(text) > laenge:
         text = schwaerzen(text[:laenge])
@@ -914,6 +926,20 @@ def selbsttest():
     pruefe("Antwort ohne Token bleibt gleich", _ohne_token("Bad Request", 300) == "Bad Request")
     nur = _fehlertext(_Antwort(400, '{"Token":"%s","Message":"kaputt"}' % jwt), "X")
     pruefe("_fehlertext schwaerzt", jwt[:20] not in nur and "kaputt" in nur, nur)
+
+    # 7. H11 (1.3.30): code/uhs/session_id im JSON-Zitat, ein Token im Pfad einer //-Adresse; "Code: 400" in
+    #    einem Fehlertext bleibt lesbar (eigener Fund F4). Erfundene Werte.
+    for name, text, weg in (
+            ("code und uhs im JSON", '{"code":"M.C5_ERFUNDEN_ABC","uhs":"1234567890"}',
+             ("M.C5_ERFUNDEN_ABC", "1234567890")),
+            ("session_id im JSON", "{'session_id': 'ERFUNDEN-abc'}", ("ERFUNDEN-abc",)),
+            ("Token im Pfad einer //-Adresse", "//xccs.xboxlive.com/x/" + lang, (lang[:40],))):
+        aus = _ohne_token(text, 300)
+        pruefe("geschwaerzt: %s" % name, all(w not in aus for w in weg) and "***" in aus, repr(aus))
+    pruefe("Code: 400 bleibt lesbar",
+           _ohne_token("HTTP-Antwort Code: 400 (Bad Request)", 200) == "HTTP-Antwort Code: 400 (Bad Request)")
+    pruefe("Rechnername einer //-Adresse bleibt",
+           _ohne_token("//xccs.xboxlive.com/x/" + lang, 300).startswith("//xccs.xboxlive.com/"))
 
     # Hausform, in beiden Ausgaengen.
     print("\n%d Faelle geprueft, %d Fehlschlaege." % (faelle, fehler))
