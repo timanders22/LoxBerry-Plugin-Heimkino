@@ -13,6 +13,21 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.31
+
+Pflegefassung der Nachtwelle (29.10.2026), ohne neue Funktion:
+
+* **Befehlsbrücke 1.0.2** (gemeinsame Stammfassung, bisher 1.0.0): `stop` legt als root nichts mehr an, die
+  Startausgabe wird gekappt, eine leere oder ungültige Uhr startet die Brücke bei liegender Aktualisierungsmarke
+  nicht, der Befehlsordner ist nur für das Plugin lesbar (0700). Themen, Quittungen und Haken bleiben, wie sie
+  waren. Die Vorlage der MQTT-Befehle baut dieses Plugin selbst; sie hatte schon Windows-Zeilenenden (CRLF).
+* **Reiter Test, neue Zeile „Gateway V2: sind alle Datenpunkte der Hakenliste angehakt?“** Unter MQTT-Gateway V2
+  liest das Plugin `config/system/subscriptions.json` und nennt jeden Datenpunkt der Hakenliste (Reiter
+  Einbindung in Loxone), der dort nicht angehakt ist, und jeden, bei dem „Noncached“ nicht stimmt (`status/ok`, `beamer/erreichbar`, `xbox/angemeldet` und `xbox/erreichbar` brauchen es, die übrigen nicht).
+  Unter Gateway V1 und bei ausgeschalteter MQTT-Veröffentlichung heißt die Zeile „trifft nicht zu“.
+* **Knopf „Dienst starten“** ist wieder grün (Hausregel: Starten stört den Betrieb nicht; Neustarten und
+  Anhalten bleiben orange). In 1.3.30 war er versehentlich orange.
+
 ## Neu in 1.3.30
 
 **Werte und Befehle über MQTT.** Das Musterprojekt holt die Werte jetzt als einfache *Virtuelle Eingänge*

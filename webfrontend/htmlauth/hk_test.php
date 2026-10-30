@@ -233,6 +233,11 @@ function hk_test_zeilen($cfg, $voll = true)
         list($zu, $tx) = hk_pruef_namen();
         $zeilen[] = array($zu, hk_t('BEFEHL.T_FRAGE_NAMEN'), $tx);
     }
+    // Nachtwelle N7 (1.3.31): stehen unter MQTT-Gateway V2 die Haken der Hakenliste mit dem richtigen Noncached?
+    // Liest nur config/system/subscriptions.json (kein Prozess, kein Netz); unter V1 und bei ausgeschaltetem MQTT
+    // "trifft nicht zu" (Zustand 2).
+    list($zu, $tx) = hk_v2_haken_lage($cfg);
+    $zeilen[] = array($zu, hk_t('PRUEF.F_V2_HAKEN'), $tx);
     list($zu, $tx) = hk_pruef_abo($cfg);
     $zeilen[] = array($zu, hk_t('BEFEHL.T_FRAGE_ABO'), $tx);
 

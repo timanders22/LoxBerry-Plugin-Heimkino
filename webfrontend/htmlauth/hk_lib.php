@@ -3486,6 +3486,141 @@ function hk_mqtt_namen($cfg = null)
     return $aus;
 }
 
+/* ---------------- Gateway V2: Selbsttest der Haken (Nachtwelle N7, 1.3.31) ---------------- */
+
+/**
+ * Die Abos des MQTT-Gateways V2 aus config/system/subscriptions.json (Subscriptions[].Id je Thema, Noncached):
+ * array(Thema => Noncached ja/nein), null = nicht lesbar. Form wie MGiSmart 1.1.28 mg_v2_abos() und Govee 0.9.30
+ * gv_mqtt_v2_haken_lage(); die Datei liest hk_v2_haken_lage().
+ */
+function hk_v2_abos($daten)
+{
+    if (!is_array($daten)) {
+        return null;
+    }
+    $liste = array();
+    foreach (array('Subscriptions', 'subscriptions') as $s) {
+        if (isset($daten[$s]) && is_array($daten[$s])) {
+            $liste = $daten[$s];
+            break;
+        }
+    }
+    $abo = array();
+    foreach ($liste as $e) {
+        if (!is_array($e)) {
+            continue;
+        }
+        $id = '';
+        foreach (array('Id', 'id', 'Topic', 'topic') as $k) {
+            if (isset($e[$k]) && is_string($e[$k])) {
+                $id = $e[$k];
+                break;
+            }
+        }
+        if ($id === '') {
+            continue;
+        }
+        $nc = false;
+        foreach (array('Noncached', 'noncached') as $k) {
+            if (isset($e[$k])) {
+                $nc = ($e[$k] === true || in_array(strtolower(trim((string) $e[$k])), array('1', 'true', 'yes', 'on'), true));
+            }
+        }
+        $abo[$id] = $nc;
+    }
+    return $abo;
+}
+
+/**
+ * Soll gegen Ist, rein (liest nichts): array(1|0, fehlt[], noncached_fehlt[], noncached_zu_viel[], angehakt, soll).
+ * Soll je Zeile array('thema' => volles Thema, 'name' => Gateway-Name, 'noncached' => bool). Noncached wird in
+ * beide Richtungen verglichen: fehlt es, reicht das Gateway einen gleichen Wert nicht weiter (nach einem Neustart
+ * des Miniservers bleibt der Eingang dann leer); steht es zu viel, geht jeder Wert erneut an den Miniserver.
+ */
+function hk_v2_haken_abgleich(array $soll, array $abo)
+{
+    $fehlt = array();
+    $nc_fehlt = array();
+    $nc_zuviel = array();
+    $da = 0;
+    foreach ($soll as $e) {
+        if (!array_key_exists($e['thema'], $abo)) {
+            $fehlt[] = $e['name'];
+            continue;
+        }
+        $da++;
+        if ($e['noncached'] && !$abo[$e['thema']]) {
+            $nc_fehlt[] = $e['name'];
+        } elseif (!$e['noncached'] && $abo[$e['thema']]) {
+            $nc_zuviel[] = $e['name'];
+        }
+    }
+    return array(($fehlt || $nc_fehlt || $nc_zuviel) ? 0 : 1, $fehlt, $nc_fehlt, $nc_zuviel, $da, count($soll));
+}
+
+/**
+ * Das Soll fuer den Selbsttest: die Zeilen von hk_mqtt_namen() mit muster (DIESELBE Quelle wie die Hakenliste im
+ * Reiter Einbindung in Loxone, Regeln/07; 28 Haken samt der Textthemen, die die Musterseite als Texteingang hat).
+ * Noncached: v2 = N (status/ok, beamer/erreichbar, xbox/angemeldet, xbox/erreichbar).
+ */
+function hk_v2_haken_soll($cfg)
+{
+    $aus = array();
+    foreach (hk_mqtt_namen($cfg) as $z) {
+        if (!$z['muster']) {
+            continue;
+        }
+        $aus[] = array('thema' => $z['voll'], 'name' => $z['name'], 'noncached' => $z['v2'] === 'N');
+    }
+    return $aus;
+}
+
+/**
+ * Selbsttestzeile "Gateway V2: sind alle Datenpunkte der Hakenliste angehakt?" (Nachtwelle N7, Vorschrift Punkt 4):
+ * array(1|0|2, Text ohne Markup). 1 alle Haken da und Noncached wie in der Hakenliste; 0 es fehlt ein Haken oder
+ * Noncached stimmt nicht (mit Namen); 2 trifft nicht zu (MQTT dieses Plugins aus, Gateway V1) oder nicht
+ * feststellbar (Fassung 0, keine Wurzel, subscriptions.json nicht lesbar, Hakenliste leer). Liest nur.
+ */
+function hk_v2_haken_lage($cfg = null)
+{
+    if ($cfg === null) {
+        $cfg = hk_config_read();
+    }
+    if (!hk_an($cfg, 'heimkino', 'mqtt')) {
+        return array(2, hk_t('PRUEF.V2_AUS'));
+    }
+    $b = hk_mqtt_broker();
+    $fassung = $b === null ? 0 : (int) $b['fassung'];
+    $home = (string) hk_paths()['home'];
+    if ($fassung === 0 || $home === '') {
+        return array(2, hk_t('PRUEF.V2_UNKLAR'));
+    }
+    if ($fassung < 2) {
+        return array(2, hk_t('PRUEF.V2_V1'));
+    }
+    $abo = hk_v2_abos(@json_decode((string) @file_get_contents($home . '/config/system/subscriptions.json'), true));
+    if ($abo === null) {
+        return array(2, hk_t('PRUEF.V2_UNKLAR'));
+    }
+    $liste = hk_v2_haken_soll($cfg);
+    if (!$liste) {
+        return array(2, hk_t('PRUEF.V2_LEER'));   // ueber eine leere Hakenliste wird nicht geurteilt
+    }
+    list($ok, $fehlt, $nc_fehlt, $nc_zuviel, $da, $soll) = hk_v2_haken_abgleich($liste, $abo);
+    $txt = sprintf(hk_t('PRUEF.V2_ZAHL'), $da, $soll);
+    if ($fehlt) {
+        $txt .= ' ' . sprintf(hk_t('PRUEF.V2_FEHLT'), implode(', ', array_slice($fehlt, 0, 12))
+            . (count($fehlt) > 12 ? ' …' : ''));
+    }
+    if ($nc_fehlt) {
+        $txt .= ' ' . sprintf(hk_t('PRUEF.V2_NC_FEHLT'), implode(', ', $nc_fehlt));
+    }
+    if ($nc_zuviel) {
+        $txt .= ' ' . sprintf(hk_t('PRUEF.V2_NC_ZUVIEL'), implode(', ', $nc_zuviel));
+    }
+    return array($ok, $txt);
+}
+
 /* ------------------------------------------------------------------
  * Pruefzeilen der Umstellung (Reiter Test; Entwurf 3.9). Alle lesen nur.
  * Rueckgabe je array(zustand, text): 1 in Ordnung, 0 Befund, 2 Hinweis bzw. nicht feststellbar.

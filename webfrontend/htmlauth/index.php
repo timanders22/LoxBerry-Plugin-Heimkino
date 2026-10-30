@@ -985,7 +985,7 @@ if ($hk_frame) {
   <form method="post" action="index.php">
     <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
-    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="dienst" value="start"><?= hk_te('ALLGEMEIN.K_DIENST_START') ?></button>
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="dienst" value="start"><?= hk_te('ALLGEMEIN.K_DIENST_START') ?></button>
   </form>
   <form method="post" action="index.php">
     <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
