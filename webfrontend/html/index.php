@@ -81,7 +81,8 @@ function hk_ende($code, $text, $grund = 'ok')
     exit;
 }
 
-$cfg = hk_config_read();
+/* bis 1.3.31 hiess dieses Feld $cfg: das LoxBerry-SDK ueberschreibt ein globales $cfg beim ersten Lesen von general.json (Ausfall MGiSmart 01.11.2026). */
+$hk_lauf_cfg = hk_config_read();
 
 /* ---------- HTTP-Endpunkt hinter einem eigenen Haken (Gruppe 9, 1.3.30) ----------
  *
@@ -91,7 +92,7 @@ $cfg = hk_config_read();
  * mit dem Haken "HTTP-Endpunkt fuer Loxone annehmen" (endpunkt_ein; neu aus,
  * nach einem Update mit gesetztem Aktionstoken an). Ohne ihn gilt die Sperre fuer
  * ALLE Aufrufe, auch den Selbsttest - VOR dem Token, nichts wird angelegt. */
-if (!hk_endpunkt_an($cfg)) {
+if (!hk_endpunkt_an($hk_lauf_cfg)) {
     if (isset($_GET['selftest']) && is_string($_GET['selftest']) && $_GET['selftest'] === '1') {
         hk_ende(403, 'SELFTEST;OK=0;ERR=ENDPUNKT_AUS', 'endpunkt_aus');
     }
@@ -99,7 +100,7 @@ if (!hk_endpunkt_an($cfg)) {
                  . 'Loxone annehmen".', 'endpunkt_aus');
 }
 
-$soll = hk_cfg($cfg, 'heimkino', 'aktionstoken', '');
+$soll = hk_cfg($hk_lauf_cfg, 'heimkino', 'aktionstoken', '');
 // Ein Feld kann als Feld ankommen (?token[]=x). (string) darauf ergaebe
 // "Array" samt Meldung - erst is_string, dann alles andere.
 $ist = (isset($_GET['token']) && is_string($_GET['token'])) ? $_GET['token'] : '';
@@ -147,7 +148,7 @@ if (isset($_GET['selftest']) && is_string($_GET['selftest'])
     hk_ende(200, 'SELFTEST;OK=1;TOKEN=OK', 'selftest');
 }
 
-if (!hk_an($cfg, 'heimkino', 'enabled')) {
+if (!hk_an($hk_lauf_cfg, 'heimkino', 'enabled')) {
     hk_ende(503, 'Das Plugin ist in den Einstellungen abgeschaltet.', 'abgeschaltet');
 }
 

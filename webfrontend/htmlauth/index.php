@@ -278,6 +278,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['xbox_code'])) {
 }
 
 /* ============ Xbox: Anmeldung loeschen ============ */
+/* 1.3.32: Sprachansagen, eigenes Formular. Die Testansage spricht immer. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ansage_test'])) {
+    list($hk_at, $hk_ag) = hk_ansage_test();
+    if ($hk_at) { $hk_hinweis[] = hk_e(hk_t('ANSAGEPLUGIN.M_TEST_OK')); } else { $hk_fehler[] = hk_e(hk_t('ANSAGEPLUGIN.M_TEST_FEHL') . ' ' . $hk_ag); }
+    $hk_tab = 'tab-settings';
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ansage_speichern'])) {
+    list($hk_ao, $hk_af, $hk_ah) = hk_ansage_post($_POST);
+    if ($hk_af) { foreach ($hk_af as $hk_ax) { $hk_fehler[] = hk_e($hk_ax); } }
+    elseif ($hk_ao) { $hk_hinweis[] = hk_e(trim(hk_t('ANSAGEPLUGIN.M_OK') . ' ' . implode(' ', $hk_ah))); }
+    else { $hk_fehler[] = hk_e(hk_t('ANSAGEPLUGIN.M_FEHL')); }
+    $hk_tab = 'tab-settings';
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['xbox_vergessen'])) {
     list($hk_rc, $hk_aus) = hk_cmd(array('xbox-vergessen'));
     if ($hk_rc === 0) {
@@ -1233,6 +1246,7 @@ if ($hk_frame) {
 </div>
 <?php } ?>
 
+<?= hk_ansage_form_html('<input data-role="none" type="hidden" name="fmt" value="' . hk_e($hk_fmt) . '"><input data-role="none" type="hidden" name="activetab" value="tab-settings">') ?>
 <h2><?= hk_t('SET.H_SICHERUNG') ?></h2>
 <div class="sm-hinweis"><?= hk_t('SET.SICH_ERKLAERUNG') ?></div>
 <div class="sm-warnung"><?= hk_t('SET.SICH_WARNUNG') ?></div>

@@ -53,6 +53,12 @@
         { "name": "warten_xbox",   "vorgabe": "90" },
         { "name": "hausereignis",  "vorgabe": "0" }
       ]
+    },
+    {
+      "name": "ansage",
+      "schluessel": [
+        { "name": "block", "vorgabe": "" }
+      ]
     }
   ]
 }

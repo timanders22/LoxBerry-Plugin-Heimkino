@@ -45,6 +45,7 @@ import datetime
 import json
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -267,6 +268,23 @@ def _beamer_abfragen_gesperrt(cfg, log, meldungen, ergebnis, ip, port, grenze):
                 "Befehle nicht. In den Einstellungen abschaltbar." % fehler,
                 log, "info", wieder_nach=86400)
     return ergebnis
+
+
+_ANSAGE_XBOX = [0.0]
+
+
+def ansage_xbox(tage, log):
+    """Die Restlaufzeit an bin/hk_ansage.php geben (seit 1.3.32): stuendlich, und nur zwischen 9 und 21 Uhr. Eine Frist ist nie dringend;
+    was nachts faellig wird, sagt der Dienst am naechsten Tag. Die Bruecke legt nur hin; sie merkt sich auch, was schon gesagt ist. Ein Fehler stoert den Dienst nicht."""
+    jetzt = time.time()
+    if tage == "" or jetzt - _ANSAGE_XBOX[0] < 3600 or not 9 <= time.localtime(jetzt).tm_hour < 21:
+        return
+    _ANSAGE_XBOX[0] = jetzt
+    bruecke = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hk_ansage.php")
+    try:
+        subprocess.run(["php", bruecke, str(int(tage)), gemein.ORDNER], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=False)
+    except (OSError, subprocess.SubprocessError, ValueError) as fehler:
+        log.warning("Ansage: Bruecke nicht erreichbar (%s).", type(fehler).__name__)
 
 
 def geheimnis_restlaufzeit(cfg, log=None, meldungen=None):
@@ -1330,6 +1348,7 @@ def hauptteil():
                         ("Xbox: das Azure-Clientgeheimnis laeuft in %d Tagen ab (%s)."
                          % (ablauf_tage, ablauf_datum)),
                         log, "warning", wieder_nach=86400)
+                ansage_xbox(ablauf_tage, log)     # 1.3.32
 
                 jetzt = time.time()
                 vergangen = jetzt - letzte_runde
