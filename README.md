@@ -13,6 +13,19 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.35
+
+- **Schweigender Beamer gilt als aus.** Viele Beamer antworten ausgeschaltet gar nicht, statt die Verbindung abzuweisen. Antwortet er 10 Minuten nicht (Zeitüberschreitung oder kein Weg), meldet das Plugin `beamer/status` = aus und `beamer/an` = 0, das Kinoende greift, und `beamer-aus` meldet „gewirkt“. **Ein Netzausfall sieht genauso aus und meldet nach 10 Minuten ebenfalls aus**; `beamer/erreichbar` bleibt dann 0 und `beamer/grund` nennt den Grund, `last_error` ist leer. Sobald er wieder antwortet, gilt seine Antwort.
+- **Kino aus während des Hochfahrens:** Wurde „Kino an“ mit Wake-on-LAN abgebrochen, versucht „Kino aus“ den Beamer bis zur Wartezeit der Szene weiter auszuschalten. Ein neueres „Kino an“ beendet das; nach zwei Aufträgen im selben Augenblick gilt der jüngste.
+- **Gescheiterte Szene:** Ein Wiederholen geht sofort hinaus, nicht erst nach 60 s. Eine Ausnahme in der Szene (etwa kein Netz beim Wecken) beendet den Dienst nicht mehr und meldet nicht mehr „vollständig“.
+- **`beamer-aus`** wird nur noch 15 s als gleicher Befehl unterdrückt (bisher 60 s), weil der Merker ein Einschalten am Plugin vorbei nicht sieht.
+- **Xbox `Unknown`** gilt als „keine Aussage“: `xbox/an` bleibt stehen, `xbox/erreichbar` = 0.
+- **Absage auf `CURRENT_APP`** (`FAIL`, `ERROR` …) heißt nicht mehr „an“.
+- **Rückmeldung:** Nach einem Befehl kommt die erste Nachfrage nach 5 s, auch bei langem Abfragetakt.
+- **Update:** Scheitert die Sicherung oder die Marke, bricht das Update ab und die bisherige Fassung bleibt.
+- **Sprechtoken:** Ein von Hand eingetragenes Alexa- oder Google-Token wird nicht mehr vom Token des Nachbar-Plugins überschrieben.
+- **Formular:** Ein beanstandeter Tafel- oder HomePod-Name bleibt zur Korrektur im Feld stehen.
+
 ## Neu in 1.3.34
 
 - Vor einem Download wird jeder offene Ausgabepuffer geleert: PHP-Warnungen oder Reste landen nicht mehr in der heruntergeladenen Datei.
@@ -75,7 +88,7 @@ Dienst selbst.
 
 **Kinoende.** Mit dem Hausereignis geht `haus/szene/kino` jetzt auch auf 0, wenn der Beamer von „an“ auf
 „aus“ wechselt, ohne dass die Szene lief (Fernbedienung, CEC): nach zwei Abfragen in Folge und mindestens
-60 s „aus“.
+60 s „aus“. Seit 1.3.35 zählt dazu auch ein Beamer, der 10 Minuten nicht antwortet.
 
 **Szene und Aufträge.** Jeder Auftrag an den Dienst ist eine eigene Datei; „Kino an“ und unmittelbar „Xbox
 an“ verlieren die Szene nicht mehr, und „Kino aus“ bricht eine laufende „Kino an“ binnen Sekunden ab. Eine
@@ -1350,8 +1363,8 @@ je Thema.
 | `beamer/aktiv` | digital | 1 = der Beamer ist in den Einstellungen eingeschaltet |
 | `beamer/erreichbar` | digital | 1 = der Beamer antwortet auf seinem Steuerport |
 | `beamer/grund` | Text | warum der Beamer nicht antwortet: ok, aus, abgewiesen, kein_weg, zeitueberschreitung, name_unbekannt, keine_adresse, besetzt, fehler |
-| `beamer/status` | Text | an oder aus. Bleibt bei einem Ausfall stehen - dann gilt beamer/erreichbar = 0. - = Beamer in den Einstellungen abgeschaltet. |
-| `beamer/an` | digital | 1 = der Beamer läuft. Bleibt bei einem Ausfall stehen - nur zusammen mit beamer/erreichbar = 1 gültig. Beamer abgeschaltet: 0 (das zeigt beamer/aktiv = 0). |
+| `beamer/status` | Text | an oder aus. Bleibt bei einem Ausfall stehen - dann gilt beamer/erreichbar = 0. Antwortet der Beamer 10 Minuten nicht, gilt er als aus, auch bei einem Netzausfall. - = Beamer in den Einstellungen abgeschaltet. |
+| `beamer/an` | digital | 1 = der Beamer läuft. Bleibt bei einem Ausfall stehen - nur zusammen mit beamer/erreichbar = 1 gültig. Antwortet der Beamer 10 Minuten nicht: 0, auch bei einem Netzausfall. Beamer abgeschaltet: 0 (das zeigt beamer/aktiv = 0). |
 | `beamer/app` | Text | laufende Quelle, zum Beispiel hdmi1. Bleibt bei einem Ausfall stehen. - = keine Quelle oder Beamer abgeschaltet. |
 | `beamer/lautstaerke` | analog | Lautstärke 0 bis 100; -1 = nicht gelesen (Beamer aus, Zusatzwerte aus oder Befehl unbekannt) oder Beamer abgeschaltet. |
 | `beamer/stumm` | analog | 1 = stumm, 0 = nicht stumm, -1 = nicht gelesen oder Beamer abgeschaltet |
@@ -1417,7 +1430,7 @@ Ein virtueller Ausgangsbefehl feuert bei der Flanke 0→1, nicht dauerhaft.
 **Derselbe Sollwert geht höchstens einmal je Minute hinaus.** Für
 `beamer-aus`, `kino-an`/`kino-aus`, `beamer-lautstaerke`,
 `beamer-eingang`, `beamer-bildmodus`, `beamer-energie`, `beamer-bild-an`/`-aus`,
-`beamer-stumm-an`/`-aus` und `xbox-an`/`xbox-aus` gilt: Kommt derselbe
+`beamer-stumm-an`/`-aus` und `xbox-an`/`xbox-aus` (seit 1.3.35 für `beamer-aus` nur 15 s) gilt: Kommt derselbe
 Befehl mit demselben Wert innerhalb von 60 s noch einmal, antwortet der Endpunkt
 mit HTTP 200 und `UNVERAENDERT=1;AKTION=…;SEIT_S=…` und sendet nichts. Ein
 anderer Wert geht sofort hinaus; ein 429 gibt es dafür nicht.

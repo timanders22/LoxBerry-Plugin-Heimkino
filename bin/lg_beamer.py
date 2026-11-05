@@ -408,6 +408,10 @@ class LgBeamer:
         for teil in antwort.split():
             if teil.upper().startswith("APP:"):
                 return teil.split(":", 1)[1]
+        # 1.3.35 (HK-8): eine ausdrueckliche Absage ist keine laufende Anwendung (bis 1.3.34: beamer/status an, beamer/app
+        # FAIL). Andere Antworten bleiben "an": welche Form der HU710PW hier liefert, ist am Geraet nicht gemessen.
+        if antwort.split()[0].upper().rstrip(":") in ("FAIL", "FAILED", "ERROR", "ERR", "NG", "INVALID"):
+            raise BeamerFehler("CURRENT_APP: das Geraet antwortet mit einer Absage: %r" % antwort[:40])
         return antwort
 
     def status(self):
@@ -758,6 +762,20 @@ def selbsttest():
         else:
             print("ok     GET_IPCONTROL_STATE %r -> %s"
                   % (antwort, "Fehler" if erwartet is None else ("an" if erwartet else "aus")))
+
+    # 1.3.35 (HK-8): CURRENT_APP, ohne Netz.
+    for antwort, erwartet in (("APP:com.webos.app.hdmi1", "com.webos.app.hdmi1"), ("", None), ("FAIL", "Fehler"),
+                              ("ERROR 12", "Fehler"), ("hdmi1", "hdmi1")):
+        faelle += 1
+        try:
+            ist = _Stumm(antwort).aktuelle_app()
+        except BeamerFehler:
+            ist = "Fehler"
+        if ist != erwartet:
+            print("FEHLER CURRENT_APP %r -> %r statt %r" % (antwort, ist, erwartet))
+            fehler += 1
+        else:
+            print("ok     CURRENT_APP %r -> %s" % (antwort, ist))
 
     print()
     weitere, fehl2 = _abweisungen(geraet)

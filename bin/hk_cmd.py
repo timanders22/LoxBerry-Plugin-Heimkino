@@ -322,8 +322,12 @@ def befehl_ausfuehren(befehl, rest, cfg, log, nachfassen=None):
             # Nur den Auftrag hinterlegen - siehe Kopf dieser Datei. Seit 1.3.30
             # (H6) ein eigener Auftrag in der Warteschlange; er verfaellt nach
             # 60 s, wenn der Dienst beschaeftigt war.
+            # 1.3.35 (HK-3): mit "gw" wie der MQTT-Weg - Schluessel und Wert wie hk_gleichwert_schluessel()/_wert() in
+            # hk_lib.php. Scheitert die Szene, nimmt der Dienst den Merker zurueck. hk_steuern() haelt die Sperre, bis
+            # dieser Aufruf zurueck ist, der Dienst wartet darauf hoechstens 3 s.
             if not gemein.auftrag_einreihen({"art": "szene", "aktion": befehl, "wert": "",
-                                             "quelle": "http", "verfall_s": 60}):
+                                             "quelle": "http", "verfall_s": 60,
+                                             "gw": {"datei": "gleichwert", "schluessel": "kino", "wert": befehl}}):
                 print("Der Auftrag liess sich nicht ablegen (%s)." % P["auftraege"])
                 return 1
             log.info("Szene %s angenommen.", befehl)

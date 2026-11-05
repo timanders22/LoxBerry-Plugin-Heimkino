@@ -167,8 +167,8 @@
       "min": 0,
       "max": 0,
       "einheit": "",
-      "de": "an oder aus. Bleibt bei einem Ausfall stehen - dann gilt beamer/erreichbar = 0. - = Beamer in den Einstellungen abgeschaltet.",
-      "en": "an (on) or aus (off). Stays unchanged during an outage - then beamer/erreichbar = 0. - = projector disabled in the settings."
+      "de": "an oder aus. Bleibt bei einem Ausfall stehen - dann gilt beamer/erreichbar = 0. Antwortet der Beamer 10 Minuten nicht, gilt er als aus, auch bei einem Netzausfall. - = Beamer in den Einstellungen abgeschaltet.",
+      "en": "an (on) or aus (off). Stays unchanged during an outage - then beamer/erreichbar = 0. If the projector does not answer for 10 minutes it counts as off, even during a network outage. - = projector disabled in the settings."
     },
     {
       "thema": "beamer/an",
@@ -177,8 +177,8 @@
       "min": 0,
       "max": 1,
       "einheit": "",
-      "de": "1 = der Beamer läuft. Bleibt bei einem Ausfall stehen - nur zusammen mit beamer/erreichbar = 1 gültig. Beamer abgeschaltet: 0 (das zeigt beamer/aktiv = 0).",
-      "en": "1 = the projector is running. Stays unchanged during an outage - only valid together with beamer/erreichbar = 1. Projector disabled: 0 (shown by beamer/aktiv = 0).",
+      "de": "1 = der Beamer läuft. Bleibt bei einem Ausfall stehen - nur zusammen mit beamer/erreichbar = 1 gültig. Antwortet der Beamer 10 Minuten nicht: 0, auch bei einem Netzausfall. Beamer abgeschaltet: 0 (das zeigt beamer/aktiv = 0).",
+      "en": "1 = the projector is running. Stays unchanged during an outage - only valid together with beamer/erreichbar = 1. No answer for 10 minutes: 0, even during a network outage. Projector disabled: 0 (shown by beamer/aktiv = 0).",
       "kurz_de": "Beamer läuft",
       "kurz_en": "Projector on"
     },

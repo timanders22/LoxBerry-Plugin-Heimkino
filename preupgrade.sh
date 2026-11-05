@@ -78,10 +78,35 @@ date +%s > "$BASE/data/plugins/$PDIR.upgrade_laeuft" 2>/dev/null
 if [ -s "$BASE/data/plugins/$PDIR.upgrade_laeuft" ]; then
     echo "<OK> Dienststart bis zum Ende der Aktualisierung gesperrt."
 else
-    echo "<WARNING> Die Marke $BASE/data/plugins/$PDIR.upgrade_laeuft liess sich"
-    echo "<WARNING> nicht anlegen. Ein Systemstart waehrend der Aktualisierung"
-    echo "<WARNING> koennte den Dienst mit der Vorgabe-Konfiguration anwerfen."
+    # 05.11.2026: ohne Marke haelt die Installation das Update fuer eine Neuinstallation und legt die Einstellungen beiseite; bis hierher nur eine Warnung.
+    rm -f "$BASE/data/plugins/$PDIR.upgrade_laeuft" 2>/dev/null
+    echo "<FAIL> Die Marke $BASE/data/plugins/$PDIR.upgrade_laeuft liess sich nicht anlegen - die Aktualisierung wird abgebrochen,"
+    echo "<FAIL> die bisherige Fassung bleibt unveraendert installiert."
+    exit 2
 fi
+# ---------- Update-Schutz (05.11.2026, Bauart Govee 0.9.34) ----------
+# plugininstall.pl bricht nur bei Rueckgabewert >1 vor purge_installation ab. Die Kopie entsteht als <Ziel>.neu.<pid>, traegt 0600,
+# BEVOR Inhalt hineinkommt, wird mit cmp verglichen und erst dann per mv an ihren Platz gestellt: eine heile Sicherung bleibt heil.
+ZS_FEHL=""
+zs_hinlegen() {   # $1 Quelle, $2 Ziel
+    [ -d "$2" ] && return 1
+    zs_neu="$2.neu.$$"
+    rm -f "$zs_neu" 2>/dev/null
+    if ( : > "$zs_neu" ) 2>/dev/null && chmod 600 "$zs_neu" 2>/dev/null \
+       && cp "$1" "$zs_neu" 2>/dev/null && cmp -s "$1" "$zs_neu" \
+       && mv -f "$zs_neu" "$2" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$zs_neu" 2>/dev/null
+    return 1
+}
+zs_schluss() {   # Fehlschlag gesammelt: Marke weg, Abbruch vor purge_installation
+    [ -n "$ZS_FEHL" ] || return 0
+    echo "<FAIL> Nicht gesichert:$ZS_FEHL - die Aktualisierung wird abgebrochen, damit der Purge die Originale nicht loescht."
+    echo "<FAIL> Die bisherige Fassung bleibt installiert. Bitte Platz und Rechte unter config/plugins und data/plugins pruefen."
+    rm -f "$BASE/data/plugins/$PDIR.upgrade_laeuft" 2>/dev/null
+    exit 2
+}
 
 # ---------- Befehlsbruecke anhalten (seit 1.3.30, Entwurf 3.9) ----------
 #
@@ -262,12 +287,14 @@ if [ "$gesichert" = "1" ] && [ "$sicher_ok" = "1" ]; then
         echo "<WARNING> Die neue Sicherung liess sich nicht an ihren Platz bringen."
         echo "<WARNING> Platz und Rechte in $BASE/data/plugins pruefen. Zurueckgespielt"
         echo "<WARNING> wird dann nur die Zweitschrift neben dem Konfigordner."
+        ZS_FEHL="$ZS_FEHL Update-Sicherung"
     fi
 elif [ "$gesichert" = "1" ]; then
     rm -rf "$NEU" 2>/dev/null
     echo "<WARNING> Die Einstellungen liessen sich NICHT vollstaendig sichern"
     echo "<WARNING> (nicht in der Sicherung:$sicher_fehlt). Zurueckgespielt wird"
     echo "<WARNING> dann nur die Zweitschrift neben dem Konfigordner."
+    ZS_FEHL="$ZS_FEHL $sicher_fehlt"
 else
     rm -rf "$NEU" 2>/dev/null
     echo "<INFO> Nichts zu sichern - offenbar eine Erstinstallation."
@@ -351,12 +378,13 @@ netz_zweitschrift() {   # $1 Dateiname, $2 Pruefart, $3 Rechte
     # Rueckgabewert pruefen und nur melden, was wirklich geschah: eine
     # Erfolgsmeldung hinter einem gescheiterten cp faellt erst auf, wenn
     # Keycode, Aktionstoken und Anmeldung weg sind.
-    if cp -p "$nz_quelle" "$nz_ziel" 2>/dev/null; then
+    if zs_hinlegen "$nz_quelle" "$nz_ziel" 2>/dev/null; then
         chmod "$3" "$nz_ziel" 2>/dev/null
         echo "<INFO> Zweitschrift von $1 angelegt."
     else
         echo "<WARNING> Die Zweitschrift von $1 liess sich NICHT anlegen."
         echo "<WARNING> Platz und Rechte in $NETZ_BASE/config/plugins pruefen."
+        ZS_FEHL="$ZS_FEHL $1"
     fi
 }
 netz_zweitschrift heimkino.cfg cfg 0600
@@ -374,4 +402,5 @@ netz_zweitschrift heimkino.cfg cfg 0600
 # die wertvollen - Token und Zugangsdaten.
 netz_zweitschrift xbox_auth.json json 0600
 
+zs_schluss
 exit 0

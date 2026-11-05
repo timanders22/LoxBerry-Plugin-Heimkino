@@ -2303,6 +2303,8 @@ function hk_ansage_post(array $post)
         return array(false, $t, array());
     }
     $cfg['tts'] = $neu;
+    // 1.3.35: ein eingetipptes oder geloeschtes Sprechtoken ist nicht mehr vom Nachbarn; bis 1.3.34 ueberschrieb es der naechste Abgleich.
+    $cfg['ansage_token_herkunft'] = ansage_token_herkunft_formular($post, isset($cfg['ansage_token_herkunft']) ? $cfg['ansage_token_herkunft'] : array());
     $cfg['ansage_regeln'] = $r;
     $cfg['ansage_haken'] = $hk;
     $t = array();
@@ -3209,6 +3211,14 @@ function hk_gleichwert_betrifft($aktion)
  * Ohne Datenordner oder Sperre: false - der Endpunkt faellt dann
  * geschlossen aus (503).
  */
+function hk_gleichwert_fenster($aktion)
+{
+    /* 1.3.35 (HK-6): beamer-aus nur 15 s. Der Merker kennt kein WoL vom Miniserver und keine Fernbedienung: Kino aus,
+     * Kino an am Plugin vorbei, Kino aus binnen 60 s blieb UNVERAENDERT=1, und der Beamer lief weiter. Ein doppelter
+     * Ausgangsimpuls faellt weiter unter die 15 s; ein zweites POWER off danach ist harmlos. */
+    return $aktion === 'beamer-aus' ? 15 : 60;
+}
+
 function hk_gleichwert_oeffnen($aktion = '')
 {
     // Die Xbox hat ihren eigenen Merker (Nachtrag 01.10.2026).
@@ -3449,7 +3459,7 @@ function hk_steuern($aktion, $wert = null, $quelle = 'http')
                            . 'fehlt) - es wird nichts gesendet.', 'gleichwert_fehlt');
         }
         $merker = hk_gleichwert_lesen($gw);
-        $seit = hk_gleichwert_seit($merker, $schl, hk_gleichwert_wert($aktion, $hk_wert));
+        $seit = hk_gleichwert_seit($merker, $schl, hk_gleichwert_wert($aktion, $hk_wert), hk_gleichwert_fenster($aktion));
         if ($seit >= 0) {
             hk_gleichwert_schliessen($gw, null);
             return $r(200, 'UNVERAENDERT=1;AKTION=' . $aktion . ($hk_wert !== '' ? ';WERT=' . $hk_wert : '')

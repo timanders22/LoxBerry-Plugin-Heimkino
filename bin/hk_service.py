@@ -64,6 +64,15 @@ TAKT_NACHFASSEN = 5
 # Ein Auftrag, der beim Dienststart aelter ist, wird verworfen (Muster 5).
 AUFTRAG_VERALTET = 60
 
+# 1.3.35 (HK-1, Entscheidung Hausherr 05.11.2026): antwortet der Beamer so lange gar nicht, gilt er als aus -
+# fuer beamer/status, beamer/an, das Kinoende und "gewirkt". Der HU710PW schweigt ausgeschaltet oft, statt die
+# Verbindung abzuweisen. Der Preis: ein Netzausfall meldet nach dieser Zeit ebenfalls "aus"; beamer/erreichbar
+# bleibt 0 und beamer/grund nennt weiter den wahren Grund. Nur diese beiden Gruende sind Schweigen - ein falscher
+# Keycode oder eine fehlende Adresse sind Fehler und bleiben "unbekannt".
+BEAMER_SCHWEIGT_AUS_S = 600
+BEAMER_SCHWEIGT_GRUENDE = ("zeitueberschreitung", "kein_weg")
+SCHWEIGEN = {"seit": None}
+
 
 def _abbruch(nummer, rahmen):        # noqa: ARG001
     global LAEUFT
@@ -340,8 +349,11 @@ def xbox_abfragen(cfg, log, meldungen):
                                  "eingetragen.", log, "warning")
             return ergebnis
         auskunft = wolke.status(kennung)
-        ergebnis["status"] = auskunft["status"]
-        ergebnis["erreichbar"] = True
+        # 1.3.35 (HK-5): "Unknown" (Cloud ohne powerState) ist keine Aussage. Bis 1.3.34 ging daraus xbox/an = 0
+        # retained hinaus und ueberschrieb den letzten Stand (gegen Entscheidung 8); xbox-aus meldete "gewirkt".
+        ergebnis["status"] = ("unbekannt" if auskunft["status"] in (None, "", "Unknown")
+                              else auskunft["status"])
+        ergebnis["erreichbar"] = bool(auskunft.get("erreichbar", True))
         ergebnis["quelle"] = auskunft.get("quelle", "")
         # Der Name kam schon bisher mit und wurde weggeworfen.
         ergebnis["name"] = auskunft.get("name", "")
@@ -358,6 +370,37 @@ def xbox_abfragen(cfg, log, meldungen):
         gemein.einmal_melden(meldungen, "xbox",
                              "Xbox-Cloud: %s" % fehler, log, "warning")
     return ergebnis
+
+
+# --------------------------------------------------------------------------
+# 1.3.35 (HK-1): ein schweigender Beamer gilt nach BEAMER_SCHWEIGT_AUS_S als aus
+# --------------------------------------------------------------------------
+
+def beamer_schweigen_werten(beamer, log=None, jetzt=None):
+    """Aus "unbekannt" wird "aus", wenn der Beamer seit BEAMER_SCHWEIGT_AUS_S nicht antwortet.
+
+    Gezaehlt wird von der ersten stummen Abfrage an; jede Antwort, auch eine Abweisung oder ein Fehler, setzt die
+    Uhr zurueck. Ein uebersprungener Durchgang hat nicht gefragt und aendert nichts. last_error wird dann geleert:
+    "aus" ist der Normalzustand dieses Geraets, kein Fehler. Rueckgabe: das Abfrageergebnis (eine Kopie, wenn geaendert).
+    """
+    jetzt = time.monotonic() if jetzt is None else jetzt
+    if beamer.get("uebersprungen"):
+        return beamer
+    if not (beamer.get("aktiv") and beamer.get("status") == "unbekannt"
+            and beamer.get("grund") in BEAMER_SCHWEIGT_GRUENDE):
+        SCHWEIGEN["seit"] = None
+        return beamer
+    if SCHWEIGEN["seit"] is None:
+        SCHWEIGEN["seit"] = jetzt
+    dauer = jetzt - SCHWEIGEN["seit"]
+    if dauer < BEAMER_SCHWEIGT_AUS_S:
+        return beamer
+    aus = dict(beamer)
+    aus["status"] = "aus"
+    aus["fehler"] = ""
+    aus["app"] = ""
+    aus["schweigt_s"] = int(dauer)
+    return aus
 
 
 # --------------------------------------------------------------------------
@@ -390,6 +433,27 @@ def auftrag_erfuellt(ziel, beamer, xbox):
     return None
 
 
+def nachfass_abstand(offen, takt):
+    """1.3.35 (HK-1): der Abstand der naechsten Abfrage. 5 s nur innerhalb der eigentlichen Frist; das verlaengerte
+    Warten auf einen schweigenden Beamer fragt hoechstens jede Minute, sonst ginge fuer die Xbox bis zu zwoelf Minuten
+    lang alle 5 s ein Aufruf an die Microsoft-Cloud hinaus."""
+    if not offen:
+        return takt
+    for auftrag in offen.values():
+        try:
+            if time.time() - float(auftrag.get("gestellt", 0)) < float(auftrag.get("frist", 120)):
+                return TAKT_NACHFASSEN
+        except (TypeError, ValueError):
+            return TAKT_NACHFASSEN
+    return min(takt, 60)
+
+
+def nachfassen_neu(vorher, offen):
+    """1.3.35 (HK-9): kam in dieser Runde ein Nachfassauftrag dazu? Dann wird die Abfrage vorgezogen; bis 1.3.34 kam die
+    erste Beurteilung erst im naechsten Takt (bei Takt 3600 nach bis zu einer Stunde, die Frist hin oder her)."""
+    return any(vorher.get(geraet) is not auftrag for geraet, auftrag in offen.items())
+
+
 def nachfassen(auftrag, beamer, xbox, melder, log):
     """Einen offenen Auftrag beurteilen. Gibt True, wenn er erledigt ist."""
     ziel = str(auftrag.get("ziel", ""))
@@ -399,6 +463,10 @@ def nachfassen(auftrag, beamer, xbox, melder, log):
     thema = "xbox/letzte_aktion" if ziel.startswith("xbox") else "beamer/letzte_aktion"
 
     stand = auftrag_erfuellt(ziel, beamer, xbox)
+    # 1.3.35 (HK-1): ein schweigender Beamer entscheidet sich erst nach BEAMER_SCHWEIGT_AUS_S. Bis dahin ist beamer-aus
+    # nicht "nicht feststellbar", sonst kaeme das "gewirkt" nie (die Frist liegt bei 90 s).
+    if ziel == "beamer_aus" and stand is None and beamer.get("grund") in BEAMER_SCHWEIGT_GRUENDE:
+        frist += BEAMER_SCHWEIGT_AUS_S
     if stand is True:
         melder.sende(thema, "%s gewirkt nach %d s" % (aktion, int(seit)))
         log.info("%s: gewirkt nach %d s.", aktion, int(seit))
@@ -482,7 +550,27 @@ def _warten_auf_xbox(cfg, log, sekunden, abbruch=None):
     return None
 
 
-def szene_ausfuehren(aktion, cfg, melder, log, abbruch=None):
+# 1.3.35 (HK-2, HK-3): was die letzte Szene hinterliess - "fehler" fuer den Gleichwert-Merker, "wol" fuer das Nachsetzen.
+SZENE_STAND = {"fehler": False, "wol": False}
+
+
+def _beamer_aus_nachsetzen(cfg, sekunden, abbruch=None):
+    """1.3.35 (HK-2): POWER off, und nach einem abgebrochenen kino-an mit gesendetem WoL bis zu "sekunden" lang
+    wieder versuchen. Sonst traf der eine Versuch den noch geschlossenen Port, und der Beamer kam danach hoch und lief im
+    leeren Raum. Ein neuerer Szenenauftrag beendet das Nachsetzen. Nach der Frist bleibt der letzte Fehler stehen."""
+    anfang = time.monotonic()
+    while True:
+        try:
+            _beamer_objekt(cfg).aus()
+            return
+        except Exception:                    # noqa: BLE001 - beim letzten Versuch weiter nach oben
+            if time.monotonic() - anfang >= sekunden or not LAEUFT:
+                raise
+        _abbruch_pruefen(abbruch)
+        _warten(min(5.0, max(0.5, sekunden - (time.monotonic() - anfang))))
+
+
+def szene_ausfuehren(aktion, cfg, melder, log, abbruch=None, nachsetzen_s=0):
     """Kino an oder aus - Schritt fuer Schritt, mit echten Wartebedingungen.
 
     Der Gewinn gegenueber einer Nachbildung in Loxone: dort liessen sich die
@@ -507,6 +595,7 @@ def szene_ausfuehren(aktion, cfg, melder, log, abbruch=None):
     w_xbox = gemein.zahl(cfg, "szene", "warten_xbox", 90, 10, 600)
     fehler = []
     abgebrochen = None
+    SZENE_STAND.update(fehler=False, wol=False)
 
     melder.sende("szene/laeuft", 1)
     melder.sende("szene/ergebnis", "-")
@@ -526,9 +615,12 @@ def szene_ausfuehren(aktion, cfg, melder, log, abbruch=None):
                 mac = gemein.wert(cfg, "beamer", "mac")
                 if mac:
                     schritt("Beamer wecken (Wake-on-LAN)")
+                    # 1.3.35 (HK-4): auch OSError (kein Netz). Bis 1.3.34 fing das nur ValueError; die Ausnahme
+                    # beendete den Dienst, und szene/ergebnis meldete "vollstaendig".
                     try:
                         gemein.wol_senden(mac)
-                    except ValueError as f:
+                        SZENE_STAND["wol"] = True
+                    except Exception as f:          # noqa: BLE001
                         fehler.append("WoL: %s" % f)
                 schritt("warten, bis der Beamer antwortet")
                 dauer = _warten_auf_beamer(cfg, w_beamer, abbruch)
@@ -581,17 +673,24 @@ def szene_ausfuehren(aktion, cfg, melder, log, abbruch=None):
             if beamer_an and LAEUFT:
                 schritt("Beamer ausschalten")
                 try:
-                    _beamer_objekt(cfg).aus()
+                    _beamer_aus_nachsetzen(cfg, nachsetzen_s, abbruch)
+                except SzeneAbbruch:
+                    raise
                 except Exception as f:              # noqa: BLE001
                     fehler.append("Beamer ausschalten: %s" % f)
         else:
             fehler.append("unbekannte Szene %r" % aktion)
     except SzeneAbbruch as ab:
         abgebrochen = ab.auftrag
+    except Exception as f:                  # noqa: BLE001
+        # 1.3.35 (HK-4): z. B. ein von Hand verdorbener Keycode (BeamerFehler aus _beamer_objekt). Bis 1.3.34 verliess das
+        # die Hauptschleife, und der finally-Zweig meldete "vollstaendig".
+        fehler.append("Szene: %s" % f)
     finally:
+        SZENE_STAND["fehler"] = bool(fehler)
         dauer = int(time.monotonic() - anfang)
         if abgebrochen is not None:
-            ergebnis = "%s abgebrochen durch kino-aus nach %d s" % (aktion, dauer)
+            ergebnis = "%s abgebrochen durch %s nach %d s" % (aktion, abgebrochen.get("aktion", "?"), dauer)
         elif not LAEUFT:
             ergebnis = "%s abgebrochen - der Dienst wurde beendet" % aktion
         elif fehler:
@@ -780,7 +879,8 @@ def ausfall_themen(beamer, xbox):
     "aus" nach einer ABGEWIESENEN Verbindung ist kein Ausfall: der Beamer
     weist sie ab, weil er aus ist - das sagt das Geraet. Lautstaerke und
     Stummschaltung gehen dann als -1 retained hinaus: das Feld liefert der
-    gelungene Abruf nicht (Entscheidung 8).
+    gelungene Abruf nicht (Entscheidung 8). Ebenso seit 1.3.35 nach
+    BEAMER_SCHWEIGT_AUS_S ohne Antwort (HK-1, Ausnahme zu Entscheidung 8).
     """
     weg = set()
     if beamer.get("aktiv") and beamer.get("status") == "unbekannt":
@@ -1013,7 +1113,8 @@ def kinoende_pruefen(beamer, cfg, melder, log, jetzt=None):
     wirklich gefragt hat (uebersprungen bei besetzter Sperre zaehlt nicht).
     Erst ein gesehenes "an" macht scharf; danach zwei "aus" in Folge UND
     mindestens 60 s seit dem ersten (unabhaengig vom Takt - beim Nachfassen
-    laeuft er mit 5 s). "unbekannt" sagt nichts. Gesendet wird nur, wenn "1"
+    laeuft er mit 5 s). "unbekannt" sagt nichts; ein Beamer, der seit
+    BEAMER_SCHWEIGT_AUS_S schweigt, kommt seit 1.3.35 hier als "aus" an (HK-1). Gesendet wird nur, wenn "1"
     gemerkt ist; ein gemerktes "0" (kino-aus lief) bleibt still. Der Merker
     lebt nur im Prozess: nach einem Neustart zaehlt erst ein wieder gesehenes
     "an"; ein Beamer, der nie anging, setzt nichts zurueck.
@@ -1083,19 +1184,20 @@ def nachfassen_merken(offen, auftrag):
                      "gestellt": auftrag.get("gestellt", time.time())}
 
 
-def szenen_abbruch(log):
-    """Die Abbruchfrage einer laufenden kino-an: beansprucht NUR Auftraege der Art "szene" - Einzelbefehle bleiben
-    liegen und laufen nach der Szene (oder verfallen nach 30 s). Ein kino-aus bricht ab; ein weiteres kino-an wird
-    verworfen ("laeuft schon")."""
+def szenen_abbruch(log, laufend="kino-an"):
+    """Die Abbruchfrage einer laufenden Szene: beansprucht NUR Auftraege der Art "szene" - Einzelbefehle bleiben
+    liegen und laufen nach der Szene (oder verfallen nach 30 s). Seit 1.3.35 (HK-7) zaehlt nur der juengste Auftrag, wie
+    ausserhalb einer Szene: bis 1.3.34 gewann ein kino-aus auch dann, wenn im selben Abfragefenster danach noch ein
+    kino-an kam. Ist er eine andere Szene, bricht er ab; alle uebrigen werden verworfen ("laeuft schon")."""
     def pruefen():
         abbrechen = None
-        for a in gemein.auftraege_holen(nur_art="szene"):
-            if str(a.get("aktion", "")) == "kino-aus":
-                abbrechen = a
-            else:
-                gemein.gleichwert_zuruecknehmen(a.get("gw"))
-                log.info("Szene kino-an laeuft schon - ein weiteres %s (%s) wurde verworfen.",
-                         a.get("aktion", "?"), a.get("quelle", "?"))
+        szenen = gemein.auftraege_holen(nur_art="szene")    # nach "gestellt" sortiert
+        if szenen and str(szenen[-1].get("aktion", "")) != laufend:
+            abbrechen = szenen.pop()
+        for a in szenen:
+            gemein.gleichwert_zuruecknehmen(a.get("gw"))
+            log.info("Szene %s laeuft schon - ein weiteres %s (%s) wurde verworfen.", laufend,
+                     a.get("aktion", "?"), a.get("quelle", "?"))
         return abbrechen
     return pruefen
 
@@ -1174,6 +1276,7 @@ def auftraege_abarbeiten(auftraege, cfg, melder, log, takt, offen, beim_start=Fa
             gemein.gleichwert_zuruecknehmen(alt.get("gw"))
             log.info("Szene %s (%s) verworfen - eine neuere Szene folgt.", alt.get("aktion", "?"), alt.get("quelle", "?"))
         a = szenen[-1]
+        nachsetzen = 0
         while a is not None and LAEUFT:
             aktion = str(a.get("aktion", ""))
             verfallen, alter = _verfallen(a, AUFTRAG_VERALTET)
@@ -1183,14 +1286,25 @@ def auftraege_abarbeiten(auftraege, cfg, melder, log, takt, offen, beim_start=Fa
                             aktion, int(alter) if alter != float("inf") else -1)
                 break
             if aktion not in ("kino-an", "kino-aus") or not gemein.ja(cfg, "szene", "aktiv"):
+                gemein.gleichwert_zuruecknehmen(a.get("gw"))
                 log.warning("Szene %s nicht ausgefuehrt: %s.", aktion, "unbekannte Szene" if aktion not in
                             ("kino-an", "kino-aus") else "die Kino-Szene ist in den Einstellungen abgeschaltet")
                 break
             if a.get("quelle") == "mqtt":
                 log.info("Szene %s ueber MQTT.", aktion)
             with Lebenszeichen(melder, takt):
-                a = szene_ausfuehren(aktion, cfg, melder, log,
-                                     abbruch=szenen_abbruch(log) if aktion == "kino-an" else None)
+                naechste = szene_ausfuehren(
+                    aktion, cfg, melder, log,
+                    abbruch=szenen_abbruch(log, aktion) if (aktion == "kino-an" or nachsetzen) else None,
+                    nachsetzen_s=nachsetzen)
+            # 1.3.35 (HK-3): gescheitert, also den Gleichwert-Merker zuruecknehmen, sonst wird ein Wiederholen binnen 60 s
+            # verschluckt (der Kommentar in hk_lib.php versprach das schon, befehl_im_dienst tat es, die Szene nicht).
+            if SZENE_STAND["fehler"]:
+                gemein.gleichwert_zuruecknehmen(a.get("gw"))
+            # 1.3.35 (HK-2): nach einem abgebrochenen kino-an mit gesendetem WoL setzt das kino-aus nach.
+            nachsetzen = (gemein.zahl(cfg, "szene", "warten_beamer", 120, 10, 600)
+                          if aktion == "kino-an" and naechste is not None and SZENE_STAND["wol"] else 0)
+            a = naechste
             ausgefuehrt = True
     for b in befehle:
         if not LAEUFT:
@@ -1326,6 +1440,7 @@ def hauptteil():
             # --- Auftraege (Gruppe 9, Entwurf 3.5): Szenen, Einzelbefehle,
             # Nachfassen - alles im Hauptfaden (F1). Bis 1.3.29 lag EIN Auftrag
             # in auftrag.json, und ein neuer ueberschrieb ihn (H6).
+            offen_vorher = dict(offen)
             ausgefuehrt = auftraege_abarbeiten(gemein.auftraege_holen(beim_start=beim_start),
                                                cfg, melder, log, takt, offen, beim_start)
             beim_start = False
@@ -1333,7 +1448,8 @@ def hauptteil():
             # --- Abfrage nur im Takt: der Beamer wird nicht oefter befragt als
             # bis 1.3.29. Nach einem ausgefuehrten Auftrag fruehestens nach 5 s.
             if time.monotonic() >= naechste_abfrage:
-                beamer = beamer_abfragen(cfg, log, meldungen, letzter_beamer)
+                # 1.3.35 (HK-1): schweigt er seit BEAMER_SCHWEIGT_AUS_S, gilt er ab hier als aus.
+                beamer = beamer_schweigen_werten(beamer_abfragen(cfg, log, meldungen, letzter_beamer))
                 letzter_beamer = beamer
                 # V2 Kinoende (Entscheidung 3, Entwurf 2.7).
                 kinoende_pruefen(beamer, cfg, melder, log)
@@ -1396,8 +1512,8 @@ def hauptteil():
                 HERZ.senden()
                 # Solange ein Nachfassauftrag offen ist, kuerzer warten - sonst
                 # dauerte die Rueckmeldung bis zu einem vollen Takt.
-                naechste_abfrage = time.monotonic() + (TAKT_NACHFASSEN if offen else takt)
-            if ausgefuehrt:
+                naechste_abfrage = time.monotonic() + nachfass_abstand(offen, takt)
+            if ausgefuehrt or nachfassen_neu(offen_vorher, offen):
                 naechste_abfrage = min(naechste_abfrage, time.monotonic() + TAKT_NACHFASSEN)
 
             # Die Protokolldatei liegt auf einer Ramdisk. Ohne Kappung frisst
