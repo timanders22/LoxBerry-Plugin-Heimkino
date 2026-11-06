@@ -13,6 +13,10 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.36
+
+- Gemeinsames Sprachmodul 1.4.2: Wird eine Ansage bewusst nicht gesprochen (gerade eben schon gesagt, gesperrt oder Ruhezeit), steht das im Protokoll jetzt so – und nicht mehr als Fehler.
+
 ## Neu in 1.3.35
 
 - **Schweigender Beamer gilt als aus.** Viele Beamer antworten ausgeschaltet gar nicht, statt die Verbindung abzuweisen. Antwortet er 10 Minuten nicht (Zeitüberschreitung oder kein Weg), meldet das Plugin `beamer/status` = aus und `beamer/an` = 0, das Kinoende greift, und `beamer-aus` meldet „gewirkt“. **Ein Netzausfall sieht genauso aus und meldet nach 10 Minuten ebenfalls aus**; `beamer/erreichbar` bleibt dann 0 und `beamer/grund` nennt den Grund, `last_error` ist leer. Sobald er wieder antwortet, gilt seine Antwort.
