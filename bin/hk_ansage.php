@@ -14,9 +14,19 @@ if (preg_match('/^-?[0-9]{1,6}\z/', $hk_t0) !== 1 || preg_match('/^[A-Za-z0-9_-]
     echo "ANSAGE;STAND=0;KENNUNG=AUFRUF\n";
     exit(1);
 }
+// 1.3.37: als LoxBerry-Wurzel gilt nur ein Ordner mit config/plugins, data/plugins und config/system/general.json.
+// Bis 1.3.36 genuegte config/plugins, und der Rueckfall (drei Ebenen ueber bin/plugins/<ordner>) galt ungeprueft.
+$hk_wurzel = function ($h) {
+    return is_string($h) && $h !== '' && is_dir($h . '/config/plugins') && is_dir($h . '/data/plugins')
+        && is_file($h . '/config/system/general.json');
+};
 $hk_h = getenv('LBHOMEDIR');
-if (!$hk_h || !is_dir($hk_h . '/config/plugins')) {
+if (!$hk_wurzel($hk_h)) {
     $hk_h = dirname(dirname(dirname(__DIR__)));
+    if (!$hk_wurzel($hk_h)) {
+        echo "ANSAGE;STAND=0;KENNUNG=WURZEL\n";
+        exit(1);
+    }
 }
 $hk_lib = $hk_h . '/webfrontend/htmlauth/plugins/' . $hk_o . '/hk_lib.php';
 if (!is_file($hk_lib)) {
