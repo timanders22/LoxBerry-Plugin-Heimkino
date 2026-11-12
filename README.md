@@ -13,6 +13,10 @@ Plugin füllt genau die beiden Lücken, nicht mehr:
 | Xbox **einschalten** | über den Cloud-Dienst von Microsoft. **Dieses Plugin.** |
 | Xbox **ausschalten** | ebenso. |
 
+## Neu in 1.3.38
+
+- **Reiter Test ohne PHP-Erweiterung ctype:** Die Zeile zum letzten Aufruf des HTTP-Endpunkts prüfte den gemerkten Zeitpunkt mit einer Funktion der Erweiterung ctype. Fehlt sie, brach der Reiter Test unter PHP 8 mit „Call to undefined function“ ab, unter PHP 7.4 hieß es immer „seit dem Update kam kein Aufruf mit Token“. Jetzt prüft ein regulärer Ausdruck die Ziffern. Auf einem LoxBerry mit ctype (Debian liefert sie mit PHP aus) ändert sich nichts.
+
 ## Neu in 1.3.37
 
 - **Ansage-Brücke des Dienstes:** `bin/hk_ansage.php` nimmt eine LoxBerry-Wurzel nur noch an, wenn `config/plugins`, `data/plugins` und `config/system/general.json` vorhanden sind; sonst antwortet es mit `KENNUNG=WURZEL` und Rückgabewert 1.

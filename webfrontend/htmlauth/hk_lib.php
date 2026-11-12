@@ -3389,7 +3389,9 @@ function hk_endpunkt_zuletzt()
 {
     $f = hk_paths()['endpunkt_zuletzt'];
     $w = @is_file($f) ? trim((string) @file_get_contents($f)) : '';
-    return ctype_digit($w) ? max(0, time() - (int) $w) : -1;
+    // preg_match statt der ctype-Funktion seit 1.3.38 (Regeln/03: ctype ist eine Erweiterung, die nicht garantiert geladen
+    // ist; ohne sie endete der Reiter Test unter PHP 8 mit "undefined function", unter 7.4 hiess es immer -1).
+    return preg_match('/^[0-9]+\z/', $w) === 1 ? max(0, time() - (int) $w) : -1;
 }
 
 /* ------------------------------------------------------------------
