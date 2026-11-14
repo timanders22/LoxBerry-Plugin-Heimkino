@@ -649,15 +649,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['hk_sichern'])) {
     // X-3 (Verbesserungsbau 30.09.2026): bestuende ein gespeicherter Wert das
     // eigene Zurueckspielen nicht, sagt es der Kopf der Datei - mit den
     // NAMEN, nie den Werten. Geliefert wird trotzdem, vollstaendig.
-    $hk_sich = hk_sicherung_bauen();
-    $hk_altw = hk_rueckspiel_altwerte($hk_sich);
-    if ($hk_altw) {
-        $hk_sich = array('_warnung' => hk_tf('SET.SICH_ALTWERT_KOPF',
-            array('%1' => implode(', ', $hk_altw)))) + $hk_sich;
-    }
-    $hk_js = json_encode($hk_sich,
-        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    if ($hk_js !== false) {
+    // 1.3.39: das gemeinsame Sicherungsmodul setzt _warnung selbst (dieselbe Pruefung wie beim Zurueckspielen).
+    $hk_js = sicherung_json(hk_sicherung_bauen());
+    if ($hk_js !== '') {
         while (ob_get_level() > 0) { @ob_end_clean(); }
         header('Content-Type: application/json; charset=utf-8');
         header('Content-Disposition: attachment; filename="heimkino_einstellungen_'
@@ -676,8 +670,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['hk_sichern'])) {
 /* ---------------- Einstellungen zurueckspielen ----------------
  *
  * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei des
- * Servers unterschieben. Dann die Groessengrenze von 64 kB (Regeln/05) - eine
- * Sicherung dieses Plugins ist kaum zwei Kilobyte gross.
+ * Servers unterschieben. Dann die Groessengrenze - seit 1.3.39 die des Moduls (256 kB), bis 1.3.38
+ * waren es hier 64 kB; eine Sicherung dieses Plugins ist kaum zwei Kilobyte gross.
  *
  * Seit 1.3.15 (C2/C3) wird jeder Wert geprueft (hk_sicherung_lesen), der
  * Zweig steht VOR "Anzeige vorbereiten", die Meldung geht in $hk_hinweis und
@@ -686,49 +680,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['hk_sichern'])) {
  * nie ausgegeben wurde, die Seite zeigte die alten Werte - und wer danach
  * "Speichern" drueckte, schrieb sie zurueck (Befund code 3, oberflaeche 3). */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['hk_zurueck'])) {
-    if (!isset($_FILES['hk_sicherung']) || !is_array($_FILES['hk_sicherung'])
-        || !isset($_FILES['hk_sicherung']['tmp_name'])
-        || !is_string($_FILES['hk_sicherung']['tmp_name'])
-        || !@is_uploaded_file($_FILES['hk_sicherung']['tmp_name'])) {
-        $hk_fehler[] = hk_t('SET.SICH_KEINE_DATEI');
-    } elseif ((int) $_FILES['hk_sicherung']['size'] > 65536) {
-        $hk_fehler[] = hk_t('SET.SICH_ZU_GROSS');
+    /* 1.3.39: Haken, hochgeladene Datei und Groessengrenze prueft das gemeinsame Sicherungsmodul
+     * (sicherung_eingang(), Modul 1.1.0, Entscheidung des Hausherrn 12.11.2026) - in jeder Linie gleich, und
+     * vor is_uploaded_file() steht der Haken zurueck_ok: ohne ihn wird nichts gelesen und nichts geaendert. */
+    list($hk_ein_roh, $hk_ein_ab) = sicherung_eingang(hk_sicherung_beschreibung(), $_POST, $_FILES, 'hk_sicherung');
+    if ($hk_ein_ab !== null) {
+        $hk_ein_m = sicherung_meldungen(hk_sicherung_beschreibung(), $hk_ein_ab);
+        foreach ($hk_ein_m['fehler'] as $hk_ein_x) { $hk_fehler[] = $hk_ein_x; }
     } else {
-        list($hk_neu, $hk_mangel, $hk_n, $hk_anm, $hk_tleer) = hk_sicherung_lesen(
-            (string) @file_get_contents($_FILES['hk_sicherung']['tmp_name']));
-        if ($hk_neu === null) {
-            /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
-             * nichts. */
-            $hk_fehler[] = hk_t('SET.SICH_ABGELEHNT') . ' '
-                            . implode(' ', $hk_mangel);
-        } elseif (!hk_config_write($hk_neu)) {
-            $hk_fehler[] = hk_t('SET.SICH_SCHREIBFEHLER');
-        } else {
+        /* 1.3.39: das gemeinsame Sicherungsmodul liest und prueft (Kennzeichen, jeder Wert), verwirft Unbekanntes
+         * mit Namen (oben, in den Abschnitten, im Teil xbox_anmeldung), laesst bei einem leeren Wert den bisherigen
+         * stehen (auch das Aktionstoken, wie bis 1.3.38) und aendert bei einer Beanstandung GAR NICHTS - alle
+         * Beanstandungen, nicht nur die erste. Die Schritte davor und danach stehen in den Rueckrufen, dieselben wie
+         * bis 1.3.38: Vermerke aus dem geltenden Stand, die Sprachansagen zurueck in den Abschnitt ansage, Speichern
+         * samt Zweitschrift (hk_config_write()), Xbox-Anmeldung, dann den Dienst nachziehen und sagen, was mit ihm
+         * geschah (Regeln/05 Punkt 7; ein bewusst angehaltener Dienst bleibt angehalten). */
+        $hk_b = hk_sicherung_beschreibung();
+        $hk_b['vorbereiten'] = function ($neu) {
+            $j = hk_ansage_cfg();
+            $neu['ansage_token_herkunft'] = isset($j['ansage_token_herkunft']) && is_array($j['ansage_token_herkunft'])
+                ? $j['ansage_token_herkunft'] : array();
+            $neu['ansage_aus_datei'] = 1;
+            return hk_sicherung_ansage_einbetten($neu);
+        };
+        $hk_b['speichern'] = function ($neu) { return hk_config_write($neu); };
+        $hk_b['zweitschrift'] = function () { $q = hk_paths(); return array($q['config'], $q['zweit']); };
+        $hk_b['nachziehen'] = function ($neu, $vorher, $r) use (&$hk_cfg, &$hk_fmt, &$hk_fehler, $hk_p) {
+            $h = array();
             $hk_cfg = hk_config_read();
             $hk_fmt = hk_formtoken($hk_cfg);
-            $hk_hinweis[] = sprintf(hk_t('SET.SICH_UEBERNOMMEN'), $hk_n);
-            if ($hk_tleer) {
-                $hk_hinweis[] = hk_t('SET.SICH_TOKEN_BLEIBT');
+            $anm = isset($r['teile']['xbox_anmeldung']) ? $r['teile']['xbox_anmeldung'] : null;
+            $bisher = array();
+            $auth = hk_xbox_auth_lesen();
+            foreach (hk_sicherung_anmeldeschluessel() as $k) {
+                $bisher[$k] = (isset($auth[$k]) && is_scalar($auth[$k])) ? (string) $auth[$k] : '';
             }
-            $hk_anm_lage = hk_xbox_anmeldung_uebernehmen($hk_anm);
-            if ($hk_anm_lage === 'ok') {
-                $hk_hinweis[] = hk_t('SET.SICH_ANMELDUNG_OK');
-            } elseif ($hk_anm_lage === 'fehler') {
+            // Gleich der geltenden (auch nach Regel 3: leere Felder tragen den geltenden Wert) heisst: keine neue.
+            $lage = (is_array($anm) && $anm != $bisher) ? hk_xbox_anmeldung_uebernehmen($anm) : 'keine';
+            if ($lage === 'ok') {
+                $h[] = hk_t('SET.SICH_ANMELDUNG_OK');
+            } elseif ($lage === 'fehler') {
                 $hk_fehler[] = hk_tf('FEHLER.AUTH_SCHREIBEN', array('%1' => hk_e($hk_p['auth'])));
             } else {
-                $hk_hinweis[] = hk_t('SET.SICH_ANMELDUNG_KEINE');
+                $h[] = hk_t('SET.SICH_ANMELDUNG_KEINE');
             }
-            // Den Dienst nachziehen und sagen, was mit ihm geschah (Regeln/05
-            // Punkt 7). Ein bewusst angehaltener Dienst bleibt angehalten.
             if (hk_dienst_pid()) {
-                $hk_pid_neu = hk_dienst('restart');
-                $hk_hinweis[] = $hk_pid_neu
-                    ? hk_tf('SET.SICH_DIENST_NEU', array('%1' => (string) $hk_pid_neu))
-                    : hk_t('SET.SICH_DIENST_WEG');
+                $pid = hk_dienst('restart');
+                $h[] = $pid ? hk_tf('SET.SICH_DIENST_NEU', array('%1' => (string) $pid)) : hk_t('SET.SICH_DIENST_WEG');
             } else {
-                $hk_hinweis[] = hk_t('SET.SICH_DIENST_AUS');
+                $h[] = hk_t('SET.SICH_DIENST_AUS');
             }
-        }
+            return $h;
+        };
+        $hk_r = sicherung_zurueckspielen($hk_b, $hk_ein_roh);
+        $hk_m = sicherung_meldungen($hk_b, $hk_r);
+        foreach ($hk_m['fehler'] as $hk_x) { $hk_fehler[] = $hk_x; }
+        foreach ($hk_m['hinweise'] as $hk_x) { $hk_hinweis[] = $hk_x; }
     }
     $hk_tab = 'tab-settings';
 }
@@ -1269,6 +1276,7 @@ if ($hk_frame) {
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
     <input data-role="none" type="hidden" name="fmt" value="<?= hk_e($hk_fmt) ?>">
     <input data-role="none" type="file" name="hk_sicherung" accept=".json">
+    <?= sicherung_haken_zeile(hk_sicherung_beschreibung()) ?>
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="hk_zurueck" value="1"><?= hk_t('SET.K_ZURUECK') ?></button>
   </form>
 </div>

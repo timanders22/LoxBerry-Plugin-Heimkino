@@ -1,5 +1,10 @@
 <?php
 require_once __DIR__ . '/sprachausgabe.php';     // Stamm, fuer die Vorgaben der Sprachansagen schon beim ersten Lesen der Konfiguration
+/* 1.3.39: Das gemeinsame Sicherungsmodul (Abschrift von Werkzeuge/gemeinsam/sicherung.php, Auftrag des Hausherrn
+ * 12.11.2026): Einstellungen sichern und zurueckspielen nach denselben Regeln wie in den anderen Linien. Es legt beim
+ * Laden nur Funktionen an und antwortet bei direktem Aufruf mit 403. Die Beschreibung dieser Linie steht in
+ * hk_sicherung_beschreibung(). */
+require_once __DIR__ . '/sicherung.php';
 /**
  * Heimkino - gemeinsame Funktionen der Oberflaeche
  *
@@ -2019,24 +2024,16 @@ function hk_sicherung_anmeldeschluessel()
  */
 function hk_sicherung_bauen()
 {
-    $aus = array(
-        '_hinweis' => hk_t('SET.SICH_KOPF'),
-        '_plugin'  => 'heimkino',
-        '_fassung' => hk_version(),
-        '_stand'   => date('Y-m-d H:i:s'),
-    );
-    foreach (hk_config_read() as $abschnitt => $werte) {
-        if ($abschnitt === 'ansage') { continue; }     // 1.3.32: traegt die Sprechtoken; die Felder kommen ohne sie
-        $aus[$abschnitt] = $werte;
-    }
-    $aus = hk_ansage_fuer_sicherung(hk_ansage_cfg()) + $aus;
+    /* 1.3.39: Kopf und Inhalt baut das gemeinsame Sicherungsmodul (sicherung_bauen(), Beschreibung
+     * hk_sicherung_beschreibung()): _hinweis, _plugin, _fassung, _stand, alle Abschnitte ausser ansage, die
+     * Sprachansagen ohne Sprechtoken und der Teil xbox_anmeldung. Wuerde das eigene Zurueckspielen die Datei
+     * abweisen, sagt es _warnung (nur Namen, nie Werte). */
     $auth = hk_xbox_auth_lesen();
     $anm = array();
     foreach (hk_sicherung_anmeldeschluessel() as $k) {
         $anm[$k] = (isset($auth[$k]) && is_scalar($auth[$k])) ? (string) $auth[$k] : '';
     }
-    $aus['xbox_anmeldung'] = $anm;
-    return $aus;
+    return sicherung_bauen(hk_sicherung_beschreibung(), hk_sicherung_jetzt(), array('xbox_anmeldung' => $anm));
 }
 
 /** Taugt ein Wert ueberhaupt fuer eine Zeile? Zeichenkette oder Zahl, ohne Steuerzeichen. */
@@ -2154,47 +2151,11 @@ function hk_ansage_wert($k, $w)
     return false;
 }
 
-/** Fuer die Sicherung: nie ein Sprechtoken, nie der Herkunftsvermerk. Ausgabeart, Ziele, Regeln und Haken reisen mit. */
-function hk_ansage_fuer_sicherung(array $c)
-{
-    unset($c['ansage_token_herkunft'], $c['ansage_aus_datei']);
-    if (isset($c['tts']) && is_array($c['tts'])) { $c['tts'] = ansage_sicherung_bereinigen($c['tts']); }
-    return $c;
-}
-
-/**
- * Vor dem Zurueckspielen. Eine Datei mit Sprechtoken wird abgewiesen (der Block wird unbrauchbar gemacht, die Wertpruefung nennt ihn). Die geltenden Token und der Vermerk bleiben.
- * Fehlt ein Schluessel (Sicherung einer aelteren Fassung), gilt der geltende Wert: Ein bewusstes AUS geht beim Zurueckspielen nicht verloren.
- */
-function hk_ansage_sicherung_vor($roh)
-{
-    $d = json_decode((string) $roh, true);
-    if (!is_array($d)) { return $roh; }
-    $inhalt = false;
-    foreach (array_keys($d) as $k) { if ((string) $k !== '' && ((string) $k)[0] !== '_') { $inhalt = true; } }
-    if (!$inhalt) { return $roh; }
-    $j = hk_ansage_cfg();
-    unset($d['ansage_token_herkunft'], $d['ansage_aus_datei']);
-    $jt = isset($j['tts']) && is_array($j['tts']) ? $j['tts'] : array();
-    if (array_key_exists('tts', $d)) {
-        $g = '';
-        $p = is_array($d['tts']) ? ansage_wert_pruefen($d['tts'], $g, hk_ansage_modi()) : null;
-        if (ansage_sicherung_mangel($d['tts']) || $p === null) {
-            $d['tts'] = 'ABGEWIESEN';
-        } else {
-            list($tv) = ansage_vervollstaendigen($p, 'aus');
-            $d['tts'] = ansage_sicherung_tokens_behalten($tv, $jt);
-        }
-    } else {
-        $d['tts'] = hk_tts($j);
-    }
-    foreach (array_diff(hk_ansage_schluessel(), array('tts', 'ansage_token_herkunft', 'ansage_aus_datei')) as $k) {
-        if (!array_key_exists($k, $d) && array_key_exists($k, $j)) { $d[$k] = $j[$k]; }
-    }
-    $d['ansage_token_herkunft'] = isset($j['ansage_token_herkunft']) && is_array($j['ansage_token_herkunft']) ? $j['ansage_token_herkunft'] : array();
-    $d['ansage_aus_datei'] = 1;
-    return (string) json_encode($d);
-}
+/* 1.3.39: hk_ansage_fuer_sicherung() und hk_ansage_sicherung_vor() sind in die Beschreibung fuer das gemeinsame
+ * Sicherungsmodul gewandert (Bauart Beschattung_Fensterbilanz 0.12.32): nie ein Sprechtoken eines Ziels und nie der
+ * Herkunftsvermerk in der Datei ('sichern' und 'nie_aus_datei' in hk_sicherung_beschreibung()), der Block tts vor der
+ * Pruefung in hk_sicherung_vorbehandeln(), fehlende Ansage-Schluessel behalten den geltenden Wert ('fehlt' =>
+ * 'behalten'), Vermerk und Herkunft setzt der Handler hk_zurueck aus dem geltenden Stand. */
 
 /**
  * Die Hauptkonfiguration. Liegt eine ansage.json aus einer Probe vom 01.11., wird sie EINMAL uebernommen (Vermerk ansage_aus_datei) und bleibt liegen.
@@ -2643,144 +2604,180 @@ function hk_sicherung_spaeter()
 }
 
 /**
- * Eine Sicherungsdatei pruefen (seit 1.3.15 je Wert, C2).
+ * 1.3.39: Die Beschreibung dieser Linie fuer das gemeinsame Sicherungsmodul (sicherung.php).
  *
- * Jeder Abschnitt muss ein Feld sein, jeder Schluessel bekannt und jeder
- * Wert zulaessig (hk_wert_pruefen). Fehlende und fremde Schluessel sind
- * Beanstandungen. ALLE Beanstandungen werden gesammelt; gibt es eine, wird
- * nichts geschrieben. Der lesbare Kopf ("_"-Schluessel) wird uebergangen.
- * Ein leeres Aktionstoken heisst "keins gesichert": das geltende bleibt.
+ * Kennzeichen 'heimkino': so schreibt es der Sichern-Knopf seit 1.3.15 (gemessen 12.11.2026 an 1.3.15 bis 1.3.39;
+ * bis 1.3.14 endete der Knopf in HTTP 500 und lieferte keine Datei). Jede Sicherung dieser Linie traegt es; ein
+ * Uebersetzer fuer Dateien ohne Kennzeichen entfaellt.
  *
- * Rueckgabe: array(Konfiguration|null, Beanstandungen, Zahl der Werte,
- * Xbox-Anmeldung|null, Token leer?).
+ * Aufbau wie bis 1.3.38: oben die Abschnitte der heimkino.cfg (heimkino, beamer, xbox, szene - je ein Block mit
+ * den Schluesseln aus bin/hk_vorgaben.json), die Sprachansagen (tts, ansage_regeln, ansage_haken; in der
+ * Konfiguration im Abschnitt ansage) und der Teil xbox_anmeldung (Anwendungskennung, Clientgeheimnis,
+ * Umleitungsadresse, Dienst, Erneuerungstoken aus xbox_auth.json). Darin: Aktionstoken, Keycode des Beamers und die
+ * Xbox-Anmeldung. Nie darin: die Sprechtoken der Ziele im Block tts, die Vermerke ansage_token_herkunft und
+ * ansage_aus_datei und der Abschnitt ansage selbst ('nie_aus_datei').
+ *
+ * Wie bis 1.3.38: jeder Wert geht durch hk_wert_pruefen() bzw. hk_ansage_wert() und wird in dessen Normalform
+ * gespeichert; jeder Abschnitt und jeder Schluessel darin muss in der Datei stehen, ausser was spaeter dazukam
+ * (hk_sicherung_spaeter(): dann gilt der geltende Wert, fuer endpunkt_ein 1 mit Aktionstoken, sonst 0) und ausser
+ * den Sprachansagen (fehlen sie, gilt der geltende Wert).
  */
-function hk_sicherung_lesen($roh, &$namen = null)
+function hk_sicherung_beschreibung()
 {
-    $roh = hk_ansage_sicherung_vor($roh);     // 1.3.32: Token und Vermerk bleiben die geltenden
-    $hk_ab = array();
-    $mangel = array();
-    // X-3: die Namen der beanstandeten Schluessel, nie ihre Werte.
-    $namen = array();
-    $daten = json_decode((string) $roh, true);
-    if (!is_array($daten) || hk_ist_liste($daten)) {
-        return array(null, array(hk_t('SET.SICH_KEIN_JSON')), 0, null, false);
-    }
+    $p = hk_paths();
     $vg = hk_vorgaben();
-    $neu = hk_config_read();
-    $anzahl = 0;
-    $auth = null;
-    $token_leer = false;
-    $fehlend = array();
-    $e = function ($s) {
-        return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8');
-    };
-    foreach ($daten as $k => $w) {
-        $k = (string) $k;
-        if ($k !== '' && $k[0] === '_') {
-            continue;
-        }
-        if ($k === 'ansage') {     // 1.3.32: der Block mit den Sprechtoken kommt nie aus einer Datei
-            $mangel[] = sprintf(hk_t('SET.SICH_FREMD'), $e($k));
-            continue;
-        }
-        if (hk_ansage_wert($k, $w) !== null) {
-            if (hk_ansage_wert($k, $w) === true) { $hk_ab[$k] = $w; } else { $mangel[] = hk_t('ANSAGEPLUGIN.M_FEHL'); $namen[] = $k; }
-            continue;
-        }
-        if ($k === 'xbox_anmeldung') {
-            if (!is_array($w) || hk_ist_liste($w)) {
-                $mangel[] = sprintf(hk_t('SET.SICH_KEIN_ABSCHNITT'), $e($k));
-                continue;
-            }
+    $tts = array_merge(array_keys(ansage_werk_block()), ansage_geheim());
+    $schluessel = array(
+        'tts' => sicherung_block($tts, array('ziele' => sicherung_liste(array('art', 'wo', 'laut', 'sprache', 'ein'))))
+                 + array('fehlt' => 'behalten', 'sichern' => 'ansage_sicherung_bereinigen'),
+        'ansage_regeln' => sicherung_block(array_keys(ansage_regeln_vorgaben())) + array('fehlt' => 'behalten'),
+        'ansage_haken' => sicherung_block(array('xbox')) + array('fehlt' => 'behalten'),
+        'xbox_anmeldung' => sicherung_block(hk_sicherung_anmeldeschluessel()),
+    );
+    /* Was spaeter dazukam und in einem Abschnitt fehlt, behaelt seit Modul 1.2.0 ueber 'fehlt' => 'behalten' am
+     * Unterschluessel den geltenden Wert und wird genannt (bis dahin in hk_sicherung_vorbehandeln(), ohne
+     * Nennung); heimkino.endpunkt_ein hat eine eigene Regel und bleibt dort. */
+    $spaet = array();
+    foreach (hk_sicherung_spaeter() as $ab_sk) {
+        if ($ab_sk !== 'heimkino.endpunkt_ein') { list($ab, $sk) = explode('.', $ab_sk, 2); $spaet[$ab][$sk] = array('fehlt' => 'behalten'); }
+    }
+    foreach ($vg as $abschnitt => $werte) {
+        if ($abschnitt === 'ansage' || !is_array($werte)) { continue; }
+        $schluessel[$abschnitt] = sicherung_block(array_keys($werte), isset($spaet[$abschnitt]) ? $spaet[$abschnitt] : array()) + array(
+            'wandeln' => function ($w) use ($abschnitt) {
+                foreach ($w as $sk => $sw) {
+                    list($ok, $norm) = hk_wert_pruefen($abschnitt, (string) $sk, $sw);
+                    if ($ok) { $w[$sk] = $norm; }
+                }
+                return $w;
+            });
+    }
+    return array(
+        'kennzeichen' => 'heimkino',
+        'hinweis' => html_entity_decode(strip_tags(hk_t('SET.SICH_KOPF')), ENT_QUOTES, 'UTF-8'),
+        // _fassung: das Modul liest die Plugin-Datenbank ueber den Ordner, sonst die plugin.cfg (home, ordner, plugin_cfg).
+        'vorgaben' => $vg + hk_ansage_vorgaben(),
+        'schluessel' => $schluessel,
+        'nie_aus_datei' => array('ansage', 'ansage_token_herkunft', 'ansage_aus_datei'),
+        'teile' => array('xbox_anmeldung' => 'hk_sicherung_anmeldung_lesen'),
+        'teile_jetzt' => array('xbox_anmeldung' => function () {
+            $auth = hk_xbox_auth_lesen();
             $a = array();
-            foreach ($w as $ak => $av) {
-                $ak = (string) $ak;
-                if (!in_array($ak, hk_sicherung_anmeldeschluessel(), true)) {
-                    $mangel[] = sprintf(hk_t('SET.SICH_FREMD'), $e($k . '.' . $ak));
-                    $namen[] = $k . '.' . $ak;
-                    continue;
-                }
-                $ok = hk_anmeldung_wert_gueltig($ak, $av);
-                if (!$ok) {
-                    $mangel[] = sprintf(hk_t('SET.SICH_WERT'), $e($k . '.' . $ak), hk_wert_art($av));
-                    $namen[] = $k . '.' . $ak;
-                    continue;
-                }
-                $a[$ak] = $av;
+            foreach (hk_sicherung_anmeldeschluessel() as $k) {
+                $a[$k] = (isset($auth[$k]) && is_scalar($auth[$k])) ? (string) $auth[$k] : '';
             }
-            foreach (hk_sicherung_anmeldeschluessel() as $pflicht) {
-                if (!array_key_exists($pflicht, $w)) {
-                    $fehlend[] = $k . '.' . $pflicht;
-                }
-            }
-            $auth = $a;
-            continue;
-        }
-        if (!isset($vg[$k])) {
-            $mangel[] = sprintf(hk_t('SET.SICH_FREMD'), $e($k));
-            continue;
-        }
-        if (!is_array($w) || hk_ist_liste($w)) {
-            $mangel[] = sprintf(hk_t('SET.SICH_KEIN_ABSCHNITT'), $e($k));
-            continue;
-        }
-        foreach ($w as $sk => $sw) {
-            $sk = (string) $sk;
-            if (!array_key_exists($sk, $vg[$k])) {
-                $mangel[] = sprintf(hk_t('SET.SICH_FREMD'), $e($k . '.' . $sk));
-                $namen[] = $k . '.' . $sk;
-                continue;
-            }
-            list($ok, $norm) = hk_wert_pruefen($k, $sk, $sw);
-            if (!$ok) {
-                $mangel[] = sprintf(hk_t('SET.SICH_WERT'), $e($k . '.' . $sk), hk_wert_art($sw));
-                $namen[] = $k . '.' . $sk;
-                continue;
-            }
-            if ($k === 'heimkino' && $sk === 'aktionstoken' && $norm === '') {
-                $token_leer = true;
-                continue;
-            }
-            $neu[$k][$sk] = $norm;
-            $anzahl++;
-        }
-        foreach (array_keys($vg[$k]) as $pflicht) {
-            if (!array_key_exists($pflicht, $w)
-                && !in_array($k . '.' . $pflicht, hk_sicherung_spaeter(), true)) {
-                $fehlend[] = $k . '.' . $pflicht;
-            }
-        }
+            return $a;
+        }),
+        'pruefen' => 'hk_sicherung_wert',
+        'vorbehandeln' => 'hk_sicherung_vorbehandeln',
+        'jetzt' => 'hk_sicherung_jetzt',
+        'log' => function ($z) { hk_log_zeile($z); },
+        't' => 'hk_t',
+        'e' => 'hk_e',
+        'home' => $p['home'],
+        'ordner' => $p['plugin'],
+        'plugin_cfg' => dirname(dirname(__DIR__)) . '/plugin.cfg',
+    );
+}
+
+/** Der geltende Stand fuer das Modul: die Abschnitte der Konfiguration und die Sprachansagen aus dem Abschnitt ansage. */
+function hk_sicherung_jetzt()
+{
+    $aus = hk_config_read();
+    $a = hk_ansage_cfg();
+    foreach (hk_ansage_schluessel() as $k) {
+        if (array_key_exists($k, $a)) { $aus[$k] = $a[$k]; }
     }
-    foreach (array_keys($vg) as $abschnitt) {
-        if ($abschnitt !== 'ansage' && !array_key_exists($abschnitt, $daten)) {
-            $fehlend[] = $abschnitt;
-        }
+    return $aus;
+}
+
+/**
+ * Ein Wert der Sicherung (oben): ein Abschnitt muss ein Feld sein, jeder Schluessel darin muss stehen (ausser was
+ * spaeter dazukam) und zulaessig sein - wie bis 1.3.38. Unbekannte Schluessel hat das Modul schon verworfen und
+ * genannt. Rueckgabe fuer das Modul: '' oder Liste von Beanstandungen (maskiert, nie mit dem Wert).
+ */
+function hk_sicherung_wert($k, $w)
+{
+    $aw = hk_ansage_wert($k, $w);
+    if ($aw !== null) { return $aw ? '' : hk_t('ANSAGEPLUGIN.M_FEHL') . ' (' . hk_e($k) . ')'; }
+    $vg = hk_vorgaben();
+    if (!isset($vg[$k]) || !is_array($w) || hk_ist_liste($w)) {
+        return sprintf(hk_t('SET.SICH_KEIN_ABSCHNITT'), hk_e($k));
     }
-    if ($hk_ab) { $neu['ansage']['block'] = base64_encode((string) json_encode($hk_ab)); }     // 1.3.32
+    $aus = array();
+    $fehlend = array();
+    foreach (array_keys($vg[$k]) as $sk) {
+        if (!array_key_exists($sk, $w)) {
+            if (!in_array($k . '.' . $sk, hk_sicherung_spaeter(), true)) { $fehlend[] = $k . '.' . $sk; }
+            continue;
+        }
+        list($ok) = hk_wert_pruefen($k, $sk, $w[$sk]);
+        if (!$ok) { $aus[] = sprintf(hk_t('SET.SICH_WERT'), hk_e($k . '.' . $sk), hk_wert_art($w[$sk])); }
+    }
     if ($fehlend) {
-        $namen = array_merge($namen, $fehlend);
-        $mangel[] = sprintf(hk_t('SET.SICH_FEHLEND'), count($fehlend),
-            htmlspecialchars(implode(', ', $fehlend), ENT_QUOTES, 'UTF-8'));
+        $aus[] = sprintf(hk_t('SET.SICH_FEHLEND'), count($fehlend), hk_e(implode(', ', $fehlend)));
     }
-    if ($anzahl === 0 && !$mangel) {
-        $mangel[] = hk_t('SET.SICH_LEER');
+    return $aus;
+}
+
+/** Der Teil xbox_anmeldung: jeder Wert wie im Formular "Xbox-Anwendung" (hk_anmeldung_wert_gueltig()), alle fuenf Pflicht. */
+function hk_sicherung_anmeldung_lesen($w)
+{
+    if (!is_array($w) || hk_ist_liste($w)) {
+        return array(null, array(sprintf(hk_t('SET.SICH_KEIN_ABSCHNITT'), 'xbox_anmeldung')));
     }
-    // Gruppe 9 (1.3.30, Entwurf 3.7, E3): eine Sicherung aus einer frueheren Fassung kennt endpunkt_ein nicht -
-    // dieselbe Regel wie der Uebergang in postupgrade.sh: 1, wenn ein Aktionstoken gesetzt ist, sonst 0. Die
-    // beiden Haken der Befehlsbruecke behalten dann ihren geltenden Wert.
-    if (!$mangel && (!isset($daten['heimkino']) || !is_array($daten['heimkino'])
-                     || !array_key_exists('endpunkt_ein', $daten['heimkino']))) {
-        $neu['heimkino']['endpunkt_ein'] = trim((string) hk_cfg($neu, 'heimkino', 'aktionstoken', '')) !== '' ? '1' : '0';
+    $aus = array();
+    $mangel = array();
+    $fehlend = array();
+    foreach (hk_sicherung_anmeldeschluessel() as $k) {
+        if (!array_key_exists($k, $w)) { $fehlend[] = 'xbox_anmeldung.' . $k; continue; }
+        if (!hk_anmeldung_wert_gueltig($k, $w[$k])) {
+            $mangel[] = sprintf(hk_t('SET.SICH_WERT'), hk_e('xbox_anmeldung.' . $k), hk_wert_art($w[$k]));
+            continue;
+        }
+        $aus[$k] = $w[$k];
     }
-    return array($mangel ? null : $neu, $mangel, $anzahl, $mangel ? null : $auth, $token_leer);
+    if ($fehlend) {
+        $mangel[] = sprintf(hk_t('SET.SICH_FEHLEND'), count($fehlend), hk_e(implode(', ', $fehlend)));
+    }
+    return $mangel ? array(null, $mangel) : array($aus, array());
+}
+
+/**
+ * Vor der Pruefung (nach dem Verwerfen unbekannter Schluessel und nach Regel 3): der Block tts wie bis 1.3.38
+ * hk_ansage_sicherung_vor(); was spaeter dazukam und in einem Abschnitt fehlt, bekommt den geltenden Wert, und
+ * fehlt heimkino.endpunkt_ein, gilt wie im Uebergang in postupgrade.sh 1 mit Aktionstoken, sonst 0 (Gruppe 9).
+ */
+function hk_sicherung_vorbehandeln($bereit, $jetzt)
+{
+    if (array_key_exists('tts', $bereit)) {
+        $j = hk_ansage_cfg();
+        $jt = isset($j['tts']) && is_array($j['tts']) ? $j['tts'] : array();
+        $g = '';
+        $pr = is_array($bereit['tts']) ? ansage_wert_pruefen($bereit['tts'], $g, hk_ansage_modi()) : null;
+        if (!is_array($bereit['tts']) || ansage_sicherung_mangel($bereit['tts']) || $pr === null) {
+            $bereit['tts'] = 'ABGEWIESEN';
+        } else {
+            list($tv) = ansage_vervollstaendigen($pr, 'aus');
+            $bereit['tts'] = ansage_sicherung_tokens_behalten($tv, $jt);
+        }
+    }
+    /* Seit Modul 1.2.0 setzt das Modul die uebrigen Spaetschluessel ('fehlt' => 'behalten' im Block); hier bleibt
+     * nur heimkino.endpunkt_ein: fehlt es, gilt wie im Uebergang in postupgrade.sh 1 mit Aktionstoken, sonst 0. */
+    if (isset($bereit['heimkino']) && is_array($bereit['heimkino']) && !hk_ist_liste($bereit['heimkino'])
+        && !array_key_exists('endpunkt_ein', $bereit['heimkino'])) {
+        $t = isset($bereit['heimkino']['aktionstoken']) ? $bereit['heimkino']['aktionstoken'] : '';
+        $bereit['heimkino']['endpunkt_ein'] = (is_string($t) && trim($t) !== '') ? '1' : '0';
+    }
+    return $bereit;
 }
 
 /**
  * X-3 (Verbesserungsbau 30.09.2026): Welche gespeicherten Werte bestuenden
- * das eigene Zurueckspielen nicht? Die Sicherung wird gebaut und durch
- * hk_sicherung_lesen() geschickt - dieselbe Pruefung wie beim Zurueckspielen.
- * Rueckgabe: Liste der NAMEN (abschnitt.schluessel), nie der Werte; leer =
- * die Sicherung liesse sich zurueckspielen.
+ * das eigene Zurueckspielen nicht? Seit 1.3.39 dieselbe Pruefung des
+ * gemeinsamen Moduls (sicherung_selbstpruefung()) wie beim Zurueckspielen.
+ * Rueckgabe: Liste der NAMEN, nie der Werte; leer = die Sicherung liesse sich
+ * zurueckspielen.
  * Der Name traegt bewusst kein "sicherung": Werkzeuge/sicherung_pruefen.py
  * nimmt die erste Funktion *_sicherung* mit json_encode fuer die Ausfuhr und
  * meldete an dieser Pruefung "baut nicht auf der vollen Konfiguration auf"
@@ -2788,18 +2785,23 @@ function hk_sicherung_lesen($roh, &$namen = null)
  */
 function hk_rueckspiel_altwerte($sicherung = null)
 {
+    $b = hk_sicherung_beschreibung();
+    $jetzt = hk_sicherung_jetzt();
     $s = is_array($sicherung) ? $sicherung : hk_sicherung_bauen();
-    $js = json_encode($s, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    if ($js === false) {
-        // Nicht kodierbar: der Knopf meldet das selbst (SET.SICH_SCHREIBFEHLER).
-        return array();
+    unset($s['_warnung']);
+    return sicherung_selbstpruefung($b, $s, $jetzt);
+}
+
+/** 1.3.39: Die Sprachansagen des Moduls zurueck in den Abschnitt ansage (Form wie hk_ansage_block_schreiben()). */
+function hk_sicherung_ansage_einbetten(array $neu)
+{
+    $x = array();
+    foreach (hk_ansage_schluessel() as $k) {
+        if (array_key_exists($k, $neu)) { $x[$k] = $neu[$k]; }
+        unset($neu[$k]);
     }
-    $namen = array();
-    list($neu) = hk_sicherung_lesen($js, $namen);
-    if ($neu !== null) {
-        return array();
-    }
-    return $namen ? array_values(array_unique($namen)) : array('?');
+    $neu['ansage'] = array('block' => base64_encode((string) json_encode($x)));
+    return $neu;
 }
 
 /**
