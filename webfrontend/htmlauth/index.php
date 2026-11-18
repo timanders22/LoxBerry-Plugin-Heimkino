@@ -703,7 +703,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['hk_zurueck'])) {
             $neu['ansage_aus_datei'] = 1;
             return hk_sicherung_ansage_einbetten($neu);
         };
-        $hk_b['speichern'] = function ($neu) { return hk_config_write($neu); };
+        $hk_b['speichern'] = function ($neu) { return hk_config_write($neu, false); };     // Modul 1.2.9: ohne Unbekanntes
         $hk_b['zweitschrift'] = function () { $q = hk_paths(); return array($q['config'], $q['zweit']); };
         $hk_b['nachziehen'] = function ($neu, $vorher, $r) use (&$hk_cfg, &$hk_fmt, &$hk_fehler, $hk_p) {
             $h = array();

@@ -535,7 +535,9 @@ function hk_datei_ersetzen($datei, $inhalt, $modus = 0640)
     return true;
 }
 
-function hk_config_write($cfg)
+/* $fremd_behalten = false nur beim Zurueckspielen (Modul 1.2.9, Bauform des Hausherrn 15.11.2026): dann gilt genau der
+ * Stand des Moduls, und das Modul nennt die unbekannten Schluessel als entfernt. */
+function hk_config_write($cfg, $fremd_behalten = true)
 {
     // Eine beschaedigte Datei wird nicht ueberschrieben (seit 1.3.15, C4):
     // sie ist Sache von hk_config_heilen(). Sonst ersetzten die Vorgaben
@@ -557,7 +559,7 @@ function hk_config_write($cfg)
         }
     }
     $datei = hk_paths()['config'];
-    $fremd = hk_config_fremde();
+    $fremd = $fremd_behalten ? hk_config_fremde() : array();
     $t  = "; Heimkino\n";
     $t .= "; Wird von der Plugin-Oberflaeche und vom Dienst geschrieben.\n";
     $t .= "; ACHTUNG: enthaelt den Keycode des Beamers - nicht veroeffentlichen.\n\n";
@@ -2670,7 +2672,7 @@ function hk_sicherung_beschreibung()
         }),
         'pruefen' => 'hk_sicherung_wert',
         'vorbehandeln' => 'hk_sicherung_vorbehandeln',
-        'jetzt' => 'hk_sicherung_jetzt',
+        'jetzt' => function () { return hk_sicherung_jetzt(true); },
         'log' => function ($z) { hk_log_zeile($z); },
         't' => 'hk_t',
         'e' => 'hk_e',
@@ -2681,12 +2683,20 @@ function hk_sicherung_beschreibung()
 }
 
 /** Der geltende Stand fuer das Modul: die Abschnitte der Konfiguration und die Sprachansagen aus dem Abschnitt ansage. */
-function hk_sicherung_jetzt()
+function hk_sicherung_jetzt($mit_fremden = false)
 {
     $aus = hk_config_read();
     $a = hk_ansage_cfg();
     foreach (hk_ansage_schluessel() as $k) {
         if (array_key_exists($k, $a)) { $aus[$k] = $a[$k]; }
+    }
+    /* Modul 1.2.9 (Bauform des Hausherrn 15.11.2026), nur fuer das Zurueckspielen ('jetzt' der Beschreibung): dazu,
+     * was die Datei traegt und diese Fassung nicht kennt - ein unbekannter Abschnitt oben, ein unbekannter Schluessel
+     * in einem Abschnitt. Das Modul nennt sie dann als entfernt. "Einstellungen sichern" baut wie bisher ohne sie. */
+    if ($mit_fremden) {
+        foreach (hk_config_fremde() as $ab => $werte) {
+            if (isset($aus[$ab]) && is_array($aus[$ab])) { $aus[$ab] += $werte; } else { $aus[$ab] = $werte; }
+        }
     }
     return $aus;
 }
