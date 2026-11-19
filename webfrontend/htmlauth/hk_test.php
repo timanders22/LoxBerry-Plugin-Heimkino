@@ -337,6 +337,10 @@ function hk_test_zeilen($cfg, $voll = true)
                 '%1' => $hin, '%2' => (string) (int) abs((int) $tage))));
     }
 
+    /* Gemeinsames Uhrmodul (Frage 95): Systemuhr gegen Xbox Live - nur melden (2 = ?). */
+    list($uhr_s, $uhr_t) = uhr_pruefzeile(array('ordner' => $p['daten'], 'dienst' => 'Xbox Live', 't' => 'hk_t'));
+    $zeilen[] = array($uhr_s === 1 ? 1 : 2, uhr_frage(array('t' => 'hk_t')), $uhr_t, $uhr_s);
+
     return $zeilen;
 }
 

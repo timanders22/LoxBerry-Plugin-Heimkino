@@ -1787,9 +1787,9 @@ $hk_bs_seiten = array(
 <tr><th style="width:6%"></th><th style="width:40%"><?= hk_te('TEST.SP_FRAGE') ?></th><th><?= hk_te('TEST.SP_ANTWORT') ?></th></tr>
 <?php foreach ($hk_pruefzeilen as $hk_zeile) { ?>
 <tr><td style="text-align:center;"><?php
-  echo $hk_zeile[0] === 1 ? '<span class="sm-an">&#10004;</span>'
+  echo isset($hk_zeile[3]) ? uhr_zeichen($hk_zeile[3]) : ($hk_zeile[0] === 1 ? '<span class="sm-an">&#10004;</span>'
      : ($hk_zeile[0] === 2 ? '<span style="color:#546e7a;">?</span>'
-                           : '<span class="sm-aus">&#10008;</span>'); ?></td>
+                           : '<span class="sm-aus">&#10008;</span>')); ?></td>
   <td><?= hk_e($hk_zeile[1]) ?></td><td><?= hk_e($hk_zeile[2]) ?></td></tr>
 <?php } ?>
 </table>

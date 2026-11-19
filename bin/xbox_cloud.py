@@ -27,6 +27,7 @@ Erneuerungstoken nicht mehr zieht - dann ist eine neue Anmeldung faellig.
 """
 
 import json
+import uhrabgleich  # gemeinsames Uhrmodul (Frage 95), Abschrift bin/uhrabgleich.py
 import os
 import re
 import time
@@ -202,6 +203,18 @@ def _requests():
     return requests
 
 
+def _uhr_merken(antwort):
+    """Gemeinsames Uhrmodul (Frage 95): die Kopfzeile Date nach data/plugins/<ordner>/uhr.json. Nur, wenn der
+    Dienst hk_common schon geladen hat (kein Import hier: dessen Wurzelsuche gehoert dem Aufrufer). Wirft nie."""
+    try:
+        import sys as _sys
+        hk = _sys.modules.get("hk_common")
+        if hk is not None and getattr(hk, "P", None):
+            uhrabgleich.uhr_aus_requests(os.path.dirname(hk.P["zustand"]), antwort)
+    except Exception:  # noqa: BLE001 - ein Abgleich darf den Abruf nie stoeren
+        pass
+
+
 def _ruf(methode, url, was, **argumente):
     """Eine HTTP-Anfrage mit uebersetzten Netzfehlern.
 
@@ -215,7 +228,9 @@ def _ruf(methode, url, was, **argumente):
     requests = _requests()
     ziel = urllib.parse.urlparse(url).netloc or url
     try:
-        return getattr(requests, methode)(url, **argumente)
+        antwort = getattr(requests, methode)(url, **argumente)
+        _uhr_merken(antwort)
+        return antwort
     except requests.exceptions.SSLError as fehler:
         raise XboxFehler(
             "%s: Die verschluesselte Verbindung zu %s kam nicht zustande (%s). "
