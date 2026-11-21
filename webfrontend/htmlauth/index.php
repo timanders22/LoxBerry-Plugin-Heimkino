@@ -810,7 +810,8 @@ $hk_frame = class_exists('LBWeb', false);
 
 if ($hk_frame) {
     // H22 (1.3.30): die eigene Wiki-Seite, nicht die Startseite.
-    LBWeb::lbheader('Heimkino', 'https://wiki.loxberry.de/plugins/heimkino/start', 'help.html');
+    require_once __DIR__ . '/fassung.php';   // Fassung im Titel: gemeinsames Stueck fassung.php (21.11.2026)
+    LBWeb::lbheader(plugin_kopftitel('Heimkino', __DIR__), 'https://wiki.loxberry.de/plugins/heimkino/start', 'help.html');
 }
 
 ?>
