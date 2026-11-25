@@ -213,6 +213,9 @@ function hk_test_zeilen($cfg, $voll = true)
         list($zu, $tx) = hk_pruef_bruecke_einrichtung($cfg);
         $zeilen[] = array($zu, hk_t('BEFEHL.T_FRAGE_EINRICHTUNG'), $tx);
     }
+    // 1.3.46: faellt das Themen-Praefix auf einen gemeinsamen Bereich unter haus/ (Regeln/07)?
+    $hk_hb = hk_pruef_praefix_haus($cfg);
+    $zeilen[] = array($hk_hb[0] === -1 ? 2 : $hk_hb[0], hk_t('HAUSBEREICH.F_TEST'), $hk_hb[1]);
     list($zu, $tx) = hk_pruef_praefix($cfg);
     $zeilen[] = array($zu, hk_t('BEFEHL.T_FRAGE_PRAEFIX'), $tx);
     if (!$voll) {

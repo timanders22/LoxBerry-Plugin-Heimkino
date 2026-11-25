@@ -279,6 +279,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['xbox_code'])) {
 
 /* ============ Xbox: Anmeldung loeschen ============ */
 /* 1.3.32: Sprachansagen, eigenes Formular. Die Testansage spricht immer. */
+/* 1.3.46: Testmeldung an SignalBot (Knopf unter den Sprachansagen) - wie die Testansage darunter. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['meld_test'])) {
+    list($hk_at, $hk_ag) = hk_meld_test();
+    if ($hk_at) { $hk_hinweis[] = hk_e(hk_t('SIGNALMELDUNG.T_OK')); } else { $hk_fehler[] = hk_e($hk_ag); }
+    $hk_tab = 'tab-settings';
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ansage_test'])) {
     list($hk_at, $hk_ag) = hk_ansage_test();
     if ($hk_at) { $hk_hinweis[] = hk_e(hk_t('ANSAGEPLUGIN.M_TEST_OK')); } else { $hk_fehler[] = hk_e(hk_t('ANSAGEPLUGIN.M_TEST_FEHL') . ' ' . $hk_ag); }
@@ -324,6 +330,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_mqtt'])) {
         $hk_beanstandet[] = 'themenpraefix';
     } elseif (!hk_wert_pruefen('heimkino', 'themenpraefix', $hk_praefix_roh)[0]) {
         $hk_fehler[] = hk_t('FEHLER.PRAEFIX');
+        $hk_eingaben_form = 'mqtt';
+        $hk_beanstandet[] = 'themenpraefix';
+    } elseif (hb_bereich($hk_praefix_roh) !== ''
+              && $hk_praefix_roh !== (string) hk_cfg(hk_config_read(), 'heimkino', 'themenpraefix', '')) {   // nur NEUE Eingaben: ein schon gespeichertes Praefix sperrt das Speichern
+        // des Reiters nicht (Regeln/07; Bauart Einspeisebremse 0.9.25)
+        /* 1.3.46 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): kein Praefix auf einem
+         * gemeinsamen Bereich unter haus/ - nur hier und beim Zurueckspielen, nicht in der Pruefung beim Lesen der
+         * Konfiguration: ein schon gespeichertes bleibt in Betrieb, der Reiter Test meldet es. */
+        $hk_fehler[] = sprintf(hk_t('HAUSBEREICH.FEHLER'), hk_e($hk_praefix_roh), hk_e(hb_bereich($hk_praefix_roh)));
         $hk_eingaben_form = 'mqtt';
         $hk_beanstandet[] = 'themenpraefix';
     } else {

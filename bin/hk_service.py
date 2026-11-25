@@ -1318,6 +1318,26 @@ def auftraege_abarbeiten(auftraege, cfg, melder, log, takt, offen, beim_start=Fa
 # Hauptschleife
 # --------------------------------------------------------------------------
 
+def _haus_bereiche():
+    """1.3.46 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): das gemeinsame
+    Modul haus_bereiche.py neben dem Dienst, beim ersten Aufruf geladen."""
+    hier = os.path.dirname(os.path.abspath(__file__))
+    if hier not in sys.path:
+        sys.path.insert(0, hier)
+    import haus_bereiche  # noqa: E402
+    return haus_bereiche
+
+
+def praefix_haus_melden(praefix):
+    """1.3.46: einmal je Aenderung eine Protokollzeile, solange das Praefix auf einen gemeinsamen Bereich unter
+    haus/ faellt; der Versand bleibt, wie er ist. Rueckgabe der gemeldete Bereich oder ""."""
+    hb = _haus_bereiche()
+    bereich = hb.hb_melden_faellig(praefix)
+    if bereich:
+        __import__("logging").getLogger("heimkino").warning("%s", hb.hb_logtext(praefix, bereich))
+    return bereich
+
+
 def hauptteil():
     # Ohne Anlage nichts anlegen und nichts schalten (Muster 1-3): VOR dem
     # Protokoll, der PID-Datei und MQTT.
@@ -1487,7 +1507,10 @@ def hauptteil():
                 elif offen:
                     offen.clear()
 
+                praefix_haus_melden(gemein.praefix_saeubern(
+                    gemein.wert(cfg, "heimkino", "themenpraefix", "heimkino")))   # 1.3.46
                 gemein.zustand_schreiben({
+                    "haus_bereiche": list(_haus_bereiche().HB_BEREICHE),   # 1.3.46
                     "zeit": jetzt,
                     "zeit_text": time.strftime("%d.%m.%Y %H:%M:%S",
                                                time.localtime(jetzt)),
